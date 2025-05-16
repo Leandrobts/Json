@@ -2,100 +2,118 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3h - Testando Poluição vs Stringify</title>
-    <style> /* ... (estilos como antes) ... */ </style>
+    <title>PoC Isolado v2.3i - Teste de Sanidade JS</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
+        #output { background: #222; border: 1px solid #444; padding: 10px; height: 80vh; overflow-y: auto; white-space: pre-wrap; margin-top: 10px; }
+        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; }
+        /* Adicione outras classes de log se precisar testá-las especificamente */
+    </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3h - Testando Poluição vs Stringify</h1>
-    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste Isolado v2.3h</button>
+    <h1>PoC Isolado v2.3i - Teste de Sanidade JS e Log</h1>
+    <p>Este teste verifica se o JavaScript básico e o logging estão funcionando.</p>
+    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste de Sanidade</button>
     <div id="output"></div>
 
     <script>
-        // AdvancedInt64 e generalUtils como antes...
-        class AdvancedInt64 { /* ... (código completo como antes) ... */ }
-        const generalUtils = { /* ... (código completo como antes) ... */ };
+        const outputDivElement = document.getElementById('output'); // Pega uma vez no escopo global
+        const runBtnElement = document.getElementById('runBtn'); // Pega uma vez
 
-        const outputDivS1 = document.getElementById('output');
-        const runBtn = document.getElementById('runBtn');
-        const MEDIUM_PAUSE_S1 = 200;
+        // Função de log SIMPLIFICADA para este teste
+        function logToMyDiv(message, type = 'info') {
+            console.log(`[CONSOLE LOGS1 ${type.toUpperCase()}] ${message}`); // Sempre loga no console
+            if (!outputDivElement) {
+                console.error("Elemento 'outputDivElement' é NULO em logToMyDiv!");
+                return;
+            }
+            try {
+                const timestamp = `[${new Date().toLocaleTimeString()}]`;
+                const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                // Para simplificar, apenas um tipo de log na div por enquanto
+                outputDivElement.innerHTML += `<span class="log-${type}">${timestamp} ${sanitizedMessage}\n</span>`;
+                outputDivElement.scrollTop = outputDivElement.scrollHeight;
+            } catch (e) {
+                console.error("ERRO DENTRO DE logToMyDiv:", e);
+                // Tenta um log de emergência se a manipulação do DOM falhar
+                outputDivElement.innerHTML += "ERRO NO LOG!\n";
+            }
+        }
 
-        const logS1 = (message, type = 'info', funcName = '') => {
-            console.log(`[CONSOLE LOGS1 ${type.toUpperCase()}] ${funcName ? '['+funcName+'] ' : ''}${message}`);
-            generalUtils.logToDiv('output', message, type, funcName);
-        };
-        const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
-        
-        const testObject_h = { simple_key_h: "simple_value_h" };
-        let callCount_toJSON_h = 0;
-
-        const testPPJsonHijack_v23h = async () => {
-            const FNAME = 'testPPJsonHijack_v23h';
-            logS1("DEPURANDO: Entrou em testPPJsonHijack_v23h", 'critical', FNAME);
-            
-            const ppKey = 'toJSON'; 
-            let originalToJSON_Descriptor_h;
-            let ppAppliedSuccessfully_h = false;
-            callCount_toJSON_h = 0;
+        function testCoreFunctionality() {
+            logToMyDiv("PASSO 1: testCoreFunctionality FOI CHAMADA.", 'test');
 
             try {
-                logS1("DEPURANDO: testPPJsonHijack_v23h - Antes de getOwnPropertyDescriptor", 'critical', FNAME);
-                originalToJSON_Descriptor_h = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-                logS1("DEPURANDO: testPPJsonHijack_v23h - Depois de getOwnPropertyDescriptor", 'critical', FNAME);
+                logToMyDiv("PASSO 2: Tentando poluir Object.prototype.testProp (simples).", 'info');
+                Object.prototype.testProp = "Poluído com Sucesso!";
+                logToMyDiv("PASSO 3: Object.prototype.testProp poluído.", 'good');
 
-                // --- PASSO 1: Testar apenas a poluição do protótipo ---
-                Object.prototype[ppKey] = function() { // Descomentado
-                    callCount_toJSON_h++;
-                    let logPrefix = `toJSON PoC v2.3h (Chamada ${callCount_toJSON_h})`;
-                    console.log(`${logPrefix} - toJSON POLUÍDO INVOCADO! (v2.3h)`); 
-                    logS1(`${logPrefix} - toJSON POLUÍDO INVOCADO! typeof this: ${typeof this}`, 'vuln', FNAME);
-                    return { "hijack_successful_v23h": true, "call_count": callCount_toJSON_h }; // Retorno simples
-                };
-                ppAppliedSuccessfully_h = true;
-                logS1("DEPURANDO: testPPJsonHijack_v23h - Poluição Object.prototype.toJSON APLICADA.", 'critical', FNAME);
-
-                // --- PASSO 2: Testar JSON.stringify (manter comentado inicialmente) ---
-                // /*
-                logS1("DEPURANDO: testPPJsonHijack_v23h - ANTES de JSON.stringify (que está comentado/para ser descomentado)", 'warn', FNAME);
-                // const result_h = JSON.stringify(testObject_h); 
-                // logS1(`DEPURANDO: testPPJsonHijack_v23h - Resultado JSON.stringify: ${result_h ? result_h.substring(0,100) : "N/A"}`, 'info', FNAME);
-                // */
-
-            } catch (e) {
-                logS1(`DEPURANDO: ERRO em testPPJsonHijack_v23h: ${e.message}`, 'error', FNAME);
-                console.error("ERRO testPPJsonHijack_v23h:", e);
-            } finally {
-                logS1("DEPURANDO: testPPJsonHijack_v23h - Entrou no finally", 'critical', FNAME);
-                if (ppAppliedSuccessfully_h) { 
-                    if (originalToJSON_Descriptor_h) {
-                        Object.defineProperty(Object.prototype, ppKey, originalToJSON_Descriptor_h);
-                    } else {
-                        delete Object.prototype[ppKey];
-                    }
-                    logS1(`Object.prototype.${ppKey} restaurado.`, 'good', 'Cleanup_v23h');
+                let obj = {};
+                if (obj.testProp === "Poluído com Sucesso!") {
+                    logToMyDiv("PASSO 4: Poluição verificada em novo objeto.", 'good');
+                } else {
+                    logToMyDiv("PASSO 4: FALHA ao verificar poluição em novo objeto.", 'error');
                 }
-            }
-            logS1(`DEPURANDO: --- testPPJsonHijack_v23h Concluído ---`, 'test', FNAME);
-        };
 
-        const runIsolatedTest = async () => {
-            const outputDiv = document.getElementById('output');
-            if (outputDiv) outputDiv.innerHTML = '';
-            console.log("runIsolatedTest (v2.3h) FOI CHAMADA! (console)");
-            logS1("==== INICIANDO PoC Isolado v2.3h ====", 'test', 'runIsolatedTest');
+                delete Object.prototype.testProp; // Limpeza
+                logToMyDiv("PASSO 5: Object.prototype.testProp restaurado/deletado.", 'info');
+
+                logToMyDiv("PASSO 6: Tentando JSON.stringify em objeto simples.", 'info');
+                const simpleObj = { keyA: "valA", keyB: 123 };
+                const jsonResult = JSON.stringify(simpleObj);
+                logToMyDiv(`PASSO 7: Resultado de JSON.stringify: ${jsonResult}`, 'info');
+                if (jsonResult === '{"keyA":"valA","keyB":123}') {
+                    logToMyDiv("PASSO 8: JSON.stringify de objeto simples FUNCIONOU como esperado.", 'good');
+                } else {
+                    logToMyDiv("PASSO 8: JSON.stringify de objeto simples NÃO funcionou como esperado.", 'error');
+                }
+
+            } catch (e) {
+                logToMyDiv(`ERRO em testCoreFunctionality: ${e.message}`, 'error');
+                if(e.stack) logToMyDiv(`Stack do erro: ${e.stack}`, 'error');
+                console.error("ERRO EM testCoreFunctionality:", e);
+            }
+            logToMyDiv("PASSO 9: testCoreFunctionality CONCLUÍDA.", 'test');
+        }
+
+        // Função principal chamada pelo botão
+        async function runIsolatedTest() {
+            if (!runBtnElement) { // Verifica se o botão foi encontrado
+                console.error("Elemento 'runBtnElement' é NULO em runIsolatedTest!");
+                alert("Erro: Botão de teste não encontrado!"); // Feedback visual imediato
+                return;
+            }
+            runBtnElement.disabled = true;
+
+            // Limpa o output div primeiro e loga no console e na div
+            if (outputDivElement) {
+                outputDivElement.innerHTML = '';
+            } else {
+                console.error("Elemento 'outputDivElement' é NULO no início de runIsolatedTest!");
+                alert("Erro: Div de output não encontrada!"); // Feedback visual imediato
+                runBtnElement.disabled = false;
+                return;
+            }
+            
+            console.log("runIsolatedTest (v2.3i) FOI CHAMADA! (Console log)");
+            logToMyDiv("==== INICIANDO PoC Isolado v2.3i (Teste de Sanidade JS) ====", 'test');
             
             try {
-                logS1("DEPURANDO: runIsolatedTest - Antes de chamar testPPJsonHijack_v23h", 'critical', 'runIsolatedTest');
-                await testPPJsonHijack_v23h();
-                logS1("DEPURANDO: runIsolatedTest - Depois de chamar testPPJsonHijack_v23h", 'critical', 'runIsolatedTest');
+                logToMyDiv("Antes de chamar testCoreFunctionality.", 'info');
+                testCoreFunctionality(); // Chamada síncrona para este teste
+                logToMyDiv("Depois de chamar testCoreFunctionality.", 'info');
             } catch (e) {
-                logS1(`DEPURANDO: ERRO em runIsolatedTest: ${e.message}`, 'error', 'runIsolatedTest');
-                console.error("ERRO runIsolatedTest:", e);
+                logToMyDiv(`ERRO ao chamar ou dentro de testCoreFunctionality: ${e.message}`, 'error');
+                console.error("ERRO em runIsolatedTest ao executar testCoreFunctionality:", e);
             }
             
-            await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
-            logS1("\n==== PoC Isolado v2.3h CONCLUÍDO ====", 'test', 'runIsolatedTest');
-            if (runBtn) runBtn.disabled = false;
-        };
+            // PAUSE_S1_FUNC não é definido neste script simplificado, se precisar, adicione-o:
+            // const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
+            // await PAUSE_S1_FUNC(200); 
+
+            logToMyDiv("\n==== PoC Isolado v2.3i CONCLUÍDO ====", 'test');
+            runBtnElement.disabled = false;
+        }
     </script>
 </body>
 </html>
