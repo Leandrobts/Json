@@ -2,115 +2,246 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3m - Testando Array de Chaves no Retorno</title>
-    <style> /* ... estilos como antes ... */ </style>
+    <title>PoC Isolado v2.3n - Testando Object.keys em Array</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
+        #output {
+            background: #222;
+            border: 1px solid #444;
+            padding: 10px;
+            height: 80vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-top: 10px;
+        }
+        .log-info { color: #6cf; } 
+        .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; } 
+        .log-subtest { color: #eee; font-weight: bold; margin-left: 10px; } 
+        .log-vuln { color: #ff4444; font-weight: bold; } 
+        .log-good { color: #4CAF50; } 
+        .log-warn { color: #FFC107; } 
+        .log-error { color: #f44336; } 
+        .log-critical { color: #f0f; font-weight: bold; } 
+        .log-leak { color: #FF9800; font-weight: bold; } 
+        .log-ptr { color: #f0f; font-weight: bold; }
+        .log-escalation { background-color: #800000; color: #fff; font-weight: bold; padding: 1px 3px; border-radius: 3px; }
+    </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3m - Testando Array de Chaves no Retorno do toJSON</h1>
-    <button onclick="runTest_v23m()">Iniciar Teste v2.3m</button>
+    <h1>PoC Isolado v2.3n - Testando Object.keys em Array de Chaves</h1>
+    <p>Verifica se o problema ocorre ao chamar Object.keys() em um array (resultado de um Object.keys() anterior).</p>
+    <button onclick="runTest_v23n()">Iniciar Teste v2.3n</button>
     <div id="output"></div>
 
     <script>
-        // AdvancedInt64 e generalUtils como antes...
-        class AdvancedInt64 { /* ... (código completo como antes) ... */ }
-        const generalUtils = { /* ... (código completo como antes) ... */ };
+        // --- Utilitários ---
+        class AdvancedInt64 { 
+            constructor(low, high) {
+                let buffer = new Uint32Array(2);
+                let bytes = new Uint8Array(buffer.buffer);
+                if (arguments.length > 2) { throw TypeError('AdvancedInt64 takes at most 2 args'); }
+                if (arguments.length === 0) { throw TypeError('AdvancedInt64 takes at min 1 args'); }
+                let is_one = false;
+                if (arguments.length === 1) { is_one = true; }
+                if (!is_one) {
+                    if (typeof (low) !== 'number' && typeof (high) !== 'number') {
+                        throw TypeError('low/high must be numbers');
+                    }
+                }
+                const check_range = (x) => (-0x80000000 <= x) && (x <= 0xffffffff);
+                if (typeof low === 'number') {
+                    if (!check_range(low)) { throw TypeError('low not a valid value: ' + low); }
+                    if (is_one) {
+                        high = 0;
+                        if (low < 0) { high = -1; }
+                    } else {
+                        if (!check_range(high)) { throw TypeError('high not a valid value: ' + high); }
+                    }
+                    buffer[0] = low;
+                    buffer[1] = high;
+                } else if (typeof low === 'string') {
+                    let hexstr = low;
+                    if (hexstr.substring(0, 2) === "0x") { hexstr = hexstr.substring(2); }
+                    if (hexstr.length % 2 === 1) { hexstr = '0' + hexstr; }
+                    if (hexstr.length > 16) { hexstr = hexstr.substring(hexstr.length - 16); }
+                    else { hexstr = hexstr.padStart(16, '0');}
+                    for (let i = 0; i < 8; i++) {
+                        bytes[i] = parseInt(hexstr.slice(14 - i*2, 16 - i*2), 16);
+                    }
+                } else if (typeof low === 'object') {
+                    if (low instanceof AdvancedInt64) {
+                        bytes.set(low.bytes);
+                    } else if (low.length === 8) {
+                        bytes.set(low);
+                    } else { throw TypeError("Array must have exactly 8 elements."); }
+                } else {
+                    throw TypeError('AdvancedInt64 does not support your object for conversion');
+                }
+                this.buffer = buffer;
+                this.bytes = bytes;
+            }
+            low() { return this.buffer[0]; }
+            high() { return this.buffer[1]; }
+            toString(is_pretty) {
+                let lowStr = this.low().toString(16).padStart(8, '0');
+                let highStr = this.high().toString(16).padStart(8, '0');
+                if (is_pretty) {
+                    highStr = highStr.substring(0, 4) + '_' + highStr.substring(4);
+                    lowStr = lowStr.substring(0, 4) + '_' + lowStr.substring(4);
+                    return '0x' + highStr + '_' + lowStr;
+                }
+                return '0x' + highStr + lowStr;
+            }
+        }
+
+        const generalUtils = {
+            logToDiv: (divId, message, type = 'info', funcName = '') => {
+                const outputDiv = document.getElementById(divId);
+                if (!outputDiv) {
+                    console.error(`[${funcName}] ERRO FATAL: Div de log '${divId}' não encontrada.`);
+                    return;
+                }
+                try {
+                    const timestamp = `[${new Date().toLocaleTimeString()}]`;
+                    const prefix = funcName ? `[${funcName}] ` : '';
+                    const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info';
+                    // Gerenciamento de tamanho do log
+                    if(outputDiv.innerHTML.length > 300000){ 
+                        outputDiv.innerHTML = outputDiv.innerHTML.substring(outputDiv.innerHTML.length - 150000); 
+                        outputDiv.innerHTML = `<span>[Log Truncado...]</span>\n` + outputDiv.innerHTML; 
+                    }
+                    outputDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`;
+                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                } catch(e) { 
+                    console.error(`Erro DENTRO de generalUtils.logToDiv:`, e); 
+                    if (outputDiv) outputDiv.innerHTML += `[${new Date().toLocaleTimeString()}] [LOGGING ERROR INTERNO] ${String(e)}\n`; 
+                }
+            }
+        };
+        // --- Fim Utilitários ---
 
         const outputDivS1 = document.getElementById('output');
+        const runBtn = document.getElementById('runBtn');    
         const MEDIUM_PAUSE_S1 = 200;
-        let callCount_toJSON_m = 0;
 
         const logS1 = (message, type = 'info', funcName = '') => {
             console.log(`[${type.toUpperCase()}] ${funcName ? '['+funcName+'] ' : ''}${message}`);
-            // ... (lógica de logS1 para div como antes) ...
-            const targetDiv = document.getElementById('output');
-            if (targetDiv) { try { const timestamp = `[${new Date().toLocaleTimeString()}]`; const prefix = funcName ? `[${funcName}] ` : ''; const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;"); const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info'; if(targetDiv.innerHTML.length > 300000){ targetDiv.innerHTML = targetDiv.innerHTML.substring(targetDiv.innerHTML.length - 150000); targetDiv.innerHTML = `<span>[Log Truncado...]</span>\n` + targetDiv.innerHTML; } targetDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`; targetDiv.scrollTop = targetDiv.scrollHeight; } catch(e) { console.error(`Erro DENTRO de logS1 (para div):`, e); }}
+            generalUtils.logToDiv('output', message, type, funcName);
         };
+
         const PAUSE_S1_FUNC = (ms = 50) => new Promise(r => setTimeout(r, ms));
+        
+        const testObject_n = { root_prop1: "val1", root_prop2: "val2" }; // Objeto raiz bem simples
+        let callCount_toJSON_n = 0;
+        let originalToJSON_Descriptor_n;
+        const ppKey_n = 'toJSON';
 
-        const testObject_m = { a_m: 100, b_m: 'data_L_M', c_m: { nested_m: true, d_m: "deep_L_M" } };
+        function setupPrototypePollution_n() {
+            callCount_toJSON_n = 0;
+            originalToJSON_Descriptor_n = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_n);
 
-        let originalToJSON_Descriptor_m;
-        const ppKey_m = 'toJSON';
-
-        function setupPrototypePollution_m() {
-            callCount_toJSON_m = 0;
-            originalToJSON_Descriptor_m = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_m);
-
-            Object.prototype[ppKey_m] = function() {
-                callCount_toJSON_m++;
-                let logPrefix = `toJSON PoC v2.3m (Call ${callCount_toJSON_m})`;
+            Object.prototype[ppKey_n] = function() {
+                callCount_toJSON_n++;
+                let logPrefix = `toJSON PoC v2.3n (Call ${callCount_toJSON_n})`;
                 
-                let thisIdentifier = "unknown_this_m";
-                if (this === testObject_m) thisIdentifier = "ROOT_OBJECT_M";
-                else if (this === testObject_m.c_m) thisIdentifier = "NESTED_OBJECT_C_M";
-                else if (Array.isArray(this)) thisIdentifier = "ARRAY_OBJECT_M";
-                else if (this && typeof this === 'object' && this.hasOwnProperty('attempted_keys_array')) thisIdentifier = "PREVIOUS_RETURN_OBJECT_M";
+                let thisIdentifier = "unknown_this_n";
+                let isRootObject = (this === testObject_n);
+                let isArray = Array.isArray(this);
+
+                if (isRootObject) thisIdentifier = "ROOT_OBJECT_N";
+                else if (isArray) thisIdentifier = "ARRAY_OBJECT_N";
+                // Adicione mais identificadores se necessário, ex: para o objeto retornado.
+                else if (this && typeof this === 'object' && this.hasOwnProperty('processed_object_type')) {
+                    thisIdentifier = `RETURNED_OBJ_TYPE_${this.processed_object_type}_N`;
+                }
 
 
-                console.log(`%c${logPrefix} - Invocado! this_id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "color:purple");
-                logS1(`${logPrefix} - Invocado! this_id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, 'critical', 'toJSON_m');
+                console.log(`%c${logPrefix} - Invocado! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "color:blue");
+                logS1(`${logPrefix} - Invocado! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, 'critical', 'toJSON_n');
 
-                // Apenas para o objeto RAIZ, tentamos Object.keys e retornamos um objeto contendo essas chaves.
-                if (this === testObject_m) {
-                    console.log(`%c${logPrefix} - 'this' é ROOT_OBJECT_M. Tentando Object.keys(this)...`, "color:red; font-weight:bold;");
-                    logS1(`${logPrefix} - 'this' é ROOT_OBJECT_M. Tentando Object.keys(this)...`, 'critical', 'toJSON_m');
+                // Lógica principal
+                if (isRootObject) {
+                    console.log(`%c${logPrefix} - 'this' é ROOT_OBJECT_N. Tentando Object.keys(this)...`, "color:green;");
+                    logS1(`${logPrefix} - 'this' é ROOT_OBJECT_N. Tentando Object.keys(this)...`, 'info', 'toJSON_n');
                     try {
                         const keys = Object.keys(this);
                         console.log(`%c${logPrefix} - Object.keys(this) SUCESSO para ROOT. Chaves:`, "color:green", keys);
-                        logS1(`${logPrefix} - Object.keys(this) SUCESSO para ROOT. Chaves: [${keys.join(',')}]`, 'good', 'toJSON_m');
+                        logS1(`${logPrefix} - Object.keys(this) SUCESSO para ROOT. Chaves: [${keys.join(',')}]`, 'good', 'toJSON_n');
                         // Retorna um NOVO objeto que CONTÉM o array de chaves
                         return { 
-                            description: "Return from ROOT_OBJECT_M",
-                            attempted_keys_array: keys // O array de chaves é uma propriedade
+                            processed_object_type: "RootObjectResult",
+                            actual_keys_from_root: keys 
                         };
                     } catch (e) {
                         console.error(`${logPrefix} - ERRO em Object.keys(this) para ROOT:`, e);
-                        logS1(`${logPrefix} - ERRO em Object.keys(this) para ROOT: ${e.message}`, 'error', 'toJSON_m');
-                        return { "error_getting_keys_for_ROOT_M": true, "message": String(e.message) };
+                        logS1(`${logPrefix} - ERRO em Object.keys(this) para ROOT: ${e.message}`, 'error', 'toJSON_n');
+                        return { "error_processing_root_n": true, "message": String(e.message) };
                     }
-                } else {
-                    // Para todos os outros 'this' (incluindo o objeto aninhado 'c_m', e o objeto retornado acima, e o array 'keys' se for serializado),
-                    // retornamos um primitivo para parar a recursão profunda e isolar o teste.
-                    console.log(`%c${logPrefix} - 'this' NÃO é ROOT_OBJECT_M (id: ${thisIdentifier}). Retornando string simples.`, "color:orange");
-                    logS1(`${logPrefix} - 'this' NÃO é ROOT_OBJECT_M (id: ${thisIdentifier}). Retornando string simples.`, 'info', 'toJSON_m');
-                    return `processed_${thisIdentifier}_call_${callCount_toJSON_m}`; 
+                } else if (isArray && thisIdentifier === "ARRAY_OBJECT_N") {
+                    // Este é o ponto que suspeitamos causar o crash/lentidão no PoC v2.3 original.
+                    // 'this' aqui é o array que foi retornado como valor da propriedade 'actual_keys_from_root'
+                    console.log(`%c${logPrefix} - 'this' é ARRAY_OBJECT_N (provavelmente o array de chaves). TENTANDO Object.keys(this) NELE...`, "color:red; font-weight:bold;");
+                    logS1(`${logPrefix} - 'this' é ARRAY_OBJECT_N. TENTANDO Object.keys(this) NELE... (PONTO CRÍTICO!)`, 'critical', 'toJSON_n');
+                    try {
+                        const keysOfArray = Object.keys(this); // Object.keys em um array retorna seus índices como strings
+                        console.log(`%c${logPrefix} - Object.keys(this) SUCESSO para ARRAY. Chaves (índices):`, "color:green", keysOfArray);
+                        logS1(`${logPrefix} - Object.keys(this) SUCESSO para ARRAY. Chaves (índices): [${keysOfArray.join(',')}]`, 'good', 'toJSON_n');
+                        // Retorna um objeto contendo essas "sub-chaves" (índices do array)
+                        return {
+                            processed_object_type: "ArrayKeysResult",
+                            keys_of_array_object: keysOfArray
+                        };
+                    } catch (e) {
+                        console.error(`${logPrefix} - ERRO em Object.keys(this) para ARRAY_OBJECT_N:`, e);
+                        logS1(`${logPrefix} - ERRO em Object.keys(this) para ARRAY_OBJECT_N: ${e.message}`, 'error', 'toJSON_n');
+                        return { "error_processing_array_n": true, "message": String(e.message) };
+                    }
+                }
+                else {
+                    // Para qualquer outro 'this' (ex: o objeto {processed_object_type: "RootObjectResult", ...} ou {processed_object_type: "ArrayKeysResult", ...} ), 
+                    // retorna uma string simples para parar a recursão e evitar mais chamadas Object.keys.
+                    console.log(`%c${logPrefix} - 'this' é '${thisIdentifier}'. Retornando string simples para parar.`, "color:orange");
+                    logS1(`${logPrefix} - 'this' é '${thisIdentifier}'. Retornando string simples para parar.`, 'info', 'toJSON_n');
+                    return `processed_${thisIdentifier}_call_${callCount_toJSON_n}`;
                 }
             };
-            logS1("Poluição Object.prototype.toJSON APLICADA (Object.keys só no raiz, resto é string).", 'good', 'setup_m');
+            logS1("Poluição Object.prototype.toJSON APLICADA (v2.3n).", 'good', 'setup_n');
         }
 
-        function cleanupPrototypePollution_m() {
-            if (originalToJSON_Descriptor_m) {
-                Object.defineProperty(Object.prototype, ppKey_m, originalToJSON_Descriptor_m);
-            } else if (Object.prototype.hasOwnProperty(ppKey_m)) {
-                delete Object.prototype[ppKey_m];
+        function cleanupPrototypePollution_n() {
+            if (originalToJSON_Descriptor_n) {
+                Object.defineProperty(Object.prototype, ppKey_n, originalToJSON_Descriptor_n);
+            } else if (Object.prototype.hasOwnProperty(ppKey_n)) {
+                delete Object.prototype[ppKey_n];
             }
-            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_m');
+            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_n');
+            originalToJSON_Descriptor_n = undefined;
         }
 
-        async function runTest_v23m() {
+        async function runTest_v23n() {
             document.querySelectorAll('button').forEach(b => b.disabled = true);
             if (outputDivS1) outputDivS1.innerHTML = '';
-            logS1(`==== INICIANDO PoC Isolado v2.3m (Testando Array de Chaves no Retorno) ====`, 'test', 'runTest_m');
+            logS1(`==== INICIANDO PoC Isolado v2.3n (Testando Object.keys em Array) ====`, 'test', 'runTest_n');
 
-            setupPrototypePollution_m();
+            setupPrototypePollution_n();
             
-            logS1(`Tentando JSON.stringify em testObject_m...`, 'critical', 'runTest_m');
-            let result_m;
+            logS1(`Tentando JSON.stringify em testObject_n...`, 'critical', 'runTest_n');
+            let result_n;
             try {
                 await PAUSE_S1_FUNC(50); 
-                result_m = JSON.stringify(testObject_m);
-                logS1(`JSON.stringify CONCLUÍDO. Resultado (parcial): ${result_m ? String(result_m).substring(0, 1000) : "N/A"}`, 'good', 'runTest_m');
+                result_n = JSON.stringify(testObject_n); // Objeto de teste simples
+                logS1(`JSON.stringify CONCLUÍDO. Resultado (parcial): ${result_n ? String(result_n).substring(0, 1000) : "N/A"}`, 'good', 'runTest_n');
             } catch (e) {
-                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_m');
-                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_m');
-                console.error("ERRO durante JSON.stringify em runTest_m:", e);
+                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_n');
+                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_n');
+                console.error("ERRO durante JSON.stringify em runTest_n:", e);
             } finally {
-                cleanupPrototypePollution_m();
+                cleanupPrototypePollution_n();
             }
             
             await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1);
-            logS1(`\n==== PoC Isolado v2.3m CONCLUÍDO ====`, 'test', 'runTest_m');
+            logS1(`\n==== PoC Isolado v2.3n CONCLUÍDO ====`, 'test', 'runTest_n');
             document.querySelectorAll('button').forEach(b => b.disabled = false);
         }
     </script>
