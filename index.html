@@ -2,75 +2,30 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Suite de Vulnerabilidades Avançada (Modular)</title>
+    <title>Teste Isolado - JSON Type Confusion</title>
     <style>
         body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
-        #output, #output-canvas, #output-advanced {
+        #output-advanced { /* ID usado por logS3 */
             background: #222;
             border: 1px solid #444;
             padding: 10px;
-            height: 75vh; /* Ajustado para visualização */
+            height: 75vh; 
             overflow-y: auto;
             white-space: pre-wrap;
             margin-top: 10px;
         }
-        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; } .log-subtest { color: #eee; font-weight: bold; margin-left: 10px; } .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; } .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; } .log-leak { color: #FF9800; font-weight: bold; } .log-ptr { color: #f0f; font-weight: bold; }
-        .log-escalation { background-color: #800000; color: #fff; font-weight: bold; padding: 1px 3px; border-radius: 3px; }
-        .log-tool { color: #7FFF00; font-weight: bold; }
-
-        #xss-target-div { border: 2px dotted red; padding: 5px; margin: 15px 0; color: yellow; min-height: 60px; overflow-y: auto; }
-        #interactive-canvas { display: block; border: 1px solid #444; margin-top: 5px; background-color: #333; cursor: default; }
-        #canvas-coord-status { color: #aaa; font-size: 12px; height: 15px; }
-        hr { border: 1px solid #555; margin: 20px 0; }
-        .tool-section { margin-top: 20px; padding: 10px; border: 1px solid #555; background-color: #1a1a1a; }
-        .tool-section h3 { margin-top: 0; color: #00FFFF; }
-        .tool-section input[type="text"], .tool-section textarea { background-color: #333; color: #eee; border: 1px solid #555; padding: 5px; margin-right: 5px; width: 200px; }
-        .tool-section button { background-color: #007bff; color: white; border: none; padding: 5px 10px; cursor: pointer; }
-        .tool-section button:hover { background-color: #0056b3; }
+        /* Estilos básicos de log para melhor visualização */
+        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
+        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
+        .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>Testes de Vulnerabilidade - Script Principal</h1>
-    <p>Testa: XSS++, OOB R/W (Tipos), PP Básica/Hijack, IndexedDB++, DOM Stress, APIs Web.</p>
-    <button id="runBtnS1">Iniciar Testes S1</button>
-    <div id="output"></div>
-    <div id="xss-target-div">Área para teste de XSS DOM.</div>
+    <h1>Teste Isolado: JSON Type Confusion UAF Speculative</h1>
+    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
+    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
+    <div id="output-advanced"></div>
 
-    <hr>
-
-    <section>
-        <h2>Suite de Vulnerabilidades - Canvas e APIs Avançadas</h2>
-        <p>Foco: PP Avançado++, OOB R/W (Metadata/ImageData), API Checks (GL/GPU/FS), Canvas Interact.</p>
-        <canvas id="interactive-canvas" width="300" height="100"></canvas>
-        <div id="canvas-coord-status">Passe o mouse sobre o canvas ?</div>
-        <button id="runCanvasBtnS2">Iniciar Testes Canvas S2</button>
-        <div id="output-canvas"></div>
-    </section>
-
-    <hr>
-
-    <section class="tool-section">
-        <h2>Ferramentas e Testes Avançados - Script 3</h2>
-        <p>Testes adicionais, ferramentas conceituais e primitivas de baixo nível (simuladas/educacionais).</p>
-        <button id="runAdvancedBtnS3">Iniciar Testes Avançados S3</button>
-
-        <div id="rop-builder" class="tool-section" style="margin-top:15px;">
-            <h3>Construtor de Cadeia ROP (Conceitual)</h3>
-            <textarea id="rop-gadgets-input" rows="5" placeholder="EndereçoGadget1=Nome (ex: 0x41414141=pop_rax_ret)&#10;EndereçoGadget2=Nome"></textarea><br>
-            <textarea id="rop-chain-input" rows="5" placeholder="NomeGadget1&#10;ValorParaRDI (se pop rdi)&#10;NomeGadget2..."></textarea><br>
-            <button id="buildRopChainBtn">Construir Cadeia</button>
-        </div>
-
-        <div id="memory-viewer" class="tool-section" style="margin-top:15px;">
-            <h3>Visualizador de Memória (Conceitual - Requer Primitiva de Leitura)</h3>
-            <input type="text" id="mem-view-addr" placeholder="Endereço (ex: 0x12345000)">
-            <input type="text" id="mem-view-size" placeholder="Tamanho (bytes, ex: 64)">
-            <button id="viewMemoryBtn">Visualizar Memória</button>
-            <p style="font-size:0.8em;">Nota: Isso simula a leitura. Nenhuma leitura real de memória arbitrária ocorre sem um exploit.</p>
-        </div>
-        <div id="output-advanced"></div>
-    </section>
-
-    <script type="module" src="js/main.mjs"></script>
+    <script type="module" src="js/run_isolated_test.mjs"></script>
 </body>
 </html>
