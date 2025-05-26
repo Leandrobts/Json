@@ -2,39 +2,40 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // Importa a nova função de teste
-import { executeMyComplexObjectGetterExploitTest } from './testMyComplexObjectGetterExploit.mjs'; // Nome do arquivo atualizado
+import { executeForInGadgetReproTest } from './testForInGadgetExploration.mjs'; // Mudei o nome do arquivo importado
 
-async function runMyComplexObjectGetterStrategy() {
-    const FNAME_RUNNER = "runMyComplexObjectGetterStrategy";
-    logS3(`==== INICIANDO Estratégia de Exploração do Getter em MyComplexObject ====`, 'test', FNAME_RUNNER);
+async function runReproduceGetterTriggerStrategy() {
+    const FNAME_RUNNER = "runReproduceGetterTriggerStrategy";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Acionamento do Getter ====`, 'test', FNAME_RUNNER);
 
-    await executeMyComplexObjectGetterExploitTest();
+    await executeForInGadgetReproTest();
 
-    logS3(`==== Estratégia de Exploração do Getter em MyComplexObject CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Acionamento do Getter CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_MyComplexObjectGetterExploit';
+    const FNAME = 'runAllAdvancedTestsS3_ReproduceGetterTrigger';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: Teste de Exploração do Getter em MyComplexObject ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - MyComplexObject Getter Exploit";
+    logS3(`==== INICIANDO Script 3: Tentativa de Reproduzir Acionamento do Getter em MyComplexObject ====`,'test', FNAME);
+    document.title = "Iniciando Script 3 - Reproduce MyComplex Getter";
 
-    await runMyComplexObjectGetterStrategy();
+    await runReproduceGetterTriggerStrategy();
 
-    logS3(`\n==== Script 3 CONCLUÍDO (MyComplexObject Getter Exploit) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (Reproduce MyComplex Getter) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
+    // Ajuste final do título
     if (document.title.startsWith("Iniciando") || document.title.includes("CONGELOU?")) {
         // Manter
-    } else if (document.title.includes("SUCCESS") || document.title.includes("ERRO") || document.title.includes("CRASH") || document.title.includes("Called") || document.title.includes("Modified")) {
+    } else if (document.title.includes("SUCCESS") || document.title.includes("ERRO") || document.title.includes("RangeError") || document.title.includes("PROBLEM") || document.title.includes("Called")) {
         // Manter títulos que indicam resultados específicos
     }
     else {
-        document.title = "Script 3 Concluído - MyComplexObject Getter Exploit";
+        document.title = "Script 3 Concluído - Reproduce MyComplex Getter";
     }
 }
