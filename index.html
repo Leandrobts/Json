@@ -2,14 +2,14 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>JSON Type Confusion</title>
+    <title>Teste Isolado - JSON Type Confusion</title>
     <style>
         body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
         #output-advanced { /* ID usado por logS3 */
             background: #222;
             border: 1px solid #444;
             padding: 10px;
-            height: 75vh; 
+            height: 75vh;
             overflow-y: auto;
             white-space: pre-wrap;
             margin-top: 10px;
@@ -21,11 +21,11 @@
     </style>
 </head>
 <body>
-    <h1>Teste Isolado: JSON Type Confusion UAF </h1>
+    <h1>Teste Isolado: JSON Type Confusion UAF Speculative</h1>
     <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
     <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
     <div id="output-advanced"></div>
 
-    <script type="module" src="js/script3/runAllAdvancedTestsS3.mjs"></script>
+    <script type="module" src="js/run_isolated_test.mjs"></script>
 </body>
 </html>
