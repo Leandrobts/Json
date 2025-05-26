@@ -7,7 +7,7 @@ import { testSharedArrayBufferSupport } from './testSharedArrayBufferSupport.mjs
 import { explainMemoryPrimitives } from './explainMemoryPrimitives.mjs';
 import { testJsonTypeConfusionUAFSpeculative } from './testJsonTypeConfusionUAF.mjs';
 import { testCoreExploitModule } from '../core_exploit.mjs'; // Teste do próprio core_exploit
-import { testCorruptArrayBufferStructure } from './testCorruptArrayBufferStructure.mjs'; // << ADICIONADO NA RESPOSTA ANTERIOR
+//import { testCorruptArrayBufferStructure } from './testCorruptArrayBufferStructure.mjs'; // << ADICIONADO NA RESPOSTA ANTERIOR
 
 
 export async function runAllAdvancedTestsS3() { // << ESTA É A LINHA 13 (contando comentários e linhas em branco no topo)
