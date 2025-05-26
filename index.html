@@ -2,146 +2,75 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>PoC Isolado v2.3u - Ultra Profundidade, Chaves Longas</title>
-    <style> /* ... estilos como antes ... */ </style>
+    <title>Suite de Vulnerabilidades Avançada (Modular)</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
+        #output, #output-canvas, #output-advanced {
+            background: #222;
+            border: 1px solid #444;
+            padding: 10px;
+            height: 75vh; /* Ajustado para visualização */
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-top: 10px;
+        }
+        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; } .log-subtest { color: #eee; font-weight: bold; margin-left: 10px; } .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; } .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; } .log-leak { color: #FF9800; font-weight: bold; } .log-ptr { color: #f0f; font-weight: bold; }
+        .log-escalation { background-color: #800000; color: #fff; font-weight: bold; padding: 1px 3px; border-radius: 3px; }
+        .log-tool { color: #7FFF00; font-weight: bold; }
+
+        #xss-target-div { border: 2px dotted red; padding: 5px; margin: 15px 0; color: yellow; min-height: 60px; overflow-y: auto; }
+        #interactive-canvas { display: block; border: 1px solid #444; margin-top: 5px; background-color: #333; cursor: default; }
+        #canvas-coord-status { color: #aaa; font-size: 12px; height: 15px; }
+        hr { border: 1px solid #555; margin: 20px 0; }
+        .tool-section { margin-top: 20px; padding: 10px; border: 1px solid #555; background-color: #1a1a1a; }
+        .tool-section h3 { margin-top: 0; color: #00FFFF; }
+        .tool-section input[type="text"], .tool-section textarea { background-color: #333; color: #eee; border: 1px solid #555; padding: 5px; margin-right: 5px; width: 200px; }
+        .tool-section button { background-color: #007bff; color: white; border: none; padding: 5px 10px; cursor: pointer; }
+        .tool-section button:hover { background-color: #0056b3; }
+    </style>
 </head>
 <body>
-    <h1>PoC Isolado v2.3u - Ultra Profundidade com Chaves Longas</h1>
-    <p>Tenta atingir grande profundidade de recursão com chaves longas. FOCO NO CONSOLE (PRESERVE LOG!). Pode travar feio.</p>
-    <button id="runBtn" onclick="runIsolatedTest()">Iniciar Teste v2.3u</button>
+    <h1>Testes de Vulnerabilidade - Script Principal</h1>
+    <p>Testa: XSS++, OOB R/W (Tipos), PP Básica/Hijack, IndexedDB++, DOM Stress, APIs Web.</p>
+    <button id="runBtnS1">Iniciar Testes S1</button>
     <div id="output"></div>
+    <div id="xss-target-div">Área para teste de XSS DOM.</div>
 
-    <script>
-        // AdvancedInt64 e generalUtils como antes...
-        class AdvancedInt64 { /* ... (código completo como antes) ... */ }
-        const generalUtils = { /* ... (código completo como antes) ... */ };
+    <hr>
 
-        const outputDivS1 = document.getElementById('output');
-        const runBtn = document.getElementById('runBtn');    
-        const MEDIUM_PAUSE_S1 = 200; // Para o final do script
+    <section>
+        <h2>Suite de Vulnerabilidades - Canvas e APIs Avançadas</h2>
+        <p>Foco: PP Avançado++, OOB R/W (Metadata/ImageData), API Checks (GL/GPU/FS), Canvas Interact.</p>
+        <canvas id="interactive-canvas" width="300" height="100"></canvas>
+        <div id="canvas-coord-status">Passe o mouse sobre o canvas ?</div>
+        <button id="runCanvasBtnS2">Iniciar Testes Canvas S2</button>
+        <div id="output-canvas"></div>
+    </section>
 
-        const logS1 = (message, type = 'info', funcName = '') => {
-            console.log(`[${type.toUpperCase()}] ${funcName ? '['+funcName+'] ' : ''}${message}`);
-            const targetDiv = document.getElementById('output');
-            if (targetDiv) { try { const timestamp = `[${new Date().toLocaleTimeString()}]`; const prefix = funcName ? `[${funcName}] ` : ''; const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;"); const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation'].includes(type) ? type : 'info'; if(targetDiv.innerHTML.length > 300000){ targetDiv.innerHTML = outputDiv.innerHTML.substring(targetDiv.innerHTML.length - 150000); targetDiv.innerHTML = `<span>[Log Truncado...]</span>\n` + targetDiv.innerHTML; } targetDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`; targetDiv.scrollTop = targetDiv.scrollHeight; } catch(e) { console.error(`Erro DENTRO de logS1 (para div):`, e); }}
-        };
-        // PAUSA CURTA NÃO SERÁ USADA DENTRO DO LOOP toJSON PARA MAXIMIZAR VELOCIDADE
-        // const PAUSE_S1_FUNC = (ms = 10) => new Promise(r => setTimeout(r, ms)); 
-        
-        const testObject_u = { p1_u: "val_u1" }; // Objeto raiz ainda mais simples
-        let callCount_toJSON_u = 0;
-        let originalToJSON_Descriptor_u;
-        const ppKey_u = 'toJSON';
+    <hr>
 
-        // --- Configurações para Chaves Longas e Profundidade ---
-        const LONG_KEY_LENGTH_u = 4000; 
-        const RECURSIVE_KEY_STRING_BASE_u = "Y".repeat(LONG_KEY_LENGTH_u) + "_KEY_"; 
-        const MAX_toJSON_CALLS_u = 2500; // Tentar profundidade alta, mas menor que o estouro de pilha com chaves curtas
+    <section class="tool-section">
+        <h2>Ferramentas e Testes Avançados - Script 3</h2>
+        <p>Testes adicionais, ferramentas conceituais e primitivas de baixo nível (simuladas/educacionais).</p>
+        <button id="runAdvancedBtnS3">Iniciar Testes Avançados S3</button>
 
-        function setupPrototypePollution_u() {
-            callCount_toJSON_u = 0;
-            originalToJSON_Descriptor_u = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_u);
+        <div id="rop-builder" class="tool-section" style="margin-top:15px;">
+            <h3>Construtor de Cadeia ROP (Conceitual)</h3>
+            <textarea id="rop-gadgets-input" rows="5" placeholder="EndereçoGadget1=Nome (ex: 0x41414141=pop_rax_ret)&#10;EndereçoGadget2=Nome"></textarea><br>
+            <textarea id="rop-chain-input" rows="5" placeholder="NomeGadget1&#10;ValorParaRDI (se pop rdi)&#10;NomeGadget2..."></textarea><br>
+            <button id="buildRopChainBtn">Construir Cadeia</button>
+        </div>
 
-            Object.prototype[ppKey_u] = function() { 
-                callCount_toJSON_u++;
-                // Para evitar sobrecarregar o console com logs em cada chamada de um loop tão grande,
-                // logaremos apenas a cada N chamadas, e quando atingir o limite.
-                const shouldLogThisCall = (callCount_toJSON_u % 200 === 0) || (callCount_toJSON_u === 1) || (callCount_toJSON_u === MAX_toJSON_CALLS_u);
+        <div id="memory-viewer" class="tool-section" style="margin-top:15px;">
+            <h3>Visualizador de Memória (Conceitual - Requer Primitiva de Leitura)</h3>
+            <input type="text" id="mem-view-addr" placeholder="Endereço (ex: 0x12345000)">
+            <input type="text" id="mem-view-size" placeholder="Tamanho (bytes, ex: 64)">
+            <button id="viewMemoryBtn">Visualizar Memória</button>
+            <p style="font-size:0.8em;">Nota: Isso simula a leitura. Nenhuma leitura real de memória arbitrária ocorre sem um exploit.</p>
+        </div>
+        <div id="output-advanced"></div>
+    </section>
 
-                let logPrefix = `toJSON PoC v2.3u (Call ${callCount_toJSON_u})`;
-                
-                let thisIdentifier = "unknown_this_u";
-                if (this === testObject_u && callCount_toJSON_u === 1) thisIdentifier = "ROOT_U";
-                else if (Array.isArray(this)) thisIdentifier = "ARRAY_U";
-                else if (this && typeof this === 'object' && this.hasOwnProperty('level_u')) thisIdentifier = `PREV_RETURN_OBJ_L${this.level_u}_U`;
-
-                if (shouldLogThisCall) {
-                    console.log(`%c${logPrefix} - INVOKED! id='${thisIdentifier}', typeof='${typeof this}', constructor='${this && this.constructor ? this.constructor.name : 'N/A'}'`, "background: #1e1e1e; color: #c586c0");
-                }
-                
-                if (callCount_toJSON_u > MAX_toJSON_CALLS_u) { 
-                    if (shouldLogThisCall || (callCount_toJSON_u === MAX_toJSON_CALLS_u + 1) ) { // Loga a primeira vez que excede
-                        console.warn(`${logPrefix} - Limite de chamadas toJSON (${MAX_toJSON_CALLS_u}) atingido. Retornando string.`);
-                        logS1(`${logPrefix} - Limite de chamadas toJSON (${MAX_toJSON_CALLS_u}) atingido. Retornando string.`, 'warn', 'toJSON_u');
-                    }
-                    return `recursion_limit_deep_long_${callCount_toJSON_u}`;
-                }
-
-                let keys = [];
-                try {
-                    // Não vamos logar PRESTES A CHAMAR Object.keys em todas as iterações para não poluir demais
-                    keys = Object.keys(this); 
-                    
-                    let keysToUseInReturn;
-                    if (thisIdentifier === "ROOT_U") {
-                        keysToUseInReturn = keys; 
-                    } else {
-                        keysToUseInReturn = keys.map((key, index) => `${RECURSIVE_KEY_STRING_BASE_u}${callCount_toJSON_u}_${index}`);
-                    }
-                    
-                    if (shouldLogThisCall) {
-                        console.log(`%c${logPrefix} - Object.keys SUCESSO para id='${thisIdentifier}'. Keys p/ Retorno (amostra): ${keysToUseInReturn[0] ? keysToUseInReturn[0].substring(0,15)+"..." : "[]"}`, "color:teal");
-                        logS1(`${logPrefix} - Usando ${keysToUseInReturn.length} chaves (amostra: ${keysToUseInReturn[0] ? keysToUseInReturn[0].substring(0,30)+"..." : "N/A"}).`, 'info', 'toJSON_u');
-                    }
-                    return { 
-                        level_u: callCount_toJSON_u, 
-                        payload_r_keys_u: keysToUseInReturn 
-                    };
-
-                } catch (e) {
-                    console.error(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}':`, e);
-                    logS1(`${logPrefix} - ERRO em Object.keys(this) para id='${thisIdentifier}': ${e.message}`, 'error', 'toJSON_u');
-                    return { "error_in_toJSON_u": true, "message": String(e.message) };
-                }
-            };
-            logS1(`Poluição Object.prototype.toJSON APLICADA (v2.3u - Ultra Profundidade, Chaves Longas, Limite: ${MAX_toJSON_CALLS_u}).`, 'good', 'setup_u');
-        }
-
-        function cleanupPrototypePollution_u() {
-            if (originalToJSON_Descriptor_u) {
-                Object.defineProperty(Object.prototype, ppKey_u, originalToJSON_Descriptor_u);
-            } else if (Object.prototype.hasOwnProperty(ppKey_u)) {
-                delete Object.prototype[ppKey_u];
-            }
-            logS1("Object.prototype.toJSON restaurado.", 'good', 'cleanup_u');
-        }
-
-        async function runIsolatedTest() {
-            document.querySelectorAll('button').forEach(b => b.disabled = true);
-            if (outputDivS1) outputDivS1.innerHTML = '';
-            logS1(`==== INICIANDO PoC Isolado v2.3u (Ultra Profundidade, Chaves Longas, Limite ${MAX_toJSON_CALLS_u} - idx < size() ESPERADO?) ====`, 'test', 'runTest_u');
-
-            setupPrototypePollution_u();
-            
-            logS1(`Tentando JSON.stringify em testObject_u... (PODE TRAVAR FEIO OU DEMORAR MUITO)`, 'critical', 'runTest_u');
-            let result_u;
-            let errorState_u = null;
-            try {
-                result_u = JSON.stringify(testObject_u); 
-                logS1(`JSON.stringify CONCLUÍDO. Resultado (parcial): ${result_u ? String(result_u).substring(0, 300) : "N/A"}`, 'good', 'runTest_u');
-            } catch (e) {
-                errorState_u = e;
-                logS1(`ERRO CAPTURADO por JSON.stringify: ${e.message}`, 'error', 'runTest_u');
-                if (e.stack) logS1(`Stack: ${e.stack}`, 'error', 'runTest_u');
-                console.error("ERRO durante JSON.stringify em runTest_u:", e);
-            } finally {
-                logS1("Entrou no finally de runTest_u.", 'info', 'runTest_u');
-                cleanupPrototypePollution_u();
-            }
-            
-            // await PAUSE_S1_FUNC(MEDIUM_PAUSE_S1); // Pausa no final pode não ser útil se travar
-            if (errorState_u && errorState_u.toString().includes("Maximum call stack size exceeded")) {
-                 logS1(`\n==== PoC Isolado v2.3u CONCLUÍDO com ESTOURO DE PILHA (Chamadas toJSON: ${callCount_toJSON_u}) ====`, 'error', 'runTest_u');
-            } else if (!result_u && !errorState_u) { 
-                 logS1(`\n==== PoC Isolado v2.3u CONCLUÍDO mas TRAVOU SEM ERRO CAPTURÁVEL (Chamadas toJSON: ${callCount_toJSON_u}) ====`, 'warn', 'runTest_u');
-                 logS1("VERIFIQUE O CONSOLE POR CRASHES DO MOTOR JS (ex: idx < size) OU ERROS DE MEMÓRIA.", 'critical', 'runTest_u');
-            } else if (errorState_u) { 
-                logS1(`\n==== PoC Isolado v2.3u CONCLUÍDO COM ERRO (Chamadas toJSON: ${callCount_toJSON_u}) ====`, 'error', 'runTest_u');
-            } else { 
-                 logS1(`\n==== PoC Isolado v2.3u CONCLUÍDO (Chamadas toJSON: ${callCount_toJSON_u}) ====`, 'test', 'runTest_u');
-            }
-            document.querySelectorAll('button').forEach(b => b.disabled = false);
-        }
-    </script>
+    <script type="module" src="js/main.mjs"></script>
 </body>
 </html>
