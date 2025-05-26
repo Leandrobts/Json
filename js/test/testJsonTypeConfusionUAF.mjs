@@ -1,4 +1,4 @@
-// js/script3/testJsonTypeConfusionUAFSpeculative.mjs
+// js/script3/testJsonTypeConfusionUAF.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, isAdvancedInt64Object, toHex } from '../utils.mjs';
 import {
