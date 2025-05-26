@@ -1,7 +1,6 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importa a nova função de teste
 import { executeAggressiveHeapSprayAndCorruptTest } from './testAggressiveHeapSpray.mjs';
 
 async function runAggressiveSprayStrategy() {
