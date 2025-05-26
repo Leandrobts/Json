@@ -6,7 +6,7 @@ import {
     executeRevisitForInRangeErrorTest,
     toJSON_ForIn_V4_Instrumented,
     toJSON_ProbeGenericObject_Revisit // A versão que visamos testar para o RangeError
-} from './testInvestigateForInRCE.mjs'; // Nome do arquivo atualizado
+} from './testInvestigateForInRCE.mjs';
 
 async function runRevisitRangeErrorStrategyInvestigative() {
     const FNAME_RUNNER = "runRevisitRangeErrorStrategyInvestigative";
@@ -15,7 +15,7 @@ async function runRevisitRangeErrorStrategyInvestigative() {
     let result;
     let criticalErrorOccurred = false;
 
-    // Teste 1: Com toJSON_ForIn_V4_Instrumented (esperamos que passe, como no último log)
+    // Teste 1: Com toJSON_ForIn_V4_Instrumented (esperamos que passe)
     logS3(`\nExecutando sub-teste com toJSON: toJSON_ForIn_V4_Instrumented`, "info", FNAME_RUNNER);
     result = await executeRevisitForInRangeErrorTest(toJSON_ForIn_V4_Instrumented, "toJSON_ForIn_V4_Instrumented");
     if (result && result.stringifyError && result.stringifyError.name === 'RangeError') {
@@ -29,7 +29,7 @@ async function runRevisitRangeErrorStrategyInvestigative() {
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
     // Teste 2: Com toJSON_ProbeGenericObject_Revisit (esperamos que esta possa causar o RangeError)
-    if (!criticalErrorOccurred || !document.title.includes("RangeError")) { // Só prossegue se o primeiro não deu RangeError
+    if (!criticalErrorOccurred || !document.title.includes("RangeError")) {
         logS3(`\nExecutando sub-teste com toJSON: toJSON_ProbeGenericObject_Revisit`, "info", FNAME_RUNNER);
         result = await executeRevisitForInRangeErrorTest(toJSON_ProbeGenericObject_Revisit, "toJSON_ProbeGenericObject_Revisit");
         if (result && result.stringifyError && result.stringifyError.name === 'RangeError') {
