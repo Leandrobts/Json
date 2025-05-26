@@ -1,7 +1,6 @@
 // js/run_isolated_test.mjs
+import { testJsonTypeConfusionUAFSpeculative } from './script3/testJsonTypeConfusionUAFSpeculative.mjs';
 import { getElementById } from './dom_elements.mjs'; // Para interagir com o botão e a div
-// Importa a função de teste principal do Script 3 (que agora inclui a lógica de variação de valor)
-import { runAllAdvancedTestsS3 } from './script3/runAllAdvancedTestsS3.mjs';
 
 function initializeAndRunTest() {
     const runBtn = getElementById('runIsolatedTestBtn');
@@ -15,18 +14,18 @@ function initializeAndRunTest() {
         runBtn.addEventListener('click', async () => {
             if (runBtn.disabled) return;
             runBtn.disabled = true;
-
+            
             if (outputDiv) {
                 outputDiv.innerHTML = ''; // Limpa logs anteriores
             }
-            console.log("Iniciando teste isolado: Variação de Valor de Corrupção e Sondagem de Objetos Complexos...");
+            console.log("Iniciando teste isolado: testJsonTypeConfusionUAFSpeculative...");
 
             try {
-                // Chama a função principal do Script 3 que orquestra os testes
-                await runAllAdvancedTestsS3();
+                await testJsonTypeConfusionUAFSpeculative();
             } catch (e) {
                 console.error("Erro crítico durante a execução do teste isolado:", e);
                 if (outputDiv) {
+                    // Tenta logar o erro na div também
                     const timestamp = `[${new Date().toLocaleTimeString()}]`;
                     outputDiv.innerHTML += `<span class="log-critical">${timestamp} [ERRO CRÍTICO NO TESTE] ${String(e.message).replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n</span>`;
                 }
