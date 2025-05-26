@@ -1,7 +1,7 @@
 // js/run_victim_instability_test.mjs
 import { getRunVictimTestBtn, getOutputAdvancedS3 as getOutputAdvancedDiv } from './dom_elements.mjs'; // Corrigido para usar alias se dom_elements exporta getOutputAdvancedS3
 import { logS3, PAUSE_S3 } from './script3/s3_utils.mjs';
-import { runAllInstabilityTestsOnVictimAB } from './script3/testVictimABInstability.mjs'; // <--- ESTA É A IMPORTAÇÃO
+import { runAllInstabilityTestsOnVictimAB } from './script3/testJsonTypeConfusionUAFSpeculative.mjs'; // <--- ESTA É A IMPORTAÇÃO
 import { selfTestOOBReadWrite, clearOOBEnvironment } from './core_exploit.mjs';
 
 async function executeVictimInstabilityStrategy() {
