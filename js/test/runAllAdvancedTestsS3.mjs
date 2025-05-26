@@ -2,8 +2,8 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-import { testWebAssemblyInterface } from './testWebAssemblyInterface.mjs';
-import { testSharedArrayBufferSupport } from './testSharedArrayBufferSupport.mjs';
+//import { testWebAssemblyInterface } from './testWebAssemblyInterface.mjs';
+//import { testSharedArrayBufferSupport } from './testSharedArrayBufferSupport.mjs';
 import { explainMemoryPrimitives } from './explainMemoryPrimitives.mjs';
 import { testJsonTypeConfusionUAFSpeculative } from './testJsonTypeConfusionUAF.mjs';
 import { testCoreExploitModule } from '../core_exploit.mjs'; // Teste do próprio core_exploit
