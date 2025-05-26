@@ -5,7 +5,7 @@ import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { testWebAssemblyInterface } from './testWebAssemblyInterface.mjs';
 import { testSharedArrayBufferSupport } from './testSharedArrayBufferSupport.mjs';
 import { explainMemoryPrimitives } from './explainMemoryPrimitives.mjs';
-import { testJsonTypeConfusionUAFSpeculative } from './testJsonTypeConfusionUAFSpeculative.mjs';
+import { testJsonTypeConfusionUAFSpeculative } from './testJsonTypeConfusionUAF.mjs';
 import { testCoreExploitModule } from '../core_exploit.mjs'; // Teste do próprio core_exploit
 import { testCorruptArrayBufferStructure } from './testCorruptArrayBufferStructure.mjs'; // << ADICIONADO NA RESPOSTA ANTERIOR
 
