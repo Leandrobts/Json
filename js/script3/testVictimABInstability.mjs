@@ -176,7 +176,7 @@ export async function runAllInstabilityTestsOnVictimAB() {
         // Em um motor JS real, pode haver um `JSCell header` antes.
         // Se houver um header de, por exemplo, 8 bytes, então `params.offset_in_JSObject_hex`
         // precisaria ser somado a esses 8 bytes para obter o `actual_write_offset_in_raw_buffer`.
-        const JSCELL_HEADER_SIZE_GUESS = 16; // << AJUSTE ESTE VALOR SE VOCÊ SUSPEITAR DE UM HEADER
+        const JSCELL_HEADER_SIZE_GUESS = 4; // << AJUSTE ESTE VALOR SE VOCÊ SUSPEITAR DE UM HEADER
         const actual_write_offset = JSCELL_HEADER_SIZE_GUESS + parseInt(params.offset_in_JSObject_hex, 16);
 
         const test_result = await executeDirectCorruptionAndInspect(
