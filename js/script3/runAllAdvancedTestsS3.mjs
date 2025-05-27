@@ -1,8 +1,8 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importa a nova função de teste
-import { executeGetterTriggerReproTest } from './testMyComplexObjectGetterRepro.mjs'; // Atualizado o nome do arquivo
+// Importa a função de teste do arquivo renomeado/corrigido
+import { executeGetterTriggerReproTest } from './testMyComplexObjectGetterRepro.mjs';
 
 async function runReproduceGetterTriggerStrategy() {
     const FNAME_RUNNER = "runReproduceGetterTriggerStrategy";
@@ -14,7 +14,7 @@ async function runReproduceGetterTriggerStrategy() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_ReproduceMyComplexGetter'; // Nome do teste principal atualizado
+    const FNAME = 'runAllAdvancedTestsS3_ReproduceMyComplexGetter';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
