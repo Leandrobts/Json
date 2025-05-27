@@ -79,7 +79,7 @@ export const JSC_OFFSETS = {
         // Exemplo: JSObject_Simple_STRUCTURE_ID: 0x010400F0, // Para {} // Encontre o valor real!
         // Adicione mais conforme necessário
         JSString_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
-        ArrayBuffer_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
+        ArrayBuffer_STRUCTURE_ID: 0x00000002, // PREENCHA OU REMOVA SE NÃO USADO
         JSArray_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
         JSObject_Simple_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
     }
