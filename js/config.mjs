@@ -28,14 +28,16 @@ export const JSC_OFFSETS = {
         BUTTERFLY_OFFSET: 0x10, // CANDIDATO: Ponteiro para o Butterfly
     },
     ArrayBuffer: {
-        // VALIDADO (de JSC::ArrayBuffer::create em JSC ArrayBuffer.txt):
-        // `mov [rax+8], rbx` onde rax é JSArrayBuffer* e rbx é ArrayBufferContents*
-        CONTENTS_IMPL_POINTER_OFFSET: 0x8, // Ponteiro para a estrutura ArrayBufferContents
-
-        // MANTIDO (de JSC::ArrayBuffer::create em JSC ArrayBuffer.txt):
-        // `mov [rax+18h], rdx`. rdx pode ser o tamanho. Necessita mais contexto para rdx.
-        // Este é o tamanho do ArrayBuffer como visto pelo JS, não necessariamente o m_sizeInBytes do Contents.
-        SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // CANDIDATO: Tamanho do ArrayBuffer
+        // Baseado no snippet JSC::ArrayBuffer::create, o ponteiro para ArrayBufferContents
+        // não é definido em [rax+8] ou [rax+10h] *nessa função específica*.
+        // Ele é zerado e depois os campos do ArrayBufferContents são copiados para o JSArrayBuffer.
+        // Mantendo 0x10 como estava no seu config original, pois é um offset comum
+        // para um ponteiro de implementação em objetos wrapper. Precisa de mais investigação
+        // para o JSArrayBuffer finalizado. Por enquanto, vamos usar o que você tem.
+        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // OU 0x8 SE VOCÊ CONFIRMAR PARA JSArrayBuffer
+        SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // Confirmado por `mov [rax+18h], rdx` (onde rdx era m_sizeInBytes)
+        // Adicionar o campo que parece conter o m_dataPointer diretamente no JSArrayBuffer
+        DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // Confirmado por `mov [rax+20h], rdx` (onde rdx era m_dataPointer)
     },
     ArrayBufferView: { // Para TypedArrays como Uint8Array, Uint32Array, DataView
         // VALIDADO (de JSObjectGetTypedArrayBytesPtr.txt):
@@ -79,7 +81,7 @@ export const JSC_OFFSETS = {
         // Exemplo: JSObject_Simple_STRUCTURE_ID: 0x010400F0, // Para {} // Encontre o valor real!
         // Adicione mais conforme necessário
         JSString_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
-        ArrayBuffer_STRUCTURE_ID: 2, // PREENCHA OU REMOVA SE NÃO USADO
+        ArrayBuffer_STRUCTURE_ID: 2, // VALIDADO do JSC::ArrayBuffer::create
         JSArray_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
         JSObject_Simple_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
     }
