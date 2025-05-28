@@ -6,235 +6,146 @@ export const GB = KB * KB * KB;
 
 export class AdvancedInt64 { // Certifique-se que a classe está exportada
     constructor(low, high) {
-        this._isAdvancedInt64 = true; // Propriedade para identificação
+        this._isAdvancedInt64 = true;
         let buffer = new Uint32Array(2);
-        // let bytes = new Uint8Array(buffer.buffer); // Não usado diretamente no construtor original
+        let bytes = new Uint8Array(buffer.buffer);
 
         if (arguments.length > 2) { throw TypeError('AdvancedInt64 takes at most 2 args'); }
-        
-        let is_one_arg = false;
-        if (arguments.length === 1) { is_one_arg = true; }
-        if (arguments.length === 0) { // Adicionado para evitar erro com 0 args
-            low = 0; high = 0; is_one_arg = false; 
-        }
+        if (arguments.length === 0) { throw TypeError('AdvancedInt64 takes at min 1 args'); }
+        let is_one = false;
+        if (arguments.length === 1) { is_one = true; }
 
-
-        if (!is_one_arg) {
-            if (typeof (low) !== 'number' || typeof (high) !== 'number') {
-                // Permitir que AdvancedInt64 seja construído a partir de outro AdvancedInt64
-                if (low instanceof AdvancedInt64 && high === undefined) {
-                    buffer[0] = low.low();
-                    buffer[1] = low.high();
-                    this.buffer = buffer;
-                    return;
-                }
-                throw TypeError('low/high must be numbers or single AdvancedInt64 argument');
+        if (!is_one) {
+            if (typeof (low) !== 'number' && typeof (high) !== 'number') {
+                throw TypeError('low/high must be numbers');
             }
         }
-        
-        const check_range = (x) => Number.isInteger(x) && x >= -0x80000000 && x <= 0xffffffff; // Permite inteiros dentro do range de u32/i32
+        const check_range = (x) => (-0x80000000 <= x) && (x <= 0xffffffff);
 
         if (typeof low === 'number') {
-            if (!check_range(low)) { throw TypeError('low not a valid 32-bit integer value: ' + low); }
-            if (is_one_arg) {
+            if (!check_range(low)) { throw TypeError('low not a valid value: ' + low); }
+            if (is_one) {
                 high = 0;
-                if (low < 0) { high = -1; } // Extensão de sinal para um único argumento numérico
+                if (low < 0) { high = -1; }
             } else {
-                if (!check_range(high)) { throw TypeError('high not a valid 32-bit integer value: ' + high); }
+                if (!check_range(high)) { throw TypeError('high not a valid value: ' + high); }
             }
             buffer[0] = low;
             buffer[1] = high;
-        } else if (typeof low === 'string') { // Construir a partir de string hexadecimal
-            let str = low;
-            if (high !== undefined) { throw TypeError('Cannot supply high with hex string'); }
-            if (!str.startsWith('0x')) { throw TypeError('Hex string must start with 0x'); }
-            str = str.substring(2);
-            if (str.length > 16) { throw TypeError('Hex string too long (max 16 chars for 64-bit)'); }
-            str = str.padStart(16, '0'); // Pad para 16 caracteres (64 bits)
-            
-            const high_str = str.substring(0, 8);
-            const low_str = str.substring(8, 16);
+        } else if (typeof low === 'string') {
+            let hexstr = low;
+            if (hexstr.substring(0, 2) === "0x") { hexstr = hexstr.substring(2); }
+            if (hexstr.length % 2 === 1) { hexstr = '0' + hexstr; }
+            if (hexstr.length > 16) { hexstr = hexstr.substring(hexstr.length - 16); }
+            else { hexstr = hexstr.padStart(16, '0');}
 
-            buffer[1] = parseInt(high_str, 16);
-            buffer[0] = parseInt(low_str, 16);
-
-        } else if (low instanceof AdvancedInt64 && is_one_arg) { // Construir a partir de outro AdvancedInt64
-             buffer[0] = low.low();
-             buffer[1] = low.high();
+            for (let i = 0; i < 8; i++) {
+                bytes[i] = parseInt(hexstr.slice(14 - i*2, 16 - i*2), 16);
+            }
+        } else if (typeof low === 'object') {
+            if (low instanceof AdvancedInt64 || (low && low._isAdvancedInt64 === true)) {
+                bytes.set(low.bytes);
+            } else if (low.length === 8) { // Assuming byte array
+                bytes.set(low);
+            } else { throw TypeError("Array must have exactly 8 elements."); }
         } else {
-            throw TypeError('Invalid constructor arguments for AdvancedInt64');
+            throw TypeError('AdvancedInt64 does not support your object for conversion');
         }
+
         this.buffer = buffer;
+        this.bytes = bytes;
     }
 
     low() { return this.buffer[0]; }
     high() { return this.buffer[1]; }
 
-    // toString(show_0x = false, pad_to_16_chars = false) { // Assinatura original
-    toString(show_0x = true, pad_to_16_chars = true) { // Modificado para corresponder ao uso nos logs
-        const high_hex = (this.buffer[1] >>> 0).toString(16).padStart(8, '0');
-        const low_hex = (this.buffer[0] >>> 0).toString(16).padStart(8, '0');
-        let result = `${high_hex}_${low_hex}`;
-        if (pad_to_16_chars && result.length < 17) { // 8 + 1 underscore + 8
-             // O padStart já faz isso, esta lógica pode ser redundante se o objetivo for sempre 8_8
+    toString(is_pretty) {
+        let lowStr = (this.low() >>> 0).toString(16).padStart(8, '0');
+        let highStr = (this.high() >>> 0).toString(16).padStart(8, '0');
+        if (is_pretty) {
+            highStr = highStr.substring(0, 4) + '_' + highStr.substring(4);
+            lowStr = lowStr.substring(0, 4) + '_' + lowStr.substring(4);
+            return '0x' + highStr + '_' + lowStr;
         }
-        return (show_0x ? '0x' : '') + result;
+        return '0x' + highStr + lowStr;
     }
-    
-    toNumber() { // CUIDADO: Perda de precisão para números grandes
-        return this.buffer[1] * 0x100000000 + (this.buffer[0] >>> 0);
-    }
-
-    equals(other) {
-        if (!(other instanceof AdvancedInt64)) return false;
-        return this.low() === other.low() && this.high() === other.high();
-    }
-
-    static fromNumber(num) {
-        if (typeof num !== 'number' || !Number.isFinite(num)) {
-            throw new TypeError("Input must be a finite number.");
-        }
-        const high = Math.floor(num / 0x100000000);
-        const low = num % 0x100000000;
-        return new AdvancedInt64(low >>> 0, high >>> 0); // Garante que sejam tratados como unsigned na conversão
-    }
-
     add(other) {
-        if (!(other instanceof AdvancedInt64)) {
-            other = AdvancedInt64.fromNumber(Number(other));
-        }
-        let low = (this.low() >>> 0) + (other.low() >>> 0);
-        let high = (this.high() >>> 0) + (other.high() >>> 0) + Math.floor(low / 0x100000000);
-        return new AdvancedInt64(low >>> 0, high >>> 0);
+        if (!isAdvancedInt64Object(other)) { other = new AdvancedInt64(other); }
+        let newLow = (this.low() + other.low()) >>> 0;
+        let carry = (this.low() & 0xFFFFFFFF) + (other.low() & 0xFFFFFFFF) > 0xFFFFFFFF ? 1 : 0;
+        let newHigh = (this.high() + other.high() + carry) >>> 0;
+        return new AdvancedInt64(newLow, newHigh);
     }
-
     sub(other) {
-        if (!(other instanceof AdvancedInt64)) {
-            other = AdvancedInt64.fromNumber(Number(other));
-        }
-        // Realizar subtração em 64 bits simulados
-        let new_low = (this.low() >>> 0) - (other.low() >>> 0);
-        let borrow = 0;
-        if (new_low < 0) {
-            new_low += 0x100000000; // Adiciona 2^32 para torná-lo positivo, simulando o "empréstimo"
-            borrow = 1;
-        }
-        let new_high = (this.high() >>> 0) - (other.high() >>> 0) - borrow;
-        return new AdvancedInt64(new_low >>> 0, new_high >>> 0);
+        if (!isAdvancedInt64Object(other)) { other = new AdvancedInt64(other); }
+        const negOther = other.neg();
+        return this.add(negOther);
     }
-    
     neg() {
         const low = ~this.low();
         const high = ~this.high();
-        return new AdvancedInt64(low, high).add(AdvancedInt64.One);
+        const one = new AdvancedInt64(1,0);
+        const res = new AdvancedInt64(low, high);
+        return res.add(one);
+    }
+    equals(other) {
+        if (!isAdvancedInt64Object(other)) {
+             try { other = new AdvancedInt64(other); } catch (e) { return false; }
+        }
+        return this.low() === other.low() && this.high() === other.high();
     }
 
-    static get Zero() { return new AdvancedInt64(0, 0); }
-    static get One() { return new AdvancedInt64(1, 0); }
+    static Zero = new AdvancedInt64(0,0);
+    static One = new AdvancedInt64(1,0);
+
+    static fromNumber(num) {
+        if (typeof num !== 'number' || !Number.isFinite(num)) {
+            throw new TypeError("AdvancedInt64.fromNumber espera um número finito.");
+        }
+        // Clamp to safe integer range if you want to avoid precision loss for very large JS numbers,
+        // but for typical exploit dev numbers (like addresses), this direct conversion is often what's intended.
+        const high = Math.floor(num / Math.pow(2, 32));
+        const low = num % Math.pow(2, 32);
+        return new AdvancedInt64(low, high);
+    }
 }
 
+// Certifique-se que a função está exportada
 export function isAdvancedInt64Object(obj) {
-    return obj && obj._isAdvancedInt64 === true;
+    return obj instanceof AdvancedInt64 || (obj && obj._isAdvancedInt64 === true);
 }
 
-export const PAUSE = (ms = 50) => new Promise(r => setTimeout(r, ms));
-
-export const toHex = (val, bits = 32) => {
-    if (val === null || val === undefined) return 'null/undef';
-    if (isAdvancedInt64Object(val) && bits === 64) return val.toString(true, true);
-    if (typeof val === 'string') return val;
-    if (typeof val !== 'number' || !isFinite(val)) return 'NaN/Invalid';
-    
-    let num = Number(val);
-    let hexStr;
-
-    if (bits === 64) { // Se for para 64 bits, mas não é AdvancedInt64, use fromNumber
-        return AdvancedInt64.fromNumber(num).toString(true, true);
-    }
-
-    // Para 32 bits ou menos
-    if (num < 0) {
-        // Para números negativos, obtenha a representação de complemento de dois
-        if (bits === 32) hexStr = (num >>> 0).toString(16).padStart(8, '0');
-        else if (bits === 16) hexStr = ((num & 0xFFFF) >>> 0).toString(16).padStart(4, '0');
-        else if (bits === 8) hexStr = ((num & 0xFF) >>> 0).toString(16).padStart(2, '0');
-        else hexStr = (num >>> 0).toString(16).padStart(8, '0'); // Padrão para 32 bits
-    } else {
-        hexStr = num.toString(16).padStart(bits / 4, '0');
-    }
-    return '0x' + hexStr;
+export const readWriteUtils = {
+    readBytes: (u8_view, offset, size) => { /* ... */ },
+    // ... (resto de readWriteUtils)
 };
 
-/**
- * Converte uma string em um array de objetos AdvancedInt64.
- * Cada AdvancedInt64 armazena até 4 caracteres UTF-16 (8 bytes).
- * @param {string} str A string a ser convertida.
- * @param {boolean} nullTerminate Se true, adiciona um AdvancedInt64(0,0) no final.
- * @returns {AdvancedInt64[]} Array de AdvancedInt64.
- */
-export function stringToAdvancedInt64Array(str, nullTerminate = false) {
-    let result = [];
-    for (let i = 0; i < str.length; i += 4) {
-        let char1 = (i < str.length) ? str.charCodeAt(i) : 0;
-        let char2 = (i + 1 < str.length) ? str.charCodeAt(i + 1) : 0;
-        let char3 = (i + 2 < str.length) ? str.charCodeAt(i + 2) : 0;
-        let char4 = (i + 3 < str.length) ? str.charCodeAt(i + 3) : 0;
+export const generalUtils = {
+    align: (addrOrInt, alignment) => { /* ... */ },
+    // ... (resto de generalUtils)
+};
 
-        // Little-endian: char1 e char2 na parte baixa, char3 e char4 na parte alta.
-        // Char1 nos bytes 0-1, Char2 nos bytes 2-3 (da parte baixa de 32 bits)
-        // Char3 nos bytes 0-1, Char4 nos bytes 2-3 (da parte alta de 32 bits)
-        let low_u32 = (char2 << 16) | char1;
-        let high_u32 = (char4 << 16) | char3;
-        
-        result.push(new AdvancedInt64(low_u32 >>> 0, high_u32 >>> 0));
+export const jscOffsets = { // Este pode ser obsoleto/conflitante com config.mjs, mas certifique-se que não causa problemas de exportação
+    js_butterfly: 0x8,
+    // ... (outros offsets)
+};
+
+// Certifique-se que PAUSE está exportada
+export const PAUSE = (ms = 50) => new Promise(r => setTimeout(r, ms));
+
+// Certifique-se que toHex está exportada
+export const toHex = (val, bits = 32) => {
+    if (val === null || val === undefined) return 'null/undef';
+    if (typeof val === 'string') return val; // Se já for string, retorna como está (ex: "N/A")
+    if (typeof val !== 'number' || !isFinite(val)) return 'NaN/Invalid';
+    let num = Number(val);
+    if (bits <= 32 && num >= 0) { // Para DWORDS positivos, mantenha como está se for para ser interpretado como ID
+        // No entanto, para consistência de endereços e valores grandes, a conversão para unsigned é melhor
+         num = num >>> 0;
+    } else if (bits <=32 && num < 0) { // Para DWORDS negativos (raro em offsets, mais comum em return values)
+        num = num >>> 0; // Converte para unsigned int32
     }
-
-    if (nullTerminate) {
-        // Se o último AdvancedInt64 já for parcialmente zero por causa do padding,
-        // um terminador nulo de 16 bits (0x0000) já pode estar lá.
-        // Para garantir um terminador de 64 bits completo se a escrita for sempre de 8 bytes:
-        result.push(AdvancedInt64.Zero);
-    }
-    return result;
-}
-
-/**
- * Converte um array de AdvancedInt64 de volta para uma string.
- * Assume que cada AdvancedInt64 representa 4 caracteres UTF-16.
- * Para ao encontrar o primeiro caractere nulo (0x0000).
- * @param {AdvancedInt64[]} arr O array de AdvancedInt64.
- * @returns {string} A string resultante.
- */
-export function advancedInt64ArrayToString(arr) {
-    let str = "";
-    if (!Array.isArray(arr)) return "InputIsNotArray";
-
-    for (const adv64 of arr) {
-        if (!isAdvancedInt64Object(adv64)) continue;
-
-        const low = adv64.low();
-        const high = adv64.high();
-
-        const char1_code = low & 0xFFFF;
-        const char2_code = (low >>> 16) & 0xFFFF;
-        const char3_code = high & 0xFFFF;
-        const char4_code = (high >>> 16) & 0xFFFF;
-
-        if (char1_code === 0) break;
-        str += String.fromCharCode(char1_code);
-        if (char2_code === 0) break;
-        str += String.fromCharCode(char2_code);
-        if (char3_code === 0) break;
-        str += String.fromCharCode(char3_code);
-        if (char4_code === 0) break;
-        str += String.fromCharCode(char4_code);
-    }
-    return str;
-}
-
-// Remover jscOffsets duplicado daqui, pois deve estar em config.mjs
-// export const jscOffsets = { ... };
-
-// Remover placeholders de utils não implementadas, a menos que você as queira
-// export const readWriteUtils = { ... };
-// export const generalUtils = { ... };
+    // Para QWORDS ou valores que precisam ser totalmente hex, a lógica abaixo é boa.
+    const pad = Math.ceil(bits / 4);
+    return '0x' + num.toString(16).toUpperCase().padStart(pad, '0');
+};
