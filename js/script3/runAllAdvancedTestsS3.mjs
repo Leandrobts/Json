@@ -1,41 +1,32 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importa a nova função de teste
-import { executeGetterInspectsCorruptedPropsTest } from './testGetterInspectsCorruptedProps.mjs';
+import { executeRangeErrorToArbitraryReadTest } from './testRangeErrorToArbitraryRead.mjs'; // Arquivo novo
 
-async function runGetterInspectsCorruptedPropsStrategy() {
-    const FNAME_RUNNER = "runGetterInspectsCorruptedPropsStrategy";
-    logS3(`==== INICIANDO Estratégia: Getter Inspeciona Props Corrompidas para Leaks de Ponteiro ====`, 'test', FNAME_RUNNER);
-
-    await executeGetterInspectsCorruptedPropsTest();
-
-    logS3(`==== Estratégia: Getter Inspeciona Props Corrompidas para Leaks de Ponteiro CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+async function runRangeErrorToArbitraryReadStrategy() {
+    const FNAME_RUNNER = "runRangeErrorToArbitraryReadStrategy";
+    logS3(`==== INICIANDO Estratégia: RangeError para Leitura Arbitrária ====`, 'test', FNAME_RUNNER);
+    await executeRangeErrorToArbitraryReadTest();
+    logS3(`==== Estratégia: RangeError para Leitura Arbitrária CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_GetterInspectsCorruptedProps';
+    const FNAME = 'runAllAdvancedTestsS3_RangeErrorToArbRead';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: Getter Inspeciona Props Corrompidas para Leaks de Ponteiro ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - Getter Inspects Props";
+    logS3(`==== INICIANDO Script 3: Teste RangeError para Leitura Arbitrária ====`,'test', FNAME);
+    document.title = "Iniciando Script 3 - RE to ArbRead";
 
-    await runGetterInspectsCorruptedPropsStrategy();
+    await runRangeErrorToArbitraryReadStrategy();
 
-    logS3(`\n==== Script 3 CONCLUÍDO (Getter Inspects Props) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (RE to ArbRead) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    // Ajuste final do título
-    if (document.title.startsWith("Iniciando") || document.title.includes("CONGELOU?")) {
-        // Manter
-    } else if (document.title.includes("SUCCESS") || document.title.includes("ERRO") || document.title.includes("PROBLEM") || document.title.includes("Leaked")) {
-        // Manter títulos que indicam resultados específicos
-    }
-    else {
-        document.title = "Script 3 Concluído - Getter Inspects Props";
-    }
+    if (document.title.startsWith("Iniciando") || document.title.includes("CONGELOU?")) { /* Manter */ }
+    else if (document.title.includes("SUCCESS") || document.title.includes("ERRO") || document.title.includes("RangeError")) { /* Manter */ }
+    else { document.title = "Script 3 Concluído - RE to ArbRead"; }
 }
