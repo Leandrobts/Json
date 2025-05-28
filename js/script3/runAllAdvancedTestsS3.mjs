@@ -1,33 +1,52 @@
 // js/script3/runAllAdvancedTestsS3.mjs
-import { logS3, PAUSE_S3 } from './s3_utils.mjs'; // Removido MEDIUM_PAUSE não usado aqui
+console.log("[CONSOLE_LOG][S3_RUNNER] Módulo runAllAdvancedTestsS3.mjs carregado.");
+import { logS3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importa a nova função de teste de vazamento do WebKit
 import { attemptLeakWebKitBase } from './runLeakWebKitBaseTest.mjs';
-// Mantém a importação do teste de re-tipagem original se você ainda quiser executá-lo separadamente
-// import { executeRetypeOOB_AB_Test } from './testRetypeOOB_AB_ViaShadowCraft.mjs'; // Comentado pois agora read_arbitrary_via_retype é usado
+import { updateOOBConfigFromUI } from '../config.mjs'; // Importar para atualizar config da UI
 
 export async function runAllAdvancedTestsS3() {
     const FNAME = 'runAllAdvancedTestsS3_LeakWebKit';
+    console.log(`[CONSOLE_LOG][${FNAME}] Função iniciada.`);
+    logS3(`[UI_LOG][${FNAME}] Função iniciada. Verificando botão e output...`, 'info', FNAME);
+
+    // Atualizar config da UI antes de tudo
+    if (typeof document !== 'undefined' && document) {
+        console.log(`[CONSOLE_LOG][${FNAME}] Chamando updateOOBConfigFromUI no início.`);
+        updateOOBConfigFromUI(document);
+    }
+
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
+    if (!runBtn) logS3("AVISO: runBtn (runAdvancedBtnS3) não encontrado!", 'warn', FNAME);
+    if (!outputDiv) {
+        console.error(`[CONSOLE_LOG][${FNAME}] DIV DE OUTPUT (output-advanced) NÃO ENCONTRADA! Logs da UI não funcionarão.`);
+    }
+
     if (runBtn) runBtn.disabled = true;
-    if (outputDiv) outputDiv.innerHTML = ''; // Limpa o log anterior
+    // Limpar o log SÓ SE a div for encontrada.
+    if (outputDiv) outputDiv.innerHTML = '';
+    else logS3("Div de output não encontrada, não é possível limpar logs anteriores da UI.", "warn", FNAME);
+
 
     logS3(`==== INICIANDO Script 3: Tentativa de Vazar Endereço Base do WebKit ====`,'test', FNAME);
-    // Adiciona um pequeno título ao log da página HTML
     if (typeof document !== "undefined" && document.title) {
         document.title = "Teste S3: Vazamento Base WebKit";
     }
 
-    // Chama o novo teste principal
-    await attemptLeakWebKitBase();
-
-    // Se você quisesse rodar o teste de re-tipagem original como uma demonstração separada:
-    // logS3(`==== EXECUTANDO TESTE DE RE-TIPAGEM ORIGINAL (Demonstração) ====`, 'test', FNAME);
-    // await executeRetypeOOB_AB_Test(); // Certifique-se que esta função ainda existe e é exportada se for usá-la.
-    // logS3(`==== TESTE DE RE-TIPAGEM ORIGINAL CONCLUÍDO ====`, 'test', FNAME);
+    try {
+        logS3("Chamando attemptLeakWebKitBase...", 'info', FNAME);
+        console.log(`[CONSOLE_LOG][${FNAME}] Prestes a chamar await attemptLeakWebKitBase().`);
+        await attemptLeakWebKitBase();
+        console.log(`[CONSOLE_LOG][${FNAME}] await attemptLeakWebKitBase() concluído.`);
+        logS3("attemptLeakWebKitBase finalizado.", 'info', FNAME);
+    } catch (e) {
+        logS3(`ERRO CRÍTICO em ${FNAME} ao chamar attemptLeakWebKitBase: ${e.message}`, 'critical', FNAME);
+        console.error(`[CONSOLE_LOG][${FNAME}] ERRO CRÍTICO em attemptLeakWebKitBase:`, e);
+    }
 
     logS3(`==== Script 3: Tentativa de Vazar Endereço Base do WebKit CONCLUÍDA ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
+    console.log(`[CONSOLE_LOG][${FNAME}] Função concluída.`);
 }
