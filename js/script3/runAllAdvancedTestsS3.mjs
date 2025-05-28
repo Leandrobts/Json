@@ -2,42 +2,39 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // Importa a nova função de teste
-import { executeImmediateEffectOfOOBWriteTest } from './testImmediateEffectOfOOBWrite.mjs';
+import { executeGetterChecksRetypedOOBABTest } from './testGetterChecksRetypedOOBAB.mjs';
 
-async function runImmediateEffectStrategy() {
-    const FNAME_RUNNER = "runImmediateEffectStrategy";
-    logS3(`==== INICIANDO Estratégia de Verificação do Efeito Imediato da Escrita OOB em 0x70 ====`, 'test', FNAME_RUNNER);
+async function runGetterChecksRetypedOOBABStrategy() {
+    const FNAME_RUNNER = "runGetterChecksRetypedOOBABStrategy";
+    logS3(`==== INICIANDO Estratégia: Getter Verifica oob_array_buffer_real "Re-tipado" ====`, 'test', FNAME_RUNNER);
 
-    await executeImmediateEffectOfOOBWriteTest();
+    await executeGetterChecksRetypedOOBABTest();
 
-    logS3(`==== Estratégia de Verificação do Efeito Imediato da Escrita OOB em 0x70 CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia: Getter Verifica oob_array_buffer_real "Re-tipado" CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_ImmediateEffectOOB0x70';
+    const FNAME = 'runAllAdvancedTestsS3_GetterChecksRetypedOOBAB';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: Verificação do Efeito Imediato da Escrita OOB em 0x70 ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - Immediate 0x70 Effect";
+    logS3(`==== INICIANDO Script 3: Getter Verifica oob_array_buffer_real "Re-tipado" ====`,'test', FNAME);
+    document.title = "Iniciando Script 3 - Getter Checks Retyped OOB_AB";
 
-    await runImmediateEffectStrategy();
+    await runGetterChecksRetypedOOBABStrategy();
 
-    logS3(`\n==== Script 3 CONCLUÍDO (Immediate 0x70 Effect) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (Getter Checks Retyped OOB_AB) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    // Ajuste final do título
-    if (document.title.startsWith("Iniciando")) { // Se ainda está com o título inicial, pode ter congelado cedo
-        document.title = "FREEZE? Initial 0x70 Effect";
-    } else if (document.title.includes("CRASH") || document.title.includes("ERROR") || document.title.includes("FREEZE?")) {
-        // Manter títulos que indicam problemas
-    } else if (document.title.includes("Survived")) {
-        // Manter título de sucesso
+    if (document.title.startsWith("Iniciando") || document.title.includes("CONGELOU?")) {
+        // Manter
+    } else if (document.title.includes("SUCCESS") || document.title.includes("ERRO") || document.title.includes("PROBLEM")) {
+        // Manter títulos que indicam resultados específicos
     }
     else {
-        document.title = "Script 3 Concluído - Immediate 0x70 Effect";
+        document.title = "Script 3 Concluído - Getter Checks Retyped OOB_AB";
     }
 }
