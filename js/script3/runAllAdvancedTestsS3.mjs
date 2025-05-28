@@ -1,36 +1,35 @@
-
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // Importa a nova função de teste
-import { executeFakeArrayBufferSimpleTest } from './testFakeArrayBufferSimple.mjs'; // Atualizado
+import { executeRetypeOOB_AB_Test } from './testRetypeOOB_AB_ViaShadowCraft.mjs'; // ATUALIZADO AQUI
 
-async function runFakeABSimpleStrategy() { // Nome da estratégia atualizado
-    const FNAME_RUNNER = "runFakeABSimpleStrategy";
-    logS3(`==== INICIANDO Estratégia de ArrayBuffer Falso Simplificado ====`, 'test', FNAME_RUNNER);
+async function runRetypeOOB_AB_Strategy() { // ATUALIZADO AQUI
+    const FNAME_RUNNER = "runRetypeOOB_AB_Strategy"; // ATUALIZADO AQUI
+    logS3(`==== INICIANDO Estratégia de "Re-Tipagem" do oob_array_buffer_real ====`, 'test', FNAME_RUNNER); // ATUALIZADO AQUI
 
-    await executeFakeArrayBufferSimpleTest();
+    await executeRetypeOOB_AB_Test(); // ATUALIZADO AQUI
 
-    logS3(`==== Estratégia de ArrayBuffer Falso Simplificado CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de "Re-Tipagem" do oob_array_buffer_real CONCLUÍDA ====`, 'test', FNAME_RUNNER); // ATUALIZADO AQUI
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_FakeABSimple'; // Nome do teste principal atualizado
+    const FNAME = 'runAllAdvancedTestsS3_RetypeOOB_AB'; // ATUALIZADO AQUI
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: ArrayBuffer Falso Simplificado (StructureID=2) ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - Fake AB Simple";
+    logS3(`==== INICIANDO Script 3: Tentativa de "Re-Tipar" oob_array_buffer_real ====`,'test', FNAME); // ATUALIZADO AQUI
+    document.title = "Iniciando Script 3 - Retype OOB_AB"; // ATUALIZADO AQUI
 
-    await runFakeABSimpleStrategy(); // Chama a nova estratégia
+    await runRetypeOOB_AB_Strategy(); // ATUALIZADO AQUI
 
-    logS3(`\n==== Script 3 CONCLUÍDO (Fake AB Simple) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (Retype OOB_AB) ====`,'test', FNAME); // ATUALIZADO AQUI
     if (runBtn) runBtn.disabled = false;
 
     if (!document.title.includes("SUCCESS")) {
-         document.title = "Script 3 Concluído - Fake AB Simple";
+         document.title = "Script 3 Concluído - Retype OOB_AB"; // ATUALIZADO AQUI
     }
 }
