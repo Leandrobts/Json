@@ -2,30 +2,52 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Teste Isolado - JSON Type Confusion</title>
+    <title>Testes Avançados de Exploração</title>
     <style>
         body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
-        #output-advanced { /* ID usado por logS3 */
+        .container { margin-bottom: 20px; padding: 10px; border: 1px solid #333; }
+        button { padding: 10px; margin-bottom: 10px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+        button:disabled { background: #222; color: #777; cursor: not-allowed;}
+        button:hover:not(:disabled) { background: #444; }
+        h2 { margin-top: 0; border-bottom: 1px solid #444; padding-bottom: 5px;}
+        .output-log {
             background: #222;
             border: 1px solid #444;
             padding: 10px;
-            height: 75vh; 
+            height: 60vh; /* Ajustado para caber mais logs */
             overflow-y: auto;
-            white-space: pre-wrap;
+            white-space: pre-wrap; /* Mantém quebras de linha e espaços */
+            word-wrap: break-word; /* Quebra palavras longas */
             margin-top: 10px;
+            font-size: 12px; /* Menor para mais info */
         }
         /* Estilos básicos de log para melhor visualização */
         .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
-        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
+        .log-subtest { color: #ddd; margin-left: 10px; display: block; }
+        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; } .log-leak { color: #FFD700; /* Dourado para vazamentos */ }
+        .log-ptr { color: #DA70D6; /* Orquídea para ponteiros */ }
         .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
+        .log-escalation { color: #FF6347; font-weight: bold; } /* Laranja avermelhado para escalação */
+        .log-tool { color: #00CED1; } /* Turquesa escuro para ferramentas */
     </style>
 </head>
 <body>
-    <h1>Teste Isolado: JSON Type Confusion UAF Speculative</h1>
-    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
-    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
-    <div id="output-advanced"></div>
+    <h1>Suíte de Testes Avançados de Exploração</h1>
+    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados na UI.</p>
 
-    <script type="module" src="js/run_isolated_test.mjs"></script>
+    <div class="container" id="advanced-tests-s3">
+        <h2>Ferramentas e Testes Avançados - Script 3 (S3)</h2>
+        <p>Foco: Primitivas de baixo nível, vazamento de memória, tentativa de ROP.</p>
+        <button id="runAdvancedBtnS3">Rodar Teste S3: Vazar Base WebKit</button>
+        <div>
+            <label for="oobAllocSize">OOB Alloc Size:</label>
+            <input type="number" id="oobAllocSize" value="32768" style="width:80px">
+            <label for="baseOffset">Base Offset DV:</label>
+            <input type="number" id="baseOffset" value="128" style="width:60px">
+            </div>
+        <div id="output-advanced" class="output-log">Logs do Script 3 aparecerão aqui...</div>
+    </div>
+
+    <script type="module" src="./js/main.mjs"></script>
 </body>
 </html>
