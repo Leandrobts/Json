@@ -2,31 +2,31 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // Importa a nova função de teste
-import { executeMinimalForInOnComplexObjectTest } from './testMinimalForInOnComplexObject.mjs';
+import { executeForInPropertyAccessRETest } from './testForInPropertyAccessRE.mjs';
 
-async function runMinimalForInStrategy() {
-    const FNAME_RUNNER = "runMinimalForInStrategy";
-    logS3(`==== INICIANDO Estratégia de 'for...in' Minimalista em MyComplexObject (RangeError Check) ====`, 'test', FNAME_RUNNER);
+async function runForInPropertyAccessREStrategy() {
+    const FNAME_RUNNER = "runForInPropertyAccessREStrategy";
+    logS3(`==== INICIANDO Estratégia de Acesso a Propriedade em 'for...in' (RangeError Check) ====`, 'test', FNAME_RUNNER);
 
-    await executeMinimalForInOnComplexObjectTest();
+    await executeForInPropertyAccessRETest();
 
-    logS3(`==== Estratégia de 'for...in' Minimalista em MyComplexObject (RangeError Check) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Acesso a Propriedade em 'for...in' (RangeError Check) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_MinimalForInComplexObj';
+    const FNAME = 'runAllAdvancedTestsS3_ForInPropertyAccessRE';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: 'for...in' Minimalista em MyComplexObject Pós-Corrupção (RangeError Check) ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - Minimal ForIn ComplexObj (RE Check)";
+    logS3(`==== INICIANDO Script 3: Acesso a Propriedade em 'for...in' Pós-Corrupção (RangeError Check) ====`,'test', FNAME);
+    document.title = "Iniciando Script 3 - ForIn PropAccess (RE Check)";
 
-    await runMinimalForInStrategy();
+    await runForInPropertyAccessREStrategy();
 
-    logS3(`\n==== Script 3 CONCLUÍDO (Minimal ForIn ComplexObj RE Check) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (ForIn PropAccess RE Check) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
     if (document.title.startsWith("Iniciando") || document.title.includes("CONGELOU?")) {
@@ -35,6 +35,6 @@ export async function runAllAdvancedTestsS3() {
         // Manter títulos que indicam resultados específicos
     }
     else {
-        document.title = "Script 3 Concluído - Minimal ForIn ComplexObj (RE Check)";
+        document.title = "Script 3 Concluído - ForIn PropAccess (RE Check)";
     }
 }
