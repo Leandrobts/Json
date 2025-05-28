@@ -2,56 +2,30 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Testes Avançados de Exploração</title>
+    <title>Teste Isolado - JSON Type Confusion</title>
     <style>
         body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
-        .container { margin-bottom: 20px; padding: 10px; border: 1px solid #333; }
-        button { padding: 10px; margin-bottom: 10px; background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
-        button:disabled { background: #222; color: #777; cursor: not-allowed;}
-        button:hover:not(:disabled) { background: #444; }
-        h2 { margin-top: 0; border-bottom: 1px solid #444; padding-bottom: 5px;}
-        .output-log {
+        #output-advanced { /* ID usado por logS3 */
             background: #222;
             border: 1px solid #444;
             padding: 10px;
-            height: 60vh;
+            height: 75vh; 
             overflow-y: auto;
             white-space: pre-wrap;
-            word-wrap: break-word;
             margin-top: 10px;
-            font-size: 12px;
         }
+        /* Estilos básicos de log para melhor visualização */
         .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
-        .log-subtest { color: #ddd; margin-left: 10px; display: block; }
-        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; } .log-leak { color: #FFD700; }
-        .log-ptr { color: #DA70D6; }
+        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
         .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
-        .log-escalation { color: #FF6347; font-weight: bold; }
-        .log-tool { color: #00CED1; }
     </style>
 </head>
 <body>
-    <h1>Suíte de Testes Avançados de Exploração</h1>
-    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados na UI.</p>
+    <h1>Teste Isolado: JSON Type Confusion UAF Speculative</h1>
+    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
+    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
+    <div id="output-advanced"></div>
 
-    <div class="container" id="placeholder-s1-s2" style="display:none;">
-        <h2>Outros Testes (S1, S2)</h2>
-        <p>Esta é uma área de placeholder para outros botões de teste se você os integrar.</p>
-    </div>
-
-    <div class="container" id="advanced-tests-s3">
-        <h2>Ferramentas e Testes Avançados - Script 3 (S3)</h2>
-        <p>Foco: Primitivas de baixo nível, vazamento de memória, tentativa de ROP.</p>
-        <button id="runAdvancedBtnS3">Rodar Teste S3: Vazar Base WebKit</button>
-        <div>
-            <label for="oobAllocSize">OOB Alloc Size:</label>
-            <input type="number" id="oobAllocSize" value="32768" style="width:80px">
-            <label for="baseOffset">Base Offset DV:</label>
-            <input type="number" id="baseOffset" value="128" style="width:60px">
-        </div>
-        <div id="output-advanced" class="output-log">Logs do Script 3 aparecerão aqui...</div>
-    </div>
-
-    <script type="module" src="./js/main.mjs"></script>
+    <script type="module" src="js/run_isolated_test.mjs"></script>
 </body>
 </html>
