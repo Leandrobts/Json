@@ -14,26 +14,30 @@
             background: #222;
             border: 1px solid #444;
             padding: 10px;
-            height: 60vh; /* Ajustado para caber mais logs */
+            height: 60vh;
             overflow-y: auto;
-            white-space: pre-wrap; /* Mantém quebras de linha e espaços */
-            word-wrap: break-word; /* Quebra palavras longas */
+            white-space: pre-wrap;
+            word-wrap: break-word;
             margin-top: 10px;
-            font-size: 12px; /* Menor para mais info */
+            font-size: 12px;
         }
-        /* Estilos básicos de log para melhor visualização */
         .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
         .log-subtest { color: #ddd; margin-left: 10px; display: block; }
-        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; } .log-leak { color: #FFD700; /* Dourado para vazamentos */ }
-        .log-ptr { color: #DA70D6; /* Orquídea para ponteiros */ }
+        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; } .log-leak { color: #FFD700; }
+        .log-ptr { color: #DA70D6; }
         .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
-        .log-escalation { color: #FF6347; font-weight: bold; } /* Laranja avermelhado para escalação */
-        .log-tool { color: #00CED1; } /* Turquesa escuro para ferramentas */
+        .log-escalation { color: #FF6347; font-weight: bold; }
+        .log-tool { color: #00CED1; }
     </style>
 </head>
 <body>
     <h1>Suíte de Testes Avançados de Exploração</h1>
     <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados na UI.</p>
+
+    <div class="container" id="placeholder-s1-s2" style="display:none;">
+        <h2>Outros Testes (S1, S2)</h2>
+        <p>Esta é uma área de placeholder para outros botões de teste se você os integrar.</p>
+    </div>
 
     <div class="container" id="advanced-tests-s3">
         <h2>Ferramentas e Testes Avançados - Script 3 (S3)</h2>
@@ -44,7 +48,7 @@
             <input type="number" id="oobAllocSize" value="32768" style="width:80px">
             <label for="baseOffset">Base Offset DV:</label>
             <input type="number" id="baseOffset" value="128" style="width:60px">
-            </div>
+        </div>
         <div id="output-advanced" class="output-log">Logs do Script 3 aparecerão aqui...</div>
     </div>
 
