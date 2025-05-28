@@ -2,40 +2,39 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // Importa a nova função de teste
-import { executeForInExplorationOnComplexObject } from './testMyComplexObjectForInExploration.mjs';
+import { executeGetterTriggerAndFakeABReadTest } from './testGetterTriggerAndFakeABRead.mjs';
 
-async function runForInExplorationStrategy() {
-    const FNAME_RUNNER = "runForInExplorationStrategy";
-    logS3(`==== INICIANDO Estratégia de Exploração de 'for...in' em MyComplexObject Pós-Corrupção ====`, 'test', FNAME_RUNNER);
+async function runGetterAndFakeABStrategy() {
+    const FNAME_RUNNER = "runGetterAndFakeABStrategy";
+    logS3(`==== INICIANDO Estratégia de Acionamento de Getter e Leitura via Fake AB "Re-tipado" ====`, 'test', FNAME_RUNNER);
 
-    await executeForInExplorationOnComplexObject();
+    await executeGetterTriggerAndFakeABReadTest();
 
-    logS3(`==== Estratégia de Exploração de 'for...in' em MyComplexObject CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Acionamento de Getter e Leitura via Fake AB "Re-tipado" CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_ForInExplorationComplexObj';
+    const FNAME = 'runAllAdvancedTestsS3_GetterAndFakeABRead';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: Exploração de 'for...in' em MyComplexObject Pós-Corrupção ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - ForIn Expl. ComplexObj";
+    logS3(`==== INICIANDO Script 3: Acionamento de Getter e Leitura via Fake AB "Re-tipado" ====`,'test', FNAME);
+    document.title = "Iniciando Script 3 - Getter & FakeAB Read";
 
-    await runForInExplorationStrategy();
+    await runGetterAndFakeABStrategy();
 
-    logS3(`\n==== Script 3 CONCLUÍDO (Exploração ForIn ComplexObj) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (Getter & FakeAB Read) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    // Ajuste final do título
     if (document.title.startsWith("Iniciando") || document.title.includes("CONGELOU?")) {
         // Manter
-    } else if (document.title.includes("PROBLEM") || document.title.includes("ERRO") || document.title.includes("RangeError")) {
+    } else if (document.title.includes("SUCCESS") || document.title.includes("ERRO") || document.title.includes("PROBLEM")) {
         // Manter títulos que indicam resultados específicos
     }
     else {
-        document.title = "Script 3 Concluído - ForIn Expl. ComplexObj";
+        document.title = "Script 3 Concluído - Getter & FakeAB Read";
     }
 }
