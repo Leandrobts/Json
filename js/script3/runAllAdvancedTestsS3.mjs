@@ -2,39 +2,34 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // Importa a nova função de teste
-import { executeCorruptedIteratorLeakFocusConsoleTest } from './testCorruptedIteratorLeakFocusConsole.mjs';
+import { executeRetypeOOB_AB_Test } from './testRetypeOOB_AB_ViaShadowCraft.mjs'; // ATUALIZADO AQUI
 
-async function runCorruptedIteratorLeakFocusConsoleStrategy() {
-    const FNAME_RUNNER = "runCorruptedIteratorLeakFocusConsoleStrategy";
-    logS3(`==== INICIANDO Estratégia de Vazamento por Iterador Corrompido (Foco Console PS4) ====`, 'test', FNAME_RUNNER);
+async function runRetypeOOB_AB_Strategy() { // ATUALIZADO AQUI
+    const FNAME_RUNNER = "runRetypeOOB_AB_Strategy"; // ATUALIZADO AQUI
+    logS3(`==== INICIANDO Estratégia de "Re-Tipagem" do oob_array_buffer_real ====`, 'test', FNAME_RUNNER); // ATUALIZADO AQUI
 
-    await executeCorruptedIteratorLeakFocusConsoleTest();
+    await executeRetypeOOB_AB_Test(); // ATUALIZADO AQUI
 
-    logS3(`==== Estratégia de Vazamento por Iterador Corrompido (Foco Console PS4) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de "Re-Tipagem" do oob_array_buffer_real CONCLUÍDA ====`, 'test', FNAME_RUNNER); // ATUALIZADO AQUI
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_CorruptedIteratorLeakFocusConsole';
+    const FNAME = 'runAllAdvancedTestsS3_RetypeOOB_AB'; // ATUALIZADO AQUI
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: Teste de Vazamento por Iterador Corrompido (Foco Console PS4) ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - Corrupted Iterator Leak (Console)";
+    logS3(`==== INICIANDO Script 3: Tentativa de "Re-Tipar" oob_array_buffer_real ====`,'test', FNAME); // ATUALIZADO AQUI
+    document.title = "Iniciando Script 3 - Retype OOB_AB"; // ATUALIZADO AQUI
 
-    await runCorruptedIteratorLeakFocusConsoleStrategy();
+    await runRetypeOOB_AB_Strategy(); // ATUALIZADO AQUI
 
-    logS3(`\n==== Script 3 CONCLUÍDO (Corrupted Iterator Leak Console) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (Retype OOB_AB) ====`,'test', FNAME); // ATUALIZADO AQUI
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes("CONGELOU?")) {
-        // Manter
-    } else if (document.title.includes("LEAK") || document.title.includes("RangeError") || document.title.includes("REPRODUCED") || document.title.includes("ERRO")) {
-        // Manter títulos que indicam resultados específicos
-    }
-    else {
-        document.title = "Script 3 Concluído - Corrupted Iterator Leak (Console)";
+    if (!document.title.includes("SUCCESS")) {
+         document.title = "Script 3 Concluído - Retype OOB_AB"; // ATUALIZADO AQUI
     }
 }
