@@ -1,45 +1,31 @@
 // js/dom_elements.mjs
+console.log("[CONSOLE_LOG][DOM_ELEMENTS] Módulo dom_elements.mjs carregado.");
 
 const elementsCache = {};
 
 export function getElementById(id) {
-    // For modules, document is globally available.
-    if (elementsCache[id] && document.body.contains(elementsCache[id])) { // Check if still in DOM
+    if (typeof document === 'undefined' || typeof document.getElementById !== 'function') {
+        console.warn(`[CONSOLE_LOG][DOM_ELEMENTS] getElementById(${id}) chamada em ambiente sem 'document'.`);
+        return null;
+    }
+    if (elementsCache[id] && document.body && document.body.contains(elementsCache[id])) {
         return elementsCache[id];
     }
     const element = document.getElementById(id);
     if (element) {
         elementsCache[id] = element;
+    } else {
+        console.warn(`[CONSOLE_LOG][DOM_ELEMENTS] Elemento com ID "${id}" não encontrado no DOM.`);
     }
     return element;
 }
 
-// Script 1
-export const getOutputDivS1 = () => getElementById('output');
-export const getXssTargetDiv = () => getElementById('xss-target-div');
-export const getRunBtnS1 = () => getElementById('runBtnS1');
-
-// Script 2
-export const getOutputCanvasS2 = () => getElementById('output-canvas');
-export const getInteractiveCanvasS2 = () => getElementById('interactive-canvas');
-export const getCanvasCoordStatusS2 = () => getElementById('canvas-coord-status');
-export const getRunBtnCanvasS2 = () => getElementById('runCanvasBtnS2');
-
-// Script 3
+// Script 3 (único relevante para este teste)
 export const getOutputAdvancedS3 = () => getElementById('output-advanced');
-export const getRopGadgetsInput = () => getElementById('rop-gadgets-input');
-export const getRopChainInput = () => getElementById('rop-chain-input');
-export const getMemViewAddrInput = () => getElementById('mem-view-addr');
-export const getMemViewSizeInput = () => getElementById('mem-view-size');
 export const getRunBtnAdvancedS3 = () => getElementById('runAdvancedBtnS3');
-export const getBuildRopChainBtn = () => getElementById('buildRopChainBtn');
-export const getViewMemoryBtn = () => getElementById('viewMemoryBtn');
 
+// Inputs da UI para OOB_CONFIG (se você os usa para atualizar config.mjs)
+export const getOobAllocSizeInput = () => getElementById('oobAllocSize');
+export const getBaseOffsetInput = () => getElementById('baseOffset');
 
-export function cacheCommonElements() {
-    // Pre-cache elements if needed, called from main.mjs
-    getRunBtnS1();
-    getRunBtnCanvasS2();
-    getRunBtnAdvancedS3();
-    // Add others if frequently accessed and critical to cache
-}
+// Adicione getters para S1 e S2 se necessário para outros testes
