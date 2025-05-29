@@ -122,4 +122,4 @@ export async function sprayAndInvestigateObjectExposure() {
         clearOOBEnvironment();
         logS3(`--- Diagnóstico (${FNAME_DIAGNOSTIC}) Concluído ---`, "test", FNAME_DIAGNOSTIC);
     }
-} tá
+}
