@@ -4,34 +4,22 @@ import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // A importação já pega a versão mais recente de sprayAndInvestigateObjectExposure
 import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs'; 
 
-// A função runRetypeOOB_AB_Strategy pode ser mantida se você quiser executar o teste 0x6C separadamente
-// import { executeRetypeOOB_AB_Test } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
-// async function runRetypeOOB_AB_Strategy() {
-//     const FNAME_RUNNER = "runRetypeOOB_AB_Strategy";
-//     logS3(`==== INICIANDO Estratégia de "Re-Tipagem" do oob_array_buffer_real ====`, 'test', FNAME_RUNNER);
-//     await executeRetypeOOB_AB_Test();
-//     logS3(`==== Estratégia de "Re-Tipagem" do oob_array_buffer_real CONCLUÍDA ====`, 'test', FNAME_RUNNER);
-// }
-
 async function runSprayAndInvestigateStrategy() {
     const FNAME_RUNNER = "runSprayAndInvestigateStrategy";
     logS3(`==== INICIANDO Estratégia de Investigação com Spray e Corrupção ====`, 'test', FNAME_RUNNER);
-    await sprayAndInvestigateObjectExposure(); // Chamando a nova função de investigação
+    await sprayAndInvestigateObjectExposure(); // Chamando a função atualizada
     logS3(`==== Estratégia de Investigação com Spray e Corrupção CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_SprayInvestigate_v7'; // Nome atualizado
+    const FNAME = 'runAllAdvancedTestsS3_SprayInvestigate_v7'; // Atualizado para v7
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    // Log do User Agent
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-    // Outras informações do navegador/SDK (se disponíveis e relevantes) poderiam ser logadas aqui.
-    // Ex: if (typeof SDK_VERSION !== 'undefined') logS3(`SDK Version: ${SDK_VERSION}`, 'info', FNAME);
 
     logS3(`==== INICIANDO Script 3: Investigação Focada com Spray e Corrupção (v7) ====`,'test', FNAME);
     document.title = "Iniciando Script 3 - Spray & Investigate v7";
@@ -41,8 +29,7 @@ export async function runAllAdvancedTestsS3() {
     logS3(`\n==== Script 3 CONCLUÍDO (Investigação com Spray v7) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    // Atualiza o título com base no que foi encontrado
-    if (document.title.includes("ACHADO") || document.title.includes("PROVÁVEL")) {
+    if (document.title.includes("ACHADO") || document.title.includes("PROVÁVEL") || document.title.includes("SUPER ARRAY")) {
         // Mantém o título específico do achado
     } else if (!document.title.includes("FAIL") && !document.title.includes("ERRO")) {
          document.title = "Script 3 Concluído - Spray & Investigate v7";
