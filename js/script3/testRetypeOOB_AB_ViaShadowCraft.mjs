@@ -24,7 +24,7 @@ export async function sprayAndInvestigateObjectExposure() {
     const FNAME_SPRAY_INVESTIGATE = "sprayAndFindCorrupted_v9_FillPattern"; // Versão atualizada
     logS3(`--- Iniciando Investigação (${FNAME_SPRAY_INVESTIGATE}): Identificar e Usar Array Corrompido ---`, "test", FNAME_SPRAY_INVESTIGATE);
 
-    const NUM_SPRAY_OBJECTS = 200;
+    const NUM_SPRAY_OBJECTS = 2000;
     const SPRAY_TYPED_ARRAY_ELEMENT_COUNT = 8;
     const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x58;
 
