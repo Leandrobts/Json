@@ -15,8 +15,7 @@ export const JSC_OFFSETS = {
         TYPE_INFO_FLAGS_OFFSET: 0x10,      
         INDEXING_TYPE_AND_MISC_OFFSET: 0x18, 
         CLASS_INFO_OFFSET: 0x1C, // Ponteiro para ClassInfo
-        // Outros offsets de Structure que podem ser úteis:
-        // DUMP_OFFSETS_IF_NEEDED
+        // VIRTUAL_PUT_OFFSET: 0x18, // (Comentado pois já havia outro 0x18, verificar se este é necessário e qual o contexto)
     },
     JSObject: {
         BUTTERFLY_OFFSET: 0x10, 
@@ -28,11 +27,11 @@ export const JSC_OFFSETS = {
         SHARING_MODE_OFFSET: 0x28,
         IS_RESIZABLE_FLAGS_OFFSET: 0x30,
         KnownStructureIDs: { 
-            JSString_STRUCTURE_ID: null, 
-            ArrayBuffer_STRUCTURE_ID: 2, 
-            JSArray_STRUCTURE_ID: null, 
-            JSObject_Simple_STRUCTURE_ID: null, 
-            JSFunction_STRUCTURE_ID: null // PREENCHA SE SOUBER O ID DE UMA FUNÇÃO JS
+            JSString_STRUCTURE_ID: null, //  PRECISA DE SUA ATENÇÃO: Preencha se precisar identificar Strings.
+            ArrayBuffer_STRUCTURE_ID: 2, // VALIDADO do JSC::ArrayBuffer::create
+            JSArray_STRUCTURE_ID: null,  //  PRECISA DE SUA ATENÇÃO: Preencha se precisar identificar Arrays.
+            JSObject_Simple_STRUCTURE_ID: null, //  PRECISA DE SUA ATENÇÃO: Preencha para objetos {} simples.
+            JSFunction_STRUCTURE_ID: null //  PRECISA DE SUA ATENÇÃO: CRUCIAL para addrof(função) e vazar base da lib. Preencha com o StructureID de um objeto JSFunction.
         }
     },
     ArrayBufferView: { 
@@ -40,8 +39,8 @@ export const JSC_OFFSETS = {
         STRUCTURE_ID_OFFSET: 0x00,           
         FLAGS_OFFSET: 0x04,                  
         ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, 
-        M_VECTOR_OFFSET: 0x10,               
-        M_LENGTH_OFFSET: 0x18,               
+        M_VECTOR_OFFSET: 0x10, // Validado por você e usado nos testes recentes               
+        M_LENGTH_OFFSET: 0x18, // Validado por você e usado nos testes recentes               
         M_MODE_OFFSET: 0x1C                  
     },
     ArrayBufferContents: { 
@@ -50,15 +49,16 @@ export const JSC_OFFSETS = {
     },
     JSFunction: {
         // Estes são críticos para vazar a base da lib
-        EXECUTABLE_OFFSET: 0x18, // Ponteiro para JSExecutable (ou subclass como FunctionExecutable)
-        SCOPE_OFFSET: 0x20,      // Ponteiro para JSScope
+        EXECUTABLE_OFFSET: 0x18, // Ponteiro para JSExecutable (ou subclass como FunctionExecutable) - VALIDADO por você
+        SCOPE_OFFSET: 0x20,      // Ponteiro para JSScope - VALIDADO por você
         // Adicionar mais se conhecido, ex: m_jsCallEntrypoint, m_nativeCallEntrypoint
+        //  PRECISA DE SUA ATENÇÃO: Se houver um offset direto para um CallEntrypoint aqui, seria ideal.
     },
     JSExecutable: { // Ou FunctionExecutable, NativeExecutable etc.
         // Offsets DENTRO da estrutura Executable
         // Precisamos de um que aponte para código JITted ou um stub na libWebkit
-        JIT_CODE_START_OFFSET: null, // Ex: offset para m_jitCode->start() ou similar
-        NATIVE_ENTRYPOINT_OFFSET: null, // Ex: offset para m_nativeEntryPoint (se aplicável)
+        JIT_CODE_START_OFFSET: null, //  PRECISA DE SUA ATENÇÃO: Offset DENTRO do JSExecutable para um ponteiro de código (ex: m_jitCode->startAddress() ou similar).
+        NATIVE_ENTRYPOINT_OFFSET: null, //  PRECISA DE SUA ATENÇÃO: Se aplicável, para funções nativas.
     }
 };
 
@@ -66,13 +66,20 @@ export const WEBKIT_LIBRARY_INFO = {
     LIBRARY_NAME: "libSceNKWebkit.sprx", 
     FUNCTION_OFFSETS: { 
         // Estes são offsets de FUNÇÕES (ou stubs) RELATIVOS AO INÍCIO DA BIBLIOTECA WEBKIT
-        // Precisamos de um que corresponda ao que EXECUTABLE_OFFSET aponta.
-        "JSC::JSFunction::create": "0x58A1D0", // Este é o offset da função create, não de um entrypoint de uma função criada.
-        "some_known_function_call_entrypoint_stub_offset": null, // PREENCHA COM O OFFSET DE UM STUB CONHECIDO
-        // Ex: Se JSFunction->Executable->JITCodeStart aponta para um stub JIT, e sabemos o offset desse tipo de stub.
-        "WTF::fastMalloc": "0x1271810", // Útil para outros propósitos, mas não diretamente para vazar a base de uma JSFunction
+        // Precisamos de um que corresponda ao que o ponteiro de código (do JSExecutable) aponta.
+        "JSC::JSFunction::create": "0x58A1D0", 
+        // ... (outros offsets que você validou) ...
+        "WTF::fastMalloc": "0x1271810", 
+
+        //  PRECISA DE SUA ATENÇÃO: Este deve ser o offset (relativo à base da libSceNKWebkit.sprx)
+        // do TIPO de código/stub para o qual JSC_OFFSETS.JSExecutable.JIT_CODE_START_OFFSET (ou similar) aponta.
+        // O nome é um placeholder. Renomeie para algo descritivo.
+        "some_known_function_call_entrypoint_stub_offset": null, 
     },
     GOT_ENTRIES: {
+        // Se "0x3CBD820" for o endereço ABSOLUTO da entrada da GOT de mprotect DENTRO da libSceNKWebkit.sprx,
+        // e for um valor fixo no firmware, pode ser usado com uma leitura absoluta (se tivermos).
+        // Se for um offset relativo à base da libSceNKWebkit.sprx, nomeie como "_offset_from_lib_base".
         "mprotect": "0x3CBD820", 
     }
 };
