@@ -3,19 +3,36 @@ import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
     executeProbeComplexObjectWithMinimalToJSONs,
-    toJSON_RangeErrorVariants // Importa o objeto com as variantes
-} from './testIsolateForInRangeError.mjs'; // Certifique-se que este é o nome do arquivo que você está usando
+    toJSON_RangeErrorVariants
+} from './testIsolateForInRangeError.mjs';
 
-async function runIsolateRangeErrorStrategy() {
-    const FNAME_RUNNER = "runIsolateRangeErrorStrategy_v25_NoPause"; // Nova versão do runner
-    logS3(`==== INICIANDO ${FNAME_RUNNER}: Investigação Detalhada do RangeError (Sem Pausa Chave) ====`, 'test', FNAME_RUNNER);
+async function runIsolateV4CrashStrategy() {
+    const FNAME_RUNNER = "runIsolateV4CrashStrategy_v26";
+    logS3(`==== INICIANDO ${FNAME_RUNNER}: Isolando Ponto de Travamento com V4_LoopInWithAccess_Limited ====`, 'test', FNAME_RUNNER);
 
-    let foundRangeErrorInV4OrV5 = false;
+    const variants_to_test_specifically = [
+        "V4_LoopInWithAccess_Limited",
+        "V4_Dummy" // Para ver se a definição de uma função complexa vs simples importa
+    ];
+    
+    // Testar V0_EmptyReturn antes como linha de base estável
+    logS3(`\n--- EXECUTANDO SUB-TESTE LINHA DE BASE com toJSON: V0_EmptyReturn ---`, "subtest", FNAME_RUNNER);
+    document.title = `RangeError Test - V0_EmptyReturn`;
+    await executeProbeComplexObjectWithMinimalToJSONs(
+        toJSON_RangeErrorVariants["V0_EmptyReturn"],
+        "V0_EmptyReturn"
+    );
+    await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    for (const variant_name of Object.keys(toJSON_RangeErrorVariants)) {
+
+    for (const variant_name of variants_to_test_specifically) {
+        if (!toJSON_RangeErrorVariants[variant_name]) {
+            logS3(`AVISO: Variante toJSON '${variant_name}' não encontrada. Pulando.`, "warn", FNAME_RUNNER);
+            continue;
+        }
         const toJSON_function_to_use = toJSON_RangeErrorVariants[variant_name];
-        logS3(`\n--- EXECUTANDO SUB-TESTE com toJSON: ${variant_name} ---`, "subtest", FNAME_RUNNER);
-        document.title = `RangeError Test - ${variant_name}`;
+        logS3(`\n--- EXECUTANDO SUB-TESTE FOCO com toJSON: ${variant_name} ---`, "subtest", FNAME_RUNNER);
+        document.title = `RangeError Test Focus - ${variant_name}`;
 
         const result = await executeProbeComplexObjectWithMinimalToJSONs(
             toJSON_function_to_use,
@@ -27,14 +44,10 @@ async function runIsolateRangeErrorStrategy() {
             if (result.error.name === 'RangeError') {
                 logS3(`       RangeError confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
                 document.title = `RangeError w/ ${variant_name}!`;
-                if (variant_name === "V4_LoopInWithAccess_Limited" || variant_name === "V5_ObjectKeysThenAccess_Limited") {
-                    foundRangeErrorInV4OrV5 = true;
-                }
             }
         } else if (result && result.stringifyResult && result.stringifyResult.error_during_loop) {
             logS3(`   RESULTADO PARA ${variant_name}: Erro DENTRO do loop da toJSON: ${result.stringifyResult.error_during_loop}`, "error", FNAME_RUNNER);
              if (String(result.stringifyResult.error_during_loop).toLowerCase().includes('call stack')) {
-                 foundRangeErrorInV4OrV5 = true;
                  logS3(`       RangeError (interno) confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
                  document.title = `RangeError (internal) w/ ${variant_name}!`;
              }
@@ -43,16 +56,18 @@ async function runIsolateRangeErrorStrategy() {
         }
         logS3(`       Detalhes da toJSON para ${variant_name}: ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
 
-        await PAUSE_S3(MEDIUM_PAUSE_S3); 
-        if (foundRangeErrorInV4OrV5 && (variant_name === "V4_LoopInWithAccess_Limited" || variant_name === "V5_ObjectKeysThenAccess_Limited")){
-             logS3(`RangeError detectado com variante de loop (${variant_name}). Verifique os logs para a última propriedade acessada.`, "warn", FNAME_RUNNER);
+        await PAUSE_S3(MEDIUM_PAUSE_S3); // Pausa mais longa para permitir observação/recuperação do navegador
+        if (document.title.includes("RangeError")) {
+            logS3(`RangeError ocorreu com ${variant_name}. Verifique os logs para a última propriedade acessada se V4_LoopInWithAccess_Limited.`, "warn", FNAME_RUNNER);
+            // Não vamos parar, mas pode ser útil parar aqui em testes manuais.
         }
     }
+
     logS3(`==== ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_IsolateRangeError_v25_NoPause';
+    const FNAME = 'runAllAdvancedTestsS3_IsolateV4Crash_v26';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -63,7 +78,7 @@ export async function runAllAdvancedTestsS3() {
     logS3(`==== INICIANDO Script 3: ${FNAME} ====`, 'test', FNAME);
     document.title = `S3 - ${FNAME}`;
 
-    await runIsolateRangeErrorStrategy();
+    await runIsolateV4CrashStrategy();
 
     logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`, 'test', FNAME);
     if (runBtn) runBtn.disabled = false;
