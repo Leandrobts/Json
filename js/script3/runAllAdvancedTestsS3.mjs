@@ -1,5 +1,5 @@
 // js/script3/runAllAdvancedTestsS3.mjs
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs'; // MEDIUM_PAUSE_S3 ainda pode ser usado no final.
+import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs'; // <--- SHORT_PAUSE_S3 ADICIONADO AQUI
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
     executeProbeComplexObjectWithMinimalToJSONs,
@@ -7,64 +7,70 @@ import {
 } from './testIsolateForInRangeError.mjs';
 
 async function runIsolateV4CrashStrategy() {
-    const FNAME_RUNNER = "runIsolateV4CrashStrategy_v27_NoIntermediatePause";
-    logS3(`==== INICIANDO ${FNAME_RUNNER}: Isolando Ponto de Travamento (Sem Pausa Intermediária) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runIsolateV4CrashStrategy_v28_FixRefError";
+    logS3(`==== INICIANDO ${FNAME_RUNNER}: Isolando Ponto de Travamento/RangeError com V4 ====`, 'test', FNAME_RUNNER);
 
-    const variants_to_test_specifically = [
-        "V4_Dummy", // Testar a definição de uma função toJSON simples primeiro
-        "V4_LoopInWithAccess_Limited"
+    // Testar todas as variantes em sequência para ver o comportamento completo
+    const variants_to_test_in_order = [
+        "V0_EmptyReturn",
+        "V1_AccessThisId",
+        "V2_ToStringCallThis",
+        "V3_LoopInEmpty_Limited",
+        "V4_Dummy", // Testar a dummy antes da versão completa
+        "V4_LoopInWithAccess_Limited",
+        "V5_ObjectKeysThenAccess_Limited" // Incluir esta também para comparação
     ];
     
-    // Testar V0_EmptyReturn antes como linha de base estável
-    logS3(`\n--- EXECUTANDO SUB-TESTE LINHA DE BASE com toJSON: V0_EmptyReturn ---`, "subtest", FNAME_RUNNER);
-    document.title = `RangeError Test - V0_EmptyReturn`;
-    await executeProbeComplexObjectWithMinimalToJSONs(
-        toJSON_RangeErrorVariants["V0_EmptyReturn"],
-        "V0_EmptyReturn"
-    );
-    // await PAUSE_S3(MEDIUM_PAUSE_S3); // <<<<<<< PAUSA REMOVIDA AQUI >>>>>>>>>
+    let criticalErrorOccurred = false;
 
+    for (const variant_name of variants_to_test_in_order) {
+        if (criticalErrorOccurred && (variant_name === "V4_LoopInWithAccess_Limited" || variant_name === "V5_ObjectKeysThenAccess_Limited")) {
+            logS3(`\n--- PULANDO SUB-TESTE com toJSON: ${variant_name} devido a erro crítico anterior ---`, "warn", FNAME_RUNNER);
+            continue;
+        }
 
-    for (const variant_name of variants_to_test_specifically) {
         if (!toJSON_RangeErrorVariants[variant_name]) {
             logS3(`AVISO: Variante toJSON '${variant_name}' não encontrada. Pulando.`, "warn", FNAME_RUNNER);
             continue;
         }
         const toJSON_function_to_use = toJSON_RangeErrorVariants[variant_name];
-        logS3(`\n--- EXECUTANDO SUB-TESTE FOCO com toJSON: ${variant_name} ---`, "subtest", FNAME_RUNNER);
-        document.title = `RangeError Test Focus - ${variant_name}`;
+        logS3(`\n--- EXECUTANDO SUB-TESTE com toJSON: ${variant_name} ---`, "subtest", FNAME_RUNNER);
+        document.title = `Test - ${variant_name}`;
 
-        // Adicionar um log antes de chamar executeProbeComplexObjectWithMinimalToJSONs para o V4
         logS3(`   [${FNAME_RUNNER}] Preparando para chamar executeProbeComplexObjectWithMinimalToJSONs com ${variant_name}...`, "info");
-
         const result = await executeProbeComplexObjectWithMinimalToJSONs(
             toJSON_function_to_use,
             variant_name
         );
-
         logS3(`   [${FNAME_RUNNER}] Chamada a executeProbeComplexObjectWithMinimalToJSONs com ${variant_name} RETORNOU.`, "info");
-
 
         if (result && result.error) {
             logS3(`   RESULTADO PARA ${variant_name}: Erro ${result.error.name} - ${result.error.message}`, "error", FNAME_RUNNER);
             if (result.error.name === 'RangeError') {
                 logS3(`       RangeError confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
                 document.title = `RangeError w/ ${variant_name}!`;
+                criticalErrorOccurred = true; // Marcar que um erro sério ocorreu
+            } else {
+                 document.title = `Error w/ ${variant_name}!`;
             }
         } else if (result && result.stringifyResult && result.stringifyResult.error_during_loop) {
             logS3(`   RESULTADO PARA ${variant_name}: Erro DENTRO do loop da toJSON: ${result.stringifyResult.error_during_loop}`, "error", FNAME_RUNNER);
              if (String(result.stringifyResult.error_during_loop).toLowerCase().includes('call stack')) {
                  logS3(`       RangeError (interno) confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
                  document.title = `RangeError (internal) w/ ${variant_name}!`;
+                 criticalErrorOccurred = true;
              }
         } else {
             logS3(`   RESULTADO PARA ${variant_name}: Completou sem erro explícito no stringify.`, "good", FNAME_RUNNER);
         }
         logS3(`       Detalhes da toJSON para ${variant_name}: ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
 
-        await PAUSE_S3(SHORT_PAUSE_S3); // Pausa curta entre os testes V4_Dummy e V4_LoopInWithAccess_Limited
-        if (document.title.includes("RangeError")) {
-            logS3(`RangeError ocorreu com ${variant_name}.`, "warn", FNAME_RUNNER);
+        // Usar a pausa curta entre os testes de foco, e média se não for crítica
+        if (criticalErrorOccurred) {
+            logS3(`Erro crítico (RangeError) ocorreu com ${variant_name}. Próximos testes de loop podem ser instáveis.`, "warn", FNAME_RUNNER);
+            await PAUSE_S3(MEDIUM_PAUSE_S3);
+        } else {
+            await PAUSE_S3(SHORT_PAUSE_S3);
         }
     }
 
@@ -72,7 +78,7 @@ async function runIsolateV4CrashStrategy() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_IsolateV4Crash_v27_NoIntermediatePause';
+    const FNAME = 'runAllAdvancedTestsS3_IsolateRangeError_v28_FixRef';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -83,7 +89,7 @@ export async function runAllAdvancedTestsS3() {
     logS3(`==== INICIANDO Script 3: ${FNAME} ====`, 'test', FNAME);
     document.title = `S3 - ${FNAME}`;
 
-    await runIsolateV4CrashStrategy();
+    await runIsolateV4CrashStrategy(); // O nome da função wrapper foi mantido, mas o FNAME_RUNNER interno mudou
 
     logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`, 'test', FNAME);
     if (runBtn) runBtn.disabled = false;
