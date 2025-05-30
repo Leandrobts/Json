@@ -4,13 +4,13 @@ import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
     executeProbeComplexObjectWithMinimalToJSONs,
     toJSON_RangeErrorVariants // Importa o objeto com as variantes
-} from './testIsolateForInRangeError.mjs'; // Certifique-se que o nome do arquivo está correto
+} from './testIsolateForInRangeError.mjs'; // Certifique-se que este é o nome do arquivo que você está usando
 
 async function runIsolateRangeErrorStrategy() {
-    const FNAME_RUNNER = "runIsolateRangeErrorStrategy_v24"; // Nova versão do runner
-    logS3(`==== INICIANDO ${FNAME_RUNNER}: Investigação Detalhada do RangeError com MyComplexObject ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runIsolateRangeErrorStrategy_v25_NoPause"; // Nova versão do runner
+    logS3(`==== INICIANDO ${FNAME_RUNNER}: Investigação Detalhada do RangeError (Sem Pausa Chave) ====`, 'test', FNAME_RUNNER);
 
-    let foundRangeErrorInV3OrV4 = false;
+    let foundRangeErrorInV4OrV5 = false;
 
     for (const variant_name of Object.keys(toJSON_RangeErrorVariants)) {
         const toJSON_function_to_use = toJSON_RangeErrorVariants[variant_name];
@@ -27,15 +27,14 @@ async function runIsolateRangeErrorStrategy() {
             if (result.error.name === 'RangeError') {
                 logS3(`       RangeError confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
                 document.title = `RangeError w/ ${variant_name}!`;
-                if (variant_name === "V3_LoopInWithAccess_Limited" || variant_name === "V4_ObjectKeysThenAccess_Limited") {
-                    foundRangeErrorInV3OrV4 = true;
+                if (variant_name === "V4_LoopInWithAccess_Limited" || variant_name === "V5_ObjectKeysThenAccess_Limited") {
+                    foundRangeErrorInV4OrV5 = true;
                 }
             }
         } else if (result && result.stringifyResult && result.stringifyResult.error_during_loop) {
-            // Se o erro foi capturado dentro da toJSON (pelo nosso try-catch interno do loop)
             logS3(`   RESULTADO PARA ${variant_name}: Erro DENTRO do loop da toJSON: ${result.stringifyResult.error_during_loop}`, "error", FNAME_RUNNER);
              if (String(result.stringifyResult.error_during_loop).toLowerCase().includes('call stack')) {
-                 foundRangeErrorInV3OrV4 = true;
+                 foundRangeErrorInV4OrV5 = true;
                  logS3(`       RangeError (interno) confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
                  document.title = `RangeError (internal) w/ ${variant_name}!`;
              }
@@ -44,18 +43,16 @@ async function runIsolateRangeErrorStrategy() {
         }
         logS3(`       Detalhes da toJSON para ${variant_name}: ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
 
-        await PAUSE_S3(MEDIUM_PAUSE_S3); // Pausa entre sub-testes
-        if (foundRangeErrorInV3OrV4 && (variant_name === "V3_LoopInWithAccess_Limited" || variant_name === "V4_ObjectKeysThenAccess_Limited")){
+        await PAUSE_S3(MEDIUM_PAUSE_S3); 
+        if (foundRangeErrorInV4OrV5 && (variant_name === "V4_LoopInWithAccess_Limited" || variant_name === "V5_ObjectKeysThenAccess_Limited")){
              logS3(`RangeError detectado com variante de loop (${variant_name}). Verifique os logs para a última propriedade acessada.`, "warn", FNAME_RUNNER);
-             // Não vamos parar, para rodar todas as variantes e comparar.
         }
     }
-
     logS3(`==== ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_IsolateRangeError_v24'; // Nova versão do teste principal
+    const FNAME = 'runAllAdvancedTestsS3_IsolateRangeError_v25_NoPause';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -72,7 +69,6 @@ export async function runAllAdvancedTestsS3() {
     if (runBtn) runBtn.disabled = false;
 
     if (document.title.includes("ERRO") || document.title.includes("FAIL") || document.title.includes("RangeError")) {
-         // Manter título se indicar problema
     } else if (!document.title.startsWith("S3 -")) {
         document.title = "S3 Concluído";
     }
