@@ -1,10 +1,10 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs'; 
 import {
     executeProbeComplexObjectWithMinimalToJSONs,
     toJSON_RangeErrorVariants // Importa o objeto com as variantes
-} from './testIsolateForInRangeError.mjs'; // ATUALIZE O NOME DO ARQUIVO SE VOCÊ SALVOU DIFERENTE
+} from './testInvestigatePropertyAccessInRangeError.mjs'; // ATUALIZE O NOME DO ARQUIVO SE VOCÊ SALVOU DIFERENTE
 
 async function runIsolateRangeErrorStrategy() {
     const FNAME_RUNNER = "runIsolateRangeErrorStrategy_v21";
