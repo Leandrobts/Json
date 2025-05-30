@@ -1,18 +1,17 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importar o wrapper do teste com getter
-import { executeRetypeOOB_AB_Test_Wrapper } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
+import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs'; // A função exportada é a mesma
 
-async function runGetterInteractionStrategy_v13a() {
-    const FNAME_RUNNER = "runGetterInteractionStrategy_v13a";
-    logS3(`==== INICIANDO Estratégia: ${FNAME_RUNNER} ====`, 'test', FNAME_RUNNER);
-    await executeRetypeOOB_AB_Test_Wrapper(); // Chama o wrapper que itera os padrões
-    logS3(`==== Estratégia ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+async function runSprayGetterAndCheckCorruption_v14a_wrapper() {
+    const FNAME_RUNNER = "runSprayGetterAndCheckCorruption_v14a_wrapper";
+    logS3(`==== INICIANDO Estratégia Wrapper: ${FNAME_RUNNER} ====`, 'test', FNAME_RUNNER);
+    await sprayAndInvestigateObjectExposure(); // Chama a função exportada que agora tem la lógica _v14a
+    logS3(`==== Estratégia Wrapper ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_GetterTest_v13a';
+    const FNAME = 'runAllAdvancedTestsS3_SprayGetterCheck_v14a';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -20,15 +19,13 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-    logS3(`==== INICIANDO Script 3: Teste de Interação com Getter e Corrupção 0x70->0x6C (lógica v13a) ====`,'test', FNAME);
-    document.title = `Iniciando Script 3 - Getter Test v13a`;
+    logS3(`==== INICIANDO Script 3: Spray, Trigger 0x70, Getter, Checar Corrupção Spray (lógica v14a) ====`,'test', FNAME);
+    document.title = `Iniciando Script 3 - Spray, Getter, Check v14a`;
 
-    await runGetterInteractionStrategy_v13a(); 
+    await runSprayGetterAndCheckCorruption_v14a_wrapper(); 
     
-    logS3(`\n==== Script 3 CONCLUÍDO (lógica v13a) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (lógica v14a) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    if (!document.title.includes("Getter Test:") && !document.title.includes("FALHOU")) {
-        document.title = "Script 3 v13a Concluído";
-    }
+    // Título é atualizado dentro do teste principal
 }
