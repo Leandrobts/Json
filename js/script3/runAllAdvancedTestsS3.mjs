@@ -1,34 +1,36 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import { executeRevisitComplexObjectRangeError } from './testRevisitComplexObjectRangeError.mjs';
+// Importa a função do script modificado
+import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
 
-async function runRevisitRangeErrorStrategy() {
-    const FNAME_WRAPPER = "runRevisitRangeErrorStrategy";
-    logS3(`==== INICIANDO Estratégia Wrapper: ${FNAME_WRAPPER} ====`, 'test', FNAME_WRAPPER);
-    await executeRevisitComplexObjectRangeError();
-    logS3(`==== Estratégia Wrapper ${FNAME_WRAPPER} CONCLUÍDA ====`, 'test', FNAME_WRAPPER);
+async function runShadowCraftWithLeakedVectorStrategy() {
+    const FNAME_RUNNER = "runShadowCraftWithLeakedVectorStrategy";
+    logS3(`==== INICIANDO Estratégia ShadowCraft com "Vazamento" como m_vector ====`, 'test', FNAME_RUNNER);
+    await sprayAndInvestigateObjectExposure();
+    logS3(`==== Estratégia ShadowCraft com "Vazamento" como m_vector CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_RevisitRangeError_v21';
+    const FNAME = 'runAllAdvancedTestsS3_ShadowCraftLeakedVec_v20b';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: ${FNAME} ====`, 'test', FNAME);
-    document.title = `S3 - ${FNAME}`;
+    logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
+    logS3(`==== INICIANDO Script 3: ${FNAME} ====`,'test', FNAME);
+    document.title = `Iniciando S3 - ${FNAME}`;
 
-    await runRevisitRangeErrorStrategy();
+    await runShadowCraftWithLeakedVectorStrategy();
 
-    logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`, 'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.includes("ERRO") || document.title.includes("FAIL") || document.title.includes("RangeError")) {
-         // Manter título se indicar problema
-    } else if (!document.title.startsWith("S3 -")) { // Evitar sobrescrever títulos de sucesso/problema específicos
-        document.title = "S3 Concluído";
+    if (document.title.includes("FALHOU") || document.title.includes("ERRO")) {
+        // Manter título de erro
+    } else if (!document.title.startsWith("ShadowCraft:")) {
+         document.title = `S3 Concluído - ${FNAME}`;
     }
 }
