@@ -3,15 +3,15 @@ import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
 
-async function runReplicateLogSuccess_v26a_wrapper() {
-    const FNAME_RUNNER = "runReplicateLogSuccess_v26a_wrapper";
+async function runReplicateLogV7Dynamics_v27a_wrapper() {
+    const FNAME_RUNNER = "runReplicateLogV7Dynamics_v27a_wrapper";
     logS3(`==== INICIANDO Estratégia Wrapper: ${FNAME_RUNNER} ====`, 'test', FNAME_RUNNER);
     await sprayAndInvestigateObjectExposure(); 
     logS3(`==== Estratégia Wrapper ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_ReplicateLogSuccess_v26a';
+    const FNAME = 'runAllAdvancedTestsS3_ReplicateLogV7_v27a';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -19,11 +19,11 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-    logS3(`==== INICIANDO Script 3: Replicar Sucesso de Log e Validar SuperArray (lógica v26a) ====`,'test', FNAME);
-    document.title = `Iniciando Script 3 - Replicate Log Success v26a`;
+    logS3(`==== INICIANDO Script 3: Replicar Dinâmica de Corrupção do Log [00:51:23] (lógica v27a) ====`,'test', FNAME);
+    document.title = `Iniciando Script 3 - Replicate Log v27a`;
 
-    await runReplicateLogSuccess_v26a_wrapper(); 
+    await runReplicateLogV7Dynamics_v27a_wrapper(); 
     
-    logS3(`\n==== Script 3 CONCLUÍDO (lógica v26a) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (lógica v27a) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 }
