@@ -1,46 +1,34 @@
 // js/script3/runAllAdvancedTestsS3.mjs
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// A importação já pega a versão mais recente de sprayAndInvestigateObjectExposure
-import { sprayAndInvestigateObjectExposure, executeRetypeOOB_AB_Test } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
+// Importar o wrapper do teste com getter
+import { executeRetypeOOB_AB_Test_Wrapper } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
 
-async function runRetypeOOB_AB_Strategy() {
-    const FNAME_RUNNER = "runRetypeOOB_AB_Strategy";
-    logS3(`==== INICIANDO Estratégia de "Re-Tipagem" do oob_array_buffer_real ====`, 'test', FNAME_RUNNER);
-    await executeRetypeOOB_AB_Test();
-    logS3(`==== Estratégia de "Re-Tipagem" do oob_array_buffer_real CONCLUÍDA ====`, 'test', FNAME_RUNNER);
-}
-
-async function runSprayAndInvestigateStrategy() {
-    const FNAME_RUNNER = "runSprayAndInvestigateStrategy";
-    logS3(`==== INICIANDO Estratégia de Investigação com Spray e Corrupção ====`, 'test', FNAME_RUNNER);
-    await sprayAndInvestigateObjectExposure();
-    logS3(`==== Estratégia de Investigação com Spray e Corrupção CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+async function runGetterInteractionStrategy_v13a() {
+    const FNAME_RUNNER = "runGetterInteractionStrategy_v13a";
+    logS3(`==== INICIANDO Estratégia: ${FNAME_RUNNER} ====`, 'test', FNAME_RUNNER);
+    await executeRetypeOOB_AB_Test_Wrapper(); // Chama o wrapper que itera os padrões
+    logS3(`==== Estratégia ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_SprayInvestigate_v2';
+    const FNAME = 'runAllAdvancedTestsS3_GetterTest_v13a';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3: Investigação Focada com Spray e Corrupção ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - Spray & Investigate v2";
+    logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
+    logS3(`==== INICIANDO Script 3: Teste de Interação com Getter e Corrupção 0x70->0x6C (lógica v13a) ====`,'test', FNAME);
+    document.title = `Iniciando Script 3 - Getter Test v13a`;
 
-    // Opcional: validar a corrupção 0x6C primeiro
-    // logS3(`\n==== VALIDANDO CORRUPÇÃO 0x6C (Pré-teste) ====`,'test', FNAME);
-    // await runRetypeOOB_AB_Strategy();
-    // await PAUSE_S3(MEDIUM_PAUSE_S3);
-
-    logS3(`\n==== FOCO: Investigando Exposição de ArrayBufferView via Corrupção 0x6C após Spray ====`,'test', FNAME);
-    await runSprayAndInvestigateStrategy();
+    await runGetterInteractionStrategy_v13a(); 
     
-    logS3(`\n==== Script 3 CONCLUÍDO (Investigação com Spray v2) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (lógica v13a) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    if (!document.title.includes("Corrompido") && !document.title.includes("FAIL") && !document.title.includes("ERRO") && !document.title.includes("Concluída")) {
-         document.title = "Script 3 Concluído - Spray & Investigate v2";
+    if (!document.title.includes("Getter Test:") && !document.title.includes("FALHOU")) {
+        document.title = "Script 3 v13a Concluído";
     }
 }
