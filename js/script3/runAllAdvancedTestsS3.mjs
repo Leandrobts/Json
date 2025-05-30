@@ -3,15 +3,15 @@ import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
 
-async function runSuperArrayViaRelativeMVector_v20c_wrapper() {
-    const FNAME_RUNNER = "runSuperArrayViaRelativeMVector_v20c_wrapper";
+async function runButterflyCorruption_v21a_wrapper() {
+    const FNAME_RUNNER = "runButterflyCorruption_v21a_wrapper";
     logS3(`==== INICIANDO Estratégia Wrapper: ${FNAME_RUNNER} ====`, 'test', FNAME_RUNNER);
     await sprayAndInvestigateObjectExposure(); 
     logS3(`==== Estratégia Wrapper ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_SuperArrayRelative_v20c';
+    const FNAME = 'runAllAdvancedTestsS3_ButterflyCorruption_v21a';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -19,11 +19,11 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-    logS3(`==== INICIANDO Script 3: SuperArray via m_vector Relativo (lógica v20c) ====`,'test', FNAME);
-    document.title = `Iniciando Script 3 - SuperArray Relative m_vector v20c`;
+    logS3(`==== INICIANDO Script 3: Tentativa de Corrupção de Butterfly (lógica v21a) ====`,'test', FNAME);
+    document.title = `Iniciando Script 3 - Butterfly Corruption v21a`;
 
-    await runSuperArrayViaRelativeMVector_v20c_wrapper(); 
+    await runButterflyCorruption_v21a_wrapper(); 
     
-    logS3(`\n==== Script 3 CONCLUÍDO (lógica v20c) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (lógica v21a) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 }
