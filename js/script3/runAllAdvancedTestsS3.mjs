@@ -1,15 +1,14 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importa a função de teste atualizada
-import { executeInvestigatePropertyAccessInRangeError } from './testInvestigatePropertyAccessInRangeError.mjs'; // Nome do arquivo .mjs
+// Atualize o nome da função importada se você mudou o nome do arquivo ou da função exportada
+import { executeInvestigatePropertyAccessInRangeError_v24_DebugRefError } from './testInvestigatePropertyAccessInRangeError.mjs';
 
-async function runDebugOOBWriteAt0x70Strategy() {
-    const FNAME_RUNNER = "runDebugOOBWriteAt0x70Strategy_v23";
-    logS3(`==== INICIANDO ${FNAME_RUNNER}: Depurando Escrita OOB em 0x70 ====`, 'test', FNAME_RUNNER);
+async function runDebugOOBWriteAndRefErrorStrategy() {
+    const FNAME_RUNNER = "runDebugOOBWriteAndRefErrorStrategy_v24";
+    logS3(`==== INICIANDO ${FNAME_RUNNER}: Depurando ReferenceError e Escrita OOB em 0x70 ====`, 'test', FNAME_RUNNER);
 
-    // A função executeInvestigatePropertyAccessInRangeError agora contém a lógica de depuração
-    const result = await executeInvestigatePropertyAccessInRangeError();
+    const result = await executeInvestigatePropertyAccessInRangeError_v24_DebugRefError();
 
     if (result && result.error) {
         logS3(`   RESULTADO DO TESTE: Erro ${result.error.name} - ${result.error.message}`, "error", FNAME_RUNNER);
@@ -20,7 +19,7 @@ async function runDebugOOBWriteAt0x70Strategy() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_DebugOOBWriteAt0x70_v23';
+    const FNAME = 'runAllAdvancedTestsS3_DebugRefError_v24';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -31,14 +30,14 @@ export async function runAllAdvancedTestsS3() {
     logS3(`==== INICIANDO Script 3: ${FNAME} ====`, 'test', FNAME);
     document.title = `S3 - ${FNAME}`;
 
-    await runDebugOOBWriteAt0x70Strategy();
+    await runDebugOOBWriteAndRefErrorStrategy();
 
     logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`, 'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
     if (document.title.includes("ERRO") || document.title.includes("FAIL") || document.title.includes("RangeError")) {
          // Manter título se indicar problema
-    } else if (!document.title.startsWith("S3 -")) {
+    } else if (!document.title.startsWith("S3 -")) { // Evitar sobrescrever títulos como "SUCCESS"
         document.title = "S3 Concluído";
     }
 }
