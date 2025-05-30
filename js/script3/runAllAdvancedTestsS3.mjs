@@ -3,15 +3,15 @@ import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
 
-async function runSprayABWithMetadataPlant_v25a_wrapper() {
-    const FNAME_RUNNER = "runSprayABWithMetadataPlant_v25a_wrapper";
+async function runReplicateLogSuccess_v26a_wrapper() {
+    const FNAME_RUNNER = "runReplicateLogSuccess_v26a_wrapper";
     logS3(`==== INICIANDO Estratégia Wrapper: ${FNAME_RUNNER} ====`, 'test', FNAME_RUNNER);
     await sprayAndInvestigateObjectExposure(); 
     logS3(`==== Estratégia Wrapper ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_SprayABMetaPlant_v25a';
+    const FNAME = 'runAllAdvancedTestsS3_ReplicateLogSuccess_v26a';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -19,11 +19,11 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-    logS3(`==== INICIANDO Script 3: Spray ABs, Plantar Meta ABView, Trigger, Checar ABs (lógica v25a) ====`,'test', FNAME);
-    document.title = `Iniciando Script 3 - Spray AB & MetaPlant v25a`;
+    logS3(`==== INICIANDO Script 3: Replicar Sucesso de Log e Validar SuperArray (lógica v26a) ====`,'test', FNAME);
+    document.title = `Iniciando Script 3 - Replicate Log Success v26a`;
 
-    await runSprayABWithMetadataPlant_v25a_wrapper(); 
+    await runReplicateLogSuccess_v26a_wrapper(); 
     
-    logS3(`\n==== Script 3 CONCLUÍDO (lógica v25a) ====`,'test', FNAME);
+    logS3(`\n==== Script 3 CONCLUÍDO (lógica v26a) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 }
