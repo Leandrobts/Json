@@ -1,29 +1,34 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
+import { executeRevisitComplexObjectRangeError } from './testRevisitComplexObjectRangeError.mjs';
 
-async function runGetSuperArrayAndAttemptAddrof_v22a_wrapper() {
-    const FNAME_RUNNER = "runGetSuperArrayAndAttemptAddrof_v22a_wrapper";
-    logS3(`==== INICIANDO Estratégia Wrapper: ${FNAME_RUNNER} ====`, 'test', FNAME_RUNNER);
-    await sprayAndInvestigateObjectExposure(); 
-    logS3(`==== Estratégia Wrapper ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+async function runRevisitRangeErrorStrategy() {
+    const FNAME_WRAPPER = "runRevisitRangeErrorStrategy";
+    logS3(`==== INICIANDO Estratégia Wrapper: ${FNAME_WRAPPER} ====`, 'test', FNAME_WRAPPER);
+    await executeRevisitComplexObjectRangeError();
+    logS3(`==== Estratégia Wrapper ${FNAME_WRAPPER} CONCLUÍDA ====`, 'test', FNAME_WRAPPER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_GetSuperArrayAddrof_v22a';
+    const FNAME = 'runAllAdvancedTestsS3_RevisitRangeError_v21';
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-    logS3(`==== INICIANDO Script 3: Obter SuperArray (m_vector=0) e Tentar Addrof (lógica v22a) ====`,'test', FNAME);
-    document.title = `Iniciando Script 3 - Get SuperArray & Addrof v22a`;
+    logS3(`==== INICIANDO Script 3: ${FNAME} ====`, 'test', FNAME);
+    document.title = `S3 - ${FNAME}`;
 
-    await runGetSuperArrayAndAttemptAddrof_v22a_wrapper(); 
-    
-    logS3(`\n==== Script 3 CONCLUÍDO (lógica v22a) ====`,'test', FNAME);
+    await runRevisitRangeErrorStrategy();
+
+    logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`, 'test', FNAME);
     if (runBtn) runBtn.disabled = false;
+
+    if (document.title.includes("ERRO") || document.title.includes("FAIL") || document.title.includes("RangeError")) {
+         // Manter título se indicar problema
+    } else if (!document.title.startsWith("S3 -")) { // Evitar sobrescrever títulos de sucesso/problema específicos
+        document.title = "S3 Concluído";
+    }
 }
