@@ -1,82 +1,18 @@
 // js/script3/runAllAdvancedTestsS3.mjs
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
+import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import {
-    executeProbeComplexObjectWithMinimalToJSONs,
-    toJSON_RangeErrorVariants // Importa o objeto com as variantes
-} from './testIsolateForInRangeError.mjs';
+// A importação já pega a versão mais recente de sprayAndInvestigateObjectExposure
+import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs'; 
 
-async function runIsolateV4CrashStrategy() { // Nome da função mantido da v28, mas a lógica é testar todas as variantes
-    const FNAME_RUNNER = "runIsolateRangeErrorStrategy_v28_ReTest"; // Nome para refletir o re-teste
-    logS3(`==== INICIANDO ${FNAME_RUNNER}: Investigação Detalhada do RangeError (Re-Teste Todas Variantes) ====`, 'test', FNAME_RUNNER);
-
-    const variants_to_test_in_order = [
-        "V0_EmptyReturn",
-        "V1_AccessThisId",
-        "V2_ToStringCallThis",
-        "V3_LoopInEmpty_Limited",
-        "V4_Dummy",
-        "V4_LoopInWithAccess_Limited", // O principal suspeito do RangeError
-        "V5_ObjectKeysThenAccess_Limited"
-    ];
-    
-    let criticalErrorOccurred = false;
-
-    for (const variant_name of variants_to_test_in_order) {
-        // Se um RangeError já ocorreu nas variantes problemáticas, não continue com outras de loop
-        if (criticalErrorOccurred && (variant_name === "V4_LoopInWithAccess_Limited" || variant_name === "V5_ObjectKeysThenAccess_Limited")) {
-            logS3(`\n--- PULANDO SUB-TESTE com toJSON: ${variant_name} devido a erro crítico anterior ---`, "warn", FNAME_RUNNER);
-            continue;
-        }
-
-        if (!toJSON_RangeErrorVariants[variant_name]) {
-            logS3(`AVISO: Variante toJSON '${variant_name}' não encontrada. Pulando.`, "warn", FNAME_RUNNER);
-            continue;
-        }
-        const toJSON_function_to_use = toJSON_RangeErrorVariants[variant_name];
-        logS3(`\n--- EXECUTANDO SUB-TESTE com toJSON: ${variant_name} ---`, "subtest", FNAME_RUNNER);
-        document.title = `Test - ${variant_name}`;
-
-        logS3(`   [${FNAME_RUNNER}] Preparando para chamar executeProbeComplexObjectWithMinimalToJSONs com ${variant_name}...`, "info");
-        const result = await executeProbeComplexObjectWithMinimalToJSONs(
-            toJSON_function_to_use,
-            variant_name
-        );
-        logS3(`   [${FNAME_RUNNER}] Chamada a executeProbeComplexObjectWithMinimalToJSONs com ${variant_name} RETORNOU.`, "info");
-
-        if (result && result.error) {
-            logS3(`   RESULTADO PARA ${variant_name}: Erro ${result.error.name} - ${result.error.message}`, "error", FNAME_RUNNER);
-            if (result.error.name === 'RangeError') {
-                logS3(`       RangeError confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
-                document.title = `RangeError w/ ${variant_name}!`;
-                criticalErrorOccurred = true; 
-            } else {
-                 document.title = `Error w/ ${variant_name}!`;
-            }
-        } else if (result && result.stringifyResult && result.stringifyResult.error_during_loop) {
-            logS3(`   RESULTADO PARA ${variant_name}: Erro DENTRO do loop da toJSON: ${result.stringifyResult.error_during_loop}`, "error", FNAME_RUNNER);
-             if (String(result.stringifyResult.error_during_loop).toLowerCase().includes('call stack')) {
-                 logS3(`       RangeError (interno) confirmado com ${variant_name}.`, "vuln", FNAME_RUNNER);
-                 document.title = `RangeError (internal) w/ ${variant_name}!`;
-                 criticalErrorOccurred = true;
-             }
-        } else {
-            logS3(`   RESULTADO PARA ${variant_name}: Completou sem erro explícito no stringify.`, "good", FNAME_RUNNER);
-        }
-        logS3(`       Detalhes da toJSON para ${variant_name}: ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
-        
-        await PAUSE_S3(SHORT_PAUSE_S3); // Pausa curta entre os testes
-
-        if (criticalErrorOccurred && (variant_name === "V4_LoopInWithAccess_Limited" || variant_name === "V5_ObjectKeysThenAccess_Limited")) {
-            logS3(`RangeError detectado com variante de loop (${variant_name}). Verifique os logs para a última propriedade acessada.`, "warn", FNAME_RUNNER);
-        }
-    }
-    await PAUSE_S3(MEDIUM_PAUSE_S3); 
-    logS3(`==== ${FNAME_RUNNER} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+async function runSprayAndInvestigateStrategy() {
+    const FNAME_RUNNER = "runSprayAndInvestigateStrategy";
+    logS3(`==== INICIANDO Estratégia de Investigação com Spray e Corrupção ====`, 'test', FNAME_RUNNER);
+    await sprayAndInvestigateObjectExposure(); // Chamando a função atualizada
+    logS3(`==== Estratégia de Investigação com Spray e Corrupção CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_IsolateRangeError_v28_ReTest'; // Nome do teste principal
+    const FNAME = 'runAllAdvancedTestsS3_SprayInvestigate_v7'; // Atualizado para v7
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -84,16 +20,18 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-    logS3(`==== INICIANDO Script 3: ${FNAME} ====`, 'test', FNAME);
-    document.title = `S3 - ${FNAME}`;
 
-    await runIsolateV4CrashStrategy(); 
+    logS3(`==== INICIANDO Script 3: Investigação Focada com Spray e Corrupção (v7) ====`,'test', FNAME);
+    document.title = "Iniciando Script 3 - Spray & Investigate v7";
 
-    logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`, 'test', FNAME);
+    await runSprayAndInvestigateStrategy();
+    
+    logS3(`\n==== Script 3 CONCLUÍDO (Investigação com Spray v7) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.includes("ERRO") || document.title.includes("FAIL") || document.title.includes("RangeError")) {
-    } else if (!document.title.startsWith("S3 -")) {
-        document.title = "S3 Concluído";
+    if (document.title.includes("ACHADO") || document.title.includes("PROVÁVEL") || document.title.includes("SUPER ARRAY")) {
+        // Mantém o título específico do achado
+    } else if (!document.title.includes("FAIL") && !document.title.includes("ERRO")) {
+         document.title = "Script 3 Concluído - Spray & Investigate v7";
     }
 }
