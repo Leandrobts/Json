@@ -9,8 +9,8 @@ import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 import { toHex } from '../utils.mjs';
 
 async function runTypeConfusionExploitStrategy() {
-    const FNAME_RUNNER = "runTypeConfusionExploitStrategy";
-    logS3(`==== INICIANDO Estratégia de Exploração de Type Confusion ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runTypeConfusionExploitStrategy_v29";
+    logS3(`==== INICIANDO Estratégia de Exploração de Type Confusion (v29) ====`, 'test', FNAME_RUNNER);
 
     const result = await executeTypeConfusionExploitTest();
 
@@ -23,7 +23,7 @@ async function runTypeConfusionExploitStrategy() {
     }
     logS3(`   Título da página: ${document.title}`, "info");
 
-    logS3(`==== Estratégia de Exploração de Type Confusion CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Exploração de Type Confusion (v29) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
@@ -35,7 +35,7 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Explorando Type Confusion com victim_ab ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Explorando Type Confusion com victim_ab (v29) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runTypeConfusionExploitStrategy();
 
