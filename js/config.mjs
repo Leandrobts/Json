@@ -65,7 +65,7 @@ export const JSC_OFFSETS = {
                                            // Manteremos o seu, mas revise se ASSOCIATED_ARRAYBUFFER_OFFSET leva ao JSArrayBuffer, que por sua vez tem CONTENTS_IMPL_POINTER_OFFSET.
         M_VECTOR_OFFSET: 0x10,          // Se CONTENTS_IMPL_POINTER_OFFSET acima for o correto, M_VECTOR_OFFSET pode ser relativo a ArrayBufferContents, não à View.
                                            // No entanto, os logs anteriores sugerem que 0x58 (início da View) + 0x10 (M_VECTOR_OFFSET) = 0x68 funciona para você.
-        M_LENGTH_OFFSET: 0x36,          // Comprimento da view.
+        M_LENGTH_OFFSET: 0x18,          // Comprimento da view.
         M_MODE_OFFSET: 0x1C
     },
     ArrayBufferContents: {
