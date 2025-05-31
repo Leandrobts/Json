@@ -134,7 +134,7 @@ export const JSC_OFFSETS = {
         // So, [VM_Related_Ptr+9D00h] points to a structure where at +8h are some cell init values.
         // FIELD_CONTAINING_CELL_INIT_VALUE_OFFSET: 0x9D08, // Offset from initial VM-like pointer.
     },
-};
+
 
 export const WEBKIT_LIBRARY_INFO = {
     NAME: "libSceNKWebKit.sprx",
