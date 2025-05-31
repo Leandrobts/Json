@@ -2,17 +2,17 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeTypeConfusionExploitTest, // Importa a nova função de teste
-    FNAME_MODULE_V29 
-} from './testTypeConfusionExploitation.mjs'; // Nome do NOVO arquivo
+    executeTypeConfusionExploitTest_v30, // Importa a nova função de teste
+    FNAME_MODULE_V30 
+} from './testTypeConfusionExploitation.mjs'; // Nome do arquivo atualizado
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; 
 import { toHex } from '../utils.mjs';
 
-async function runTypeConfusionExploitStrategy() {
-    const FNAME_RUNNER = "runTypeConfusionExploitStrategy_v29";
-    logS3(`==== INICIANDO Estratégia de Exploração de Type Confusion (v29) ====`, 'test', FNAME_RUNNER);
+async function runTypeConfusionExploitStrategy_v30() {
+    const FNAME_RUNNER = "runTypeConfusionExploitStrategy_v30";
+    logS3(`==== INICIANDO Estratégia de Exploração de Type Confusion (v30) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypeConfusionExploitTest();
+    const result = await executeTypeConfusionExploitTest_v30();
 
     if (result.errorOccurred) {
         logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
@@ -21,13 +21,14 @@ async function runTypeConfusionExploitStrategy() {
     } else {
         logS3(`   RESULTADO: Completou. Detalhes da toJSON: ${JSON.stringify(result.toJSON_details)}`, "good", FNAME_RUNNER);
     }
-    logS3(`   Título da página: ${document.title}`, "info");
+    // Título da página é atualizado dentro de executeTypeConfusionExploitTest_v30
+    logS3(`   Título da página final: ${document.title}`, "info");
 
-    logS3(`==== Estratégia de Exploração de Type Confusion (v29) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Exploração de Type Confusion (v30) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_V29}_MainOrchestrator`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_V30}_MainOrchestrator`; 
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -35,16 +36,16 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Explorando Type Confusion com victim_ab (v29) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Explorando Type Confusion com victim_ab (v30) ====`, 'test', FNAME_ORCHESTRATOR);
 
-    await runTypeConfusionExploitStrategy();
+    await runTypeConfusionExploitStrategy_v30();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V29)) {
-        if (!document.title.includes("CRASH") && !document.title.includes("PROBLEM") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("TYPE CONFUSION")) {
-            document.title = `${FNAME_MODULE_V29} Concluído`;
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V30)) {
+        if (!document.title.includes("CRASH") && !document.title.includes("PROBLEM") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("TYPE CONFUSION") && !document.title.includes("R/W PRIMITIVE")) {
+            document.title = `${FNAME_MODULE_V30} Concluído`;
         }
     }
 }
