@@ -2,44 +2,43 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeDirectVictimProbeTest,
-    FNAME_MODULE 
-} from './testVictimABInteractionAfterCorruption.mjs'; 
+    executeObjectKeysHeisenbugTest, // Importa a nova função de teste
+    FNAME_MODULE_V27 // Importa o nome do módulo para logging
+} from './testRetypeOOB_AB_ViaShadowCraft.mjs'; // O nome do arquivo ainda é este
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; 
 import { toHex } from '../utils.mjs';
 
-async function runDirectVictimProbingStrategy() {
-    const FNAME_RUNNER = "runDirectVictimProbingStrategy";
-    logS3(`==== INICIANDO Estratégia de Sondagem Direta em victim_ab Pós-Corrupção ====`, 'test', FNAME_RUNNER);
+async function runHeisenbugObjectKeysStrategy() {
+    const FNAME_RUNNER = "runHeisenbugObjectKeysStrategy";
+    logS3(`==== INICIANDO Estratégia de Investigação do Heisenbug com Object.keys() ====`, 'test', FNAME_RUNNER);
 
-    // Definir a constante aqui para uso no log de resultados, para corresponder ao que está em testVictimABInteractionAfterCorruption.mjs
-    const VICTIM_AB_SIZE_CONST_FOR_LOG = 64; 
-    const result = await executeDirectVictimProbeTest();
+    const result = await executeObjectKeysHeisenbugTest();
 
     if (result.errorOccurred) {
         logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
-        document.title = `ERR DirectProbe: ${result.errorOccurred.name}`;
+         if (result.errorOccurred.name === 'RangeError') {
+            logS3(`     RangeError: Maximum call stack size exceeded OCORREU! Este é o heisenbug que estávamos procurando.`, "vuln", FNAME_RUNNER);
+            document.title = `RangeError HEISENBUG HIT!`;
+         } else {
+            document.title = `ERR ObjectKeys Test: ${result.errorOccurred.name}`;
+         }
     } else if (result.potentiallyCrashed) {
-         logS3(`   RESULTADO: CONGELAMENTO POTENCIAL.`, "error", FNAME_RUNNER);
-         if (!document.title.includes("CONGELOU")) document.title = `CRASH? DirectProbe`;
+         logS3(`   RESULTADO: CONGELAMENTO POTENCIAL. Últimos detalhes da toJSON: ${JSON.stringify(result.lastToJSONProbeDetails)}`, "error", FNAME_RUNNER);
+         if (!document.title.includes("CONGELOU")) document.title = `CRASH? ObjectKeys Test`;
     } else {
-        logS3(`   RESULTADO: Completou. victim_ab.byteLength: ${result.victim_byteLength_observed}, DataView Read: ${result.dataview_read_observed}, Slice OK: ${result.slice_ok_observed}`, "good", FNAME_RUNNER);
-        // CORREÇÃO: Usar VICTIM_AB_SIZE_CONST_FOR_LOG para a comparação
-        if (result.victim_byteLength_observed !== VICTIM_AB_SIZE_CONST_FOR_LOG && typeof result.victim_byteLength_observed === 'number') { 
-             logS3(`     !!!! ALTERAÇÃO DE TAMANHO NO VICTIM_AB DETECTADA !!!! Original: ${VICTIM_AB_SIZE_CONST_FOR_LOG}, Novo: ${result.victim_byteLength_observed}`, "critical", FNAME_RUNNER);
-             document.title = `DirectProbe: Size Altered!`;
-        } else {
-            document.title = `DirectProbe OK`;
+        logS3(`   RESULTADO: Completou. Últimos detalhes da toJSON: ${JSON.stringify(result.lastToJSONProbeDetails)}`, "good", FNAME_RUNNER);
+        if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V27) || document.title.includes("Probing")) {
+            document.title = `ObjectKeys Test OK`;
         }
     }
     logS3(`   Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Sondagem Direta em victim_ab CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Investigação do Heisenbug com Object.keys() CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator_v26_FixRefErr`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_V27}_MainOrchestrator`; 
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -47,16 +46,16 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Sondagem Direta em victim_ab Pós-Corrupção ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Investigando Heisenbug com Object.keys() ====`, 'test', FNAME_ORCHESTRATOR);
 
-    await runDirectVictimProbingStrategy();
+    await runHeisenbugObjectKeysStrategy();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE)) {
-        if (!document.title.includes("CRASH") && !document.title.includes("PROBLEM") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("Altered")) {
-            document.title = `${FNAME_MODULE} (v26_FixRefErr) Concluído`;
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V27)) {
+        if (!document.title.includes("CRASH") && !document.title.includes("RangeError") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("HIT")) {
+            document.title = `${FNAME_MODULE_V27} Concluído`;
         }
     }
 }
