@@ -2,10 +2,10 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeReplicateAndExploitTCTest_v31, // Importa a nova função de teste
-    FNAME_MODULE_V31 
-} from './testTypeConfusionExploitation.mjs'; // Mantendo o nome do arquivo, mas a lógica interna mudou
-import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; 
+    executeReplicateAndExploitTCTest_v31, // Nome da função exportada atualizado
+    FNAME_MODULE_V31 // Importa o nome do módulo para logging
+} from './testTypeConfusionExploitation.mjs'; 
+import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; // Importa JSC_OFFSETS
 import { toHex } from '../utils.mjs';
 
 async function runReplicateTCAndExploitStrategy_v31() {
@@ -17,17 +17,18 @@ async function runReplicateTCAndExploitStrategy_v31() {
     if (result.errorOccurred) {
         logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
     } else if (result.potentiallyCrashed) {
-         logS3(`   RESULTADO: CONGELAMENTO POTENCIAL. Detalhes da toJSON (se chamada): ${JSON.stringify(result.toJSON_details)}`, "critical", FNAME_RUNNER);
+         logS3(`   RESULTADO: CONGELAMENTO POTENCIAL. Detalhes da toJSON (se chamada): ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "critical", FNAME_RUNNER);
     } else {
-        logS3(`   RESULTADO: Completou. Detalhes da toJSON: ${JSON.stringify(result.toJSON_details)}`, "good", FNAME_RUNNER);
+        logS3(`   RESULTADO: Completou. Detalhes da toJSON: ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "good", FNAME_RUNNER);
     }
-    // O título da página deve ser atualizado dentro de executeReplicateAndExploitTCTest_v31
+    // Título da página é atualizado dentro de executeReplicateAndExploitTCTest_v31
     logS3(`   Título da página final: ${document.title}`, "info");
 
     logS3(`==== Estratégia de Replicação e Exploração de Type Confusion (v31) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
+    // USA FNAME_MODULE_V31 importado para o nome do orquestrador
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_V31}_MainOrchestrator`; 
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
@@ -43,11 +44,11 @@ export async function runAllAdvancedTestsS3() {
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    // Fallback para o título se não foi setado por sucesso/erro específico
     if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V31)) {
         if (!document.title.includes("CRASH") && !document.title.includes("PROBLEM") && 
             !document.title.includes("SUCCESS") && !document.title.includes("ERR") && 
-            !document.title.includes("TYPE CONFUSION") && !document.title.includes("R/W PRIMITIVE")) {
+            !document.title.includes("TYPE CONFUSION") && !document.title.includes("R/W PRIMITIVE") &&
+            !document.title.includes("DETECTED")) {
             document.title = `${FNAME_MODULE_V31} Concluído`;
         }
     }
