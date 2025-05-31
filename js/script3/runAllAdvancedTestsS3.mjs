@@ -2,17 +2,17 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeTypeConfusionExploitTest_v30, // Importa a nova função de teste
-    FNAME_MODULE_V30 
-} from './testTypeConfusionExploitation.mjs'; // Nome do arquivo atualizado
+    executeReplicateAndExploitTCTest_v31, // Importa a nova função de teste
+    FNAME_MODULE_V31 
+} from './testTypeConfusionExploitation.mjs'; // Mantendo o nome do arquivo, mas a lógica interna mudou
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; 
 import { toHex } from '../utils.mjs';
 
-async function runTypeConfusionExploitStrategy_v30() {
-    const FNAME_RUNNER = "runTypeConfusionExploitStrategy_v30";
-    logS3(`==== INICIANDO Estratégia de Exploração de Type Confusion (v30) ====`, 'test', FNAME_RUNNER);
+async function runReplicateTCAndExploitStrategy_v31() {
+    const FNAME_RUNNER = "runReplicateTCAndExploitStrategy_v31";
+    logS3(`==== INICIANDO Estratégia de Replicação e Exploração de Type Confusion (v31) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypeConfusionExploitTest_v30();
+    const result = await executeReplicateAndExploitTCTest_v31();
 
     if (result.errorOccurred) {
         logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
@@ -21,14 +21,14 @@ async function runTypeConfusionExploitStrategy_v30() {
     } else {
         logS3(`   RESULTADO: Completou. Detalhes da toJSON: ${JSON.stringify(result.toJSON_details)}`, "good", FNAME_RUNNER);
     }
-    // Título da página é atualizado dentro de executeTypeConfusionExploitTest_v30
+    // O título da página deve ser atualizado dentro de executeReplicateAndExploitTCTest_v31
     logS3(`   Título da página final: ${document.title}`, "info");
 
-    logS3(`==== Estratégia de Exploração de Type Confusion (v30) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Replicação e Exploração de Type Confusion (v31) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_V30}_MainOrchestrator`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_V31}_MainOrchestrator`; 
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -36,16 +36,19 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Explorando Type Confusion com victim_ab (v30) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Replicando TC e Tentando Exploração (v31) ====`, 'test', FNAME_ORCHESTRATOR);
 
-    await runTypeConfusionExploitStrategy_v30();
+    await runReplicateTCAndExploitStrategy_v31();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V30)) {
-        if (!document.title.includes("CRASH") && !document.title.includes("PROBLEM") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("TYPE CONFUSION") && !document.title.includes("R/W PRIMITIVE")) {
-            document.title = `${FNAME_MODULE_V30} Concluído`;
+    // Fallback para o título se não foi setado por sucesso/erro específico
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V31)) {
+        if (!document.title.includes("CRASH") && !document.title.includes("PROBLEM") && 
+            !document.title.includes("SUCCESS") && !document.title.includes("ERR") && 
+            !document.title.includes("TYPE CONFUSION") && !document.title.includes("R/W PRIMITIVE")) {
+            document.title = `${FNAME_MODULE_V31} Concluído`;
         }
     }
 }
