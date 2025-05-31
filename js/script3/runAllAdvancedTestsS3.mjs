@@ -1,38 +1,25 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// A importação já pega a versão mais recente de sprayAndInvestigateObjectExposure
-import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs';
-
-async function runSprayAndInvestigateStrategy() {
-    const FNAME_RUNNER = "runSprayAndInvestigateStrategy";
-    logS3(`==== INICIANDO Estratégia de Investigação com Spray e Corrupção ====`, 'test', FNAME_RUNNER);
-    await sprayAndInvestigateObjectExposure(); // Chamando a função atualizada
-    logS3(`==== Estratégia de Investigação com Spray e Corrupção CONCLUÍDA ====`, 'test', FNAME_RUNNER);
-}
+// Importa a nova função de teste
+import { sprayAndInvestigateObjectExposure } from './testRetypeOOB_AB_ViaShadowCraft.mjs'; // Assumindo que a função exportada ainda se chama assim
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME = 'runAllAdvancedTestsS3_SprayInvestigate_v8'; // Nome da versão atual do teste
+    const FNAME = FNAME_MAIN; // Usará o FNAME_MAIN do módulo importado
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    // Log do User Agent
-    logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME);
-
-    logS3(`==== INICIANDO Script 3: Investigação Focada com Spray e Corrupção (v8) ====`,'test', FNAME);
-    document.title = "Iniciando Script 3 - Spray & Investigate v8";
-
-    await runSprayAndInvestigateStrategy();
-
-    logS3(`\n==== Script 3 CONCLUÍDO (Investigação com Spray v8) ====`,'test', FNAME);
+    logS3(`==== INICIANDO Script 3: ${FNAME} ====`, 'test', FNAME);
+    document.title = `Iniciando Script 3 - ${FNAME}`;
+    
+    // A função sprayAndInvestigateObjectExposure agora contém a lógica de ExploitLogic_v23_RevisitOriginalCrash
+    await sprayAndInvestigateObjectExposure(); 
+    
+    logS3(`\n==== Script 3 CONCLUÍDO (${FNAME}) ====`,'test', FNAME);
     if (runBtn) runBtn.disabled = false;
-
-    if (document.title.includes("ACHADO") || document.title.includes("PROVÁVEL") || document.title.includes("SUPER ARRAY")) {
-        // Mantém o título específico do achado
-    } else if (!document.title.includes("FAIL") && !document.title.includes("ERRO")) {
-         document.title = "Script 3 Concluído - Spray & Investigate v8";
-    }
+    
+    // A lógica de atualização do título já está no finally da função de teste principal
 }
