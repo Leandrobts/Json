@@ -219,7 +219,7 @@ export const WEBKIT_LIBRARY_INFO = {
 
 // Configuração para a primitiva Out-Of-Bounds
 export let OOB_CONFIG = {
-    ALLOCATION_SIZE: 32768,
+    ALLOCATION_SIZE: 1024 * 1024 * 1,
     BASE_OFFSET_IN_DV: 128,
     INITIAL_BUFFER_SIZE: 32
 };
